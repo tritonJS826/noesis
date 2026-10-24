@@ -1,14 +1,10 @@
-// obsidianize — превращает папку md-заметок в Obsidian-vault с тегами и двусторонними ссылками.
+// obsidianize — converts a folder of md notes into an Obsidian vault with tags and bidirectional links.
 //
-// Сборка:
+// Phases (each incremental, can be run separately and repeatedly):
 //
-//	go mod init obsidianize && go get modernc.org/sqlite && go build -o obsidianize .
-//
-// Фазы (каждая инкрементальная, можно запускать отдельно и повторно):
-//
-//	phase1  — импорт md-файлов в sqlite
-//	phase2  — ollama: попарный анализ заметок -> теги + связи
-//	phase3  — запись клона папки с front matter (tags) и [[ссылками]]
+//	phase1  — import md files into sqlite
+//	phase2  — ollama: pairwise note analysis -> tags + links
+//	phase3  — write vault clone with front matter (tags) and [[wikilinks]]
 package main
 
 import (
@@ -19,7 +15,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -41,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// defaultModel переопределяется при сборке через -ldflags "-X main.defaultModel=..."
+// defaultModel can be overridden at build time via -ldflags "-X main.defaultModel=..."
 var defaultModel = "gemma4:31b-cloud"
 
 // ───────────────────────────── DB ─────────────────────────────
@@ -49,12 +44,12 @@ var defaultModel = "gemma4:31b-cloud"
 const schema = `
 CREATE TABLE IF NOT EXISTS notes(
 	id          INTEGER PRIMARY KEY,
-	file_path   TEXT NOT NULL UNIQUE,   -- путь относительно исходной папки
-	abs_path    TEXT NOT NULL,          -- абсолютный путь на момент импорта
-	file_name   TEXT NOT NULL,          -- только имя файла
-	content     TEXT NOT NULL,          -- оригинал, не меняется
-	links_md    TEXT NOT NULL DEFAULT '', -- obsidian-ссылки ([[...]]) отдельной колонкой
-	out_hash    TEXT NOT NULL DEFAULT '', -- хеш записанного в фазе 3 файла
+	file_path   TEXT NOT NULL UNIQUE,   -- path relative to source folder
+	abs_path    TEXT NOT NULL,          -- absolute path at import time
+	file_name   TEXT NOT NULL,          -- filename only
+	content     TEXT NOT NULL,          -- original, never changed
+	links_md    TEXT NOT NULL DEFAULT '', -- obsidian links ([[...]]) as a separate column
+	out_hash    TEXT NOT NULL DEFAULT '', -- hash of the file written in phase 3
 	imported_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tags(
@@ -102,7 +97,7 @@ func seedPrompts(db *sql.DB) {
 	if count > 0 {
 		return
 	}
-	// пробуем из файлов — сначала рядом с бинарником, потом в cwd
+	// try file prompts — first next to binary, then in cwd
 	tryDir := func(dir string) bool {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -125,7 +120,7 @@ func seedPrompts(db *sql.DB) {
 		tryDir(filepath.Join(filepath.Dir(exe), "prompts"))
 	}
 	tryDir("prompts")
-	// если всё ещё пусто — дефолтные промпты
+	// if still empty — default prompts
 	db.QueryRow(`SELECT COUNT(*) FROM prompts`).Scan(&count)
 	if count > 0 {
 		return
@@ -178,7 +173,7 @@ func noteLinkName(fileName string) string {
 	return strings.TrimSuffix(fileName, filepath.Ext(fileName))
 }
 
-// rebuildLinksMD пересобирает колонку links_md для заметки из таблицы links.
+// rebuildLinksMD rebuilds the links_md column for a note from the links table.
 func rebuildLinksMD(e execer, noteID int64) error {
 	rows, err := e.Query(`SELECT n.file_name, l.reason FROM links l
 		JOIN notes n ON n.id=l.dst_id WHERE l.src_id=? ORDER BY n.file_name`, noteID)
@@ -225,18 +220,18 @@ type UI struct {
 	current  string
 	done     int
 	total    int
-	ran      int // сколько обработано в этом запуске фазы (для ETA)
+	ran      int // processed in this phase run (for ETA)
 	started  time.Time
 	errs     int
 	logs     []string
 	pairsTot int
 
-	runTags   int           // новых тегов в этом запуске фазы
-	runLinks  int           // новых связей в этом запуске фазы
-	curStart  time.Time     // когда началась текущая операция
-	lastDur   time.Duration // длительность предыдущей операции
-	lastTags  int           // сколько тегов дала предыдущая пара
-	lastLinks int           // 1, если предыдущая пара дала связь
+	runTags   int           // new tags in this phase run
+	runLinks  int           // new links in this phase run
+	curStart  time.Time     // when the current operation started
+	lastDur   time.Duration // duration of the previous operation
+	lastTags  int           // tags produced by previous pair
+	lastLinks int           // 1 if the previous pair produced a link
 
 	quit chan struct{}
 	wg   sync.WaitGroup
@@ -261,7 +256,7 @@ func (u *UI) setCurrent(s string) {
 	u.mu.Unlock()
 }
 
-// addRun фиксирует результат обработанной пары: сколько новых тегов и связей она дала.
+// addRun records the result of a processed pair: how many new tags and links it produced.
 func (u *UI) addRun(tags, links int) {
 	u.mu.Lock()
 	u.runTags += tags
@@ -290,7 +285,7 @@ func (u *UI) fail(format string, a ...any) {
 	u.mu.Lock()
 	u.errs++
 	u.mu.Unlock()
-	u.logf(cRed+"ошибка: "+cReset+format, a...)
+	u.logf(cRed+"error: "+cReset+format, a...)
 }
 
 func bar(done, total, w int) string {
@@ -320,14 +315,14 @@ func (u *UI) render() string {
 	}
 	line := strings.Repeat("─", 64)
 
-	w(" %s%sobsidianize%s  фаза: %s%s%s   %s(Ctrl+C — остановка, прогресс сохраняется)%s", cBold, cCyan, cReset, cYel, phase, cReset, cDim, cReset)
+	w(" %s%sobsidianize%s  phase: %s%s%s   %s(Ctrl+C — stop, progress is saved)%s", cBold, cCyan, cReset, cYel, phase, cReset, cDim, cReset)
 	w(" %s%s%s", cDim, line, cReset)
-	w(" Оригиналов в базе   : %s%d%s", cBold, s.Notes, cReset)
-	w(" Заметок с тегами    : %s%d%s / %d", cBold, s.Tagged, cReset, s.Notes)
-	w(" Тегов               : %s%d%s уникальных  (%d назначений)", cBold, s.UniqTags, cReset, s.TagAssign)
-	w(" Связей              : %s%d%s пар (двусторонних)", cBold, s.Links, cReset)
-	w(" Пар проанализировано: %s%d%s / %d", cBold, s.PairsDone, cReset, pairsTotal)
-	w(" Записано в vault    : %s%d%s / %d", cBold, s.Written, cReset, s.Notes)
+	w(" Originals in db    : %s%d%s", cBold, s.Notes, cReset)
+	w(" Notes with tags    : %s%d%s / %d", cBold, s.Tagged, cReset, s.Notes)
+	w(" Tags               : %s%d%s unique  (%d assignments)", cBold, s.UniqTags, cReset, s.TagAssign)
+	w(" Links              : %s%d%s pairs (bidirectional)", cBold, s.Links, cReset)
+	w(" Pairs analyzed     : %s%d%s / %d", cBold, s.PairsDone, cReset, pairsTotal)
+	w(" Written to vault   : %s%d%s / %d", cBold, s.Written, cReset, s.Notes)
 	w(" %s%s%s", cDim, line, cReset)
 
 	pct := 0
@@ -347,21 +342,21 @@ func (u *UI) render() string {
 		}
 	}
 	w(" %s %s%3d%%%s  %s%d%s / %d", bar(u.done, u.total, 36), cBold, pct, cReset, cBold, u.done, cReset, u.total)
-	w(" Прошло %s  ·  осталось ~%s  ·  %s шт/мин  ·  ср. %s/шт",
+	w(" Elapsed %s  ·  remaining ~%s  ·  %s items/min  ·  avg %s/item",
 		elapsed.Round(time.Second), eta, speed, avg)
-	w(" В этом запуске: %s+%d%s обработано, %s+%d%s тегов, %s+%d%s связей, осталось %d",
+	w(" This run: %s+%d%s processed, %s+%d%s tags, %s+%d%s links, %d left",
 		cGreen, u.ran, cReset, cGreen, u.runTags, cReset, cGreen, u.runLinks, cReset, u.total-u.done)
 	cur := u.current
 	if r := []rune(cur); len(r) > 70 {
 		cur = string(r[:70]) + "…"
 	}
-	w(" Сейчас: %s", cur)
+	w(" Now: %s", cur)
 	if u.current != "" {
 		last := "—"
 		if u.lastDur > 0 {
-			last = fmt.Sprintf("%s (+%d тегов, +%d связей)", u.lastDur.Round(10*time.Millisecond), u.lastTags, u.lastLinks)
+			last = fmt.Sprintf("%s (+%d tags, +%d links)", u.lastDur.Round(10*time.Millisecond), u.lastTags, u.lastLinks)
 		}
-		w(" Текущая операция идёт %s  ·  предыдущая: %s", time.Since(u.curStart).Round(100*time.Millisecond), last)
+		w(" Current operation running %s  ·  previous: %s", time.Since(u.curStart).Round(100*time.Millisecond), last)
 	} else {
 		w("")
 	}
@@ -369,8 +364,8 @@ func (u *UI) render() string {
 	if u.errs > 0 {
 		errc = cRed
 	}
-	w(" Ошибок: %s%d%s", errc, u.errs, cReset)
-	w(" %sЛог:%s", cDim, cReset)
+	w(" Errors: %s%d%s", errc, u.errs, cReset)
+	w(" %sLog:%s", cDim, cReset)
 	for i := 0; i < 8; i++ {
 		if i < len(u.logs) {
 			l := u.logs[i]
@@ -497,7 +492,7 @@ var (
 )
 
 func tuiLabel(k, v string) string         { return k + ": " + v }
-func tuiEmpty(v string) string            { if v == "" { return tuiDim.Render("(не задан)") }; return v }
+func tuiEmpty(v string) string            { if v == "" { return tuiDim.Render("(not set)") }; return v }
 
 func newTUIModel(db *sql.DB) *tuiModel {
 	ti := textinput.New()
@@ -574,27 +569,27 @@ func resetDBCmd(db *sql.DB, path string) tea.Cmd {
 
 func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, linkedIDs []int64) tea.Cmd {
 	return func() tea.Msg {
-		// загружаем саму заметку
+		// load the note itself
 		var content, fileName string
 		db.QueryRow(`SELECT file_name, content FROM notes WHERE id=?`, noteID).Scan(&fileName, &content)
 
-		// загружаем связанные заметки
+		// load linked notes
 		var linkedTexts []string
 		for _, lid := range linkedIDs {
 			var lc, ln string
 			if db.QueryRow(`SELECT file_name, content FROM notes WHERE id=?`, lid).Scan(&ln, &lc) == nil {
 				r := []rune(lc)
 				if len(r) > maxChars {
-					lc = string(r[:maxChars]) + "\n[…обрезано…]"
+					lc = string(r[:maxChars]) + "\n[…truncated…]"
 				}
 				linkedTexts = append(linkedTexts, "=== "+ln+" ===\n"+lc)
 			}
 		}
 
-		// обрезаем саму заметку для промпта
+		// truncate the note itself for the prompt
 		r := []rune(content)
 		if len(r) > maxChars {
-			content = string(r[:maxChars]) + "\n[…обрезано…]"
+			content = string(r[:maxChars]) + "\n[…truncated…]"
 		}
 
 		tmpl := loadPrompt(db, "eval")
@@ -622,7 +617,7 @@ func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, lin
 		raw, _ := io.ReadAll(resp.Body)
 		var out struct{ Response string }
 		if err := json.Unmarshal(raw, &out); err != nil {
-			return evalMsg{err: fmt.Errorf("не удалось прочитать ответ ollama")}
+			return evalMsg{err: fmt.Errorf("failed to read ollama response")}
 		}
 		clean := stripCodeFences(out.Response)
 		return evalMsg{result: clean}
@@ -636,7 +631,7 @@ func (m *tuiModel) Init() tea.Cmd {
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// если редактируем поле — делегируем textinput
+	// if we're editing a field — delegate to textinput
 	if m.editingField != "" {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -719,7 +714,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
-	// если ждём подтверждения сброса
+	// waiting for reset confirmation
 	if m.confirmReset {
 		switch msg.String() {
 		case "y", "Y":
@@ -749,17 +744,17 @@ func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		m.resetErr = ""
 	case "enter":
 		switch m.cursor {
-		case 4: // настройки
+		case 4: // settings
 			m.screen = scrSettings
 			m.cursor = 0
-		case 5: // оценить файл
+		case 5: // evaluate file
 			m.openFilePicker()
-		case 6: // сброс базы
+		case 6: // reset database
 			m.confirmReset = true
 		default:
-			// проверка обязательных полей
+			// check obligatory fields
 			if missing := m.checkMissing(); missing != "" {
-				m.phaseErr = fmt.Errorf("Не задано: %s", missing)
+				m.phaseErr = fmt.Errorf("Not set: %s", missing)
 			} else {
 				m.screen = scrRunning
 				m.phaseErr = nil
@@ -872,7 +867,7 @@ func (m *tuiModel) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.cursor = 0
 	default:
-		// любой печатный символ — фильтр
+		// any printable character — type to filter
 		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
 			m.fileFilter += string(msg.Runes[0])
 			m.cursor = 0
@@ -910,15 +905,15 @@ func (m *tuiModel) startEdit() {
 	case 0: // SRC
 		m.textInput.SetValue(m.src)
 		m.textInput.Focus()
-		m.editingField = "SRC — путь к md-заметкам"
+		m.editingField = "SRC — path to md notes"
 	case 1: // OUT
 		m.textInput.SetValue(m.out)
 		m.textInput.Focus()
-		m.editingField = "OUT — папка для vault"
+		m.editingField = "OUT — vault folder"
 	case 2: // DB
 		m.textInput.SetValue(m.dbPath)
 		m.textInput.Focus()
-		m.editingField = "DB — файл базы"
+		m.editingField = "DB — database file"
 	case 3: // MODEL
 		if m.ollamaOK && len(m.ollamaModels) > 0 {
 			m.screen = scrModelPicker
@@ -933,19 +928,19 @@ func (m *tuiModel) startEdit() {
 		}
 		m.textInput.SetValue(m.modelName)
 		m.textInput.Focus()
-		m.editingField = "MODEL — модель ollama"
+		m.editingField = "MODEL — ollama model"
 	case 4: // HOST
 		m.textInput.SetValue(m.host)
 		m.textInput.Focus()
-		m.editingField = "HOST — адрес ollama"
+		m.editingField = "HOST — ollama host"
 	case 5: // MAXCHARS
 		m.textInput.SetValue(fmt.Sprintf("%d", m.maxChars))
 		m.textInput.Focus()
-		m.editingField = "MAXCHARS — макс. символов"
+		m.editingField = "MAXCHARS — max chars"
 	case 6: // WORKERS
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
-		m.editingField = "WORKERS — число потоков (1–100)"
+		m.editingField = "WORKERS — concurrency (1–100)"
 	case 7: // PROMPTS
 		m.editingField = ""
 		m.openPromptList()
@@ -978,7 +973,7 @@ func (m *tuiModel) saveField() {
 			m.workers = 100
 		}
 	case 7: // PROMPTS — save edited prompt
-		name := strings.TrimPrefix(m.editingField, "Промпт: ")
+		name := strings.TrimPrefix(m.editingField, "Prompt: ")
 		m.db.Exec(`INSERT OR REPLACE INTO prompts(name, prompt) VALUES(?,?)`, name, val)
 		m.promptViewing = name
 		m.promptText = val
@@ -993,7 +988,7 @@ func (m *tuiModel) checkMissing() string {
 		if m.src == "" {
 			missing = append(missing, "SRC")
 		}
-	case 1: // phase2 — достаточно базы
+	case 1: // phase2 — database is enough
 	case 2: // phase3
 		if m.out == "" {
 			missing = append(missing, "OUT")
@@ -1048,7 +1043,7 @@ func (m *tuiModel) promptKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "r", "R":
 		if m.promptViewing != "" {
-			// перезагрузка из файла
+			// reload from file
 			data, err := os.ReadFile("prompts/" + m.promptViewing + ".txt")
 			if err == nil {
 				m.db.Exec(`INSERT OR REPLACE INTO prompts(name, prompt) VALUES(?,?)`, m.promptViewing, string(data))
@@ -1059,7 +1054,7 @@ func (m *tuiModel) promptKeys(msg tea.KeyMsg) tea.Cmd {
 		if m.promptViewing != "" {
 			m.textInput.SetValue(m.promptText)
 			m.textInput.Focus()
-			m.editingField = "Промпт: " + m.promptViewing
+			m.editingField = "Prompt: " + m.promptViewing
 			m.promptList = nil
 		}
 	case "esc":
@@ -1117,16 +1112,16 @@ func (m *tuiModel) viewMenu() string {
 	pairsTotal := n * (n - 1) / 2
 
 	items := []string{
-		"Фаза 1 — Импорт md → sqlite",
-		"Фаза 2 — Теги и связи (ollama)",
-		"Фаза 3 — Запись vault",
-		"Все фазы подряд",
-		"Настройки",
-		"Оценить уникальность файла",
-		"Сброс базы данных",
+		"Phase 1 — Import md → sqlite",
+		"Phase 2 — Tags & links (ollama)",
+		"Phase 3 — Write vault",
+		"All phases",
+		"Settings",
+		"Evaluate note uniqueness",
+		"Reset database",
 	}
 
-	// ── фазы ──
+	// ── phases ──
 	var phaseLines []string
 	for i, item := range items {
 		cursor := "  "
@@ -1140,7 +1135,7 @@ func (m *tuiModel) viewMenu() string {
 		phaseLines = append(phaseLines, lipgloss.NewStyle().Width(cw).Render(line))
 	}
 
-	// ── настройки (две колонки) ──
+	// ── settings (two columns) ──
 	half := (cw - 1) / 2
 	col := func(s string) string { return lipgloss.NewStyle().Width(half).Render(s) }
 	settingsLines := []string{
@@ -1152,7 +1147,7 @@ func (m *tuiModel) viewMenu() string {
 		fmt.Sprintf("MAXCHARS: %d", m.maxChars),
 		fmt.Sprintf("WORKERS: %d", m.workers),
 	}
-	// разбиваем на пары
+	// split into pairs
 	var settingPairs []string
 	for i := 0; i < len(settingsLines); i += 2 {
 		l := col(settingsLines[i])
@@ -1163,43 +1158,43 @@ func (m *tuiModel) viewMenu() string {
 		settingPairs = append(settingPairs, lipgloss.JoinHorizontal(lipgloss.Top, l, r))
 	}
 
-	// ── статус ──
+	// ── status ──
 	statsLines := []string{
-		fmt.Sprintf("Заметок: %d │ С тегами: %d │ Тегов: %d │ Связей: %d", s.Notes, s.Tagged, s.UniqTags, s.Links),
-		fmt.Sprintf("Пар: %d/%d │ Записано: %d", s.PairsDone, pairsTotal, s.Written),
+		fmt.Sprintf("Notes: %d │ With tags: %d │ Tags: %d │ Links: %d", s.Notes, s.Tagged, s.UniqTags, s.Links),
+		fmt.Sprintf("Pairs: %d/%d │ Written: %d", s.PairsDone, pairsTotal, s.Written),
 	}
 
 	// ── ollama ──
 	var ollamaLine string
 	if !m.ollamaReady {
-		ollamaLine = tuiDim.Render("… проверка ollama …")
+		ollamaLine = tuiDim.Render("… checking ollama …")
 	} else if m.ollamaOK && len(m.ollamaModels) > 0 {
 		ollamaLine = tuiGreen.Render("ollama ✓") + "  " + strings.Join(m.ollamaModels, ", ")
 	} else {
-		ollamaLine = tuiRed.Render("ollama ✗ ") + m.ollamaErr + tuiDim.Render("  (запустите ollama serve)")
+		ollamaLine = tuiRed.Render("ollama ✗ ") + m.ollamaErr + tuiDim.Render("  (start ollama serve)")
 	}
 	ollamaLine = lipgloss.NewStyle().Width(cw).Render(ollamaLine)
 
-	// ── сообщения ──
+	// ── messages ──
 	var messages []string
 	if m.phaseErr != nil {
 		messages = append(messages, tuiRed.Render(m.phaseErr.Error()))
 	}
 	if m.confirmReset {
-		messages = append(messages, tuiYel.Render("Удалить базу "+m.dbPath+" и все данные? (y/N)"))
+		messages = append(messages, tuiYel.Render("Delete database "+m.dbPath+" and all data? (y/N)"))
 	} else if m.resetting {
-		messages = append(messages, tuiDim.Render("Сброс базы…"))
+		messages = append(messages, tuiDim.Render("Resetting database…"))
 	} else if m.resetErr != "" {
-		messages = append(messages, tuiRed.Render("Ошибка сброса: "+m.resetErr))
+		messages = append(messages, tuiRed.Render("Reset error: "+m.resetErr))
 	}
 
-	// ── футер ──
-	footer := "↑↓ выбор  ·  Enter запуск  ·  Q выход"
+	// ── footer ──
+	footer := "↑↓ select  ·  Enter run  ·  Q quit"
 	if m.confirmReset {
-		footer = "y — удалить всё  ·  любая другая клавиша — отмена"
+		footer = "y — delete all  ·  any other key — cancel"
 	}
 
-	// ── сборка ──
+	// ── assembly ──
 	sep := func(title string) string {
 		return lipgloss.NewStyle().Width(cw).Border(
 			lipgloss.Border{Bottom: "─"}, false, false, true, false,
@@ -1210,7 +1205,7 @@ func (m *tuiModel) viewMenu() string {
 	parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, phaseLines...))
 	parts = append(parts, sep(""))
 	parts = append(parts, settingPairs...)
-	parts = append(parts, sep("Статус"))
+	parts = append(parts, sep("Status"))
 	for _, sl := range statsLines {
 		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(sl))
 	}
@@ -1238,7 +1233,7 @@ func (m *tuiModel) viewSettings() string {
 
 	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS", "PROMPTS"}
 	vals := []string{m.src, m.out, m.dbPath, m.modelName, m.host,
-		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "редактировать…"}
+		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "edit…"}
 
 	var lines []string
 	for i, k := range keys {
@@ -1251,7 +1246,7 @@ func (m *tuiModel) viewSettings() string {
 		))
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter изменить  ·  ESC назад"))
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter edit  ·  ESC back"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -1262,22 +1257,22 @@ func (m *tuiModel) viewPromptSub() string {
 	cw := w - 4
 
 	if m.promptViewing != "" {
-		// показываем текст промпта
+		// show prompt text
 		lines := []string{
-			lipgloss.NewStyle().Bold(true).Width(cw).Render("Промпт: " + m.promptViewing),
+			lipgloss.NewStyle().Bold(true).Width(cw).Render("Prompt: " + m.promptViewing),
 			"",
 		}
-		// разбиваем на строки
+		// split into lines
 		for _, line := range strings.Split(m.promptText, "\n") {
 			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(line))
 		}
 		lines = append(lines, "")
-		lines = append(lines, tuiDim.Width(cw).Render("ESC назад  ·  r перезагрузить из файла"))
+		lines = append(lines, tuiDim.Width(cw).Render("ESC back  ·  r reload from file"))
 		content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 		return tuiBox.Width(w).Render(content)
 	}
 
-	// список промптов
+	// prompt list
 	var lines []string
 	for i, n := range m.promptList {
 		cursor := "  "
@@ -1287,7 +1282,7 @@ func (m *tuiModel) viewPromptSub() string {
 		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n))
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter посмотреть  ·  ESC назад"))
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter view  ·  ESC back"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -1299,7 +1294,7 @@ func (m *tuiModel) viewModelPicker() string {
 
 	var lines []string
 	if len(m.ollamaModels) == 0 {
-		lines = append(lines, tuiRed.Width(cw).Render("нет доступных моделей"))
+		lines = append(lines, tuiRed.Width(cw).Render("no models available"))
 	} else {
 		for i, mod := range m.ollamaModels {
 			cursor := "  "
@@ -1310,7 +1305,7 @@ func (m *tuiModel) viewModelPicker() string {
 		}
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter выбрать  ·  ESC назад"))
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter pick  ·  ESC back"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -1323,7 +1318,7 @@ func (m *tuiModel) viewTextEdit() string {
 	lines := []string{
 		lipgloss.NewStyle().Width(cw).Render(m.textInput.View()),
 		"",
-		tuiDim.Width(cw).Render("Enter сохранить  ·  ESC отмена"),
+		tuiDim.Width(cw).Render("Enter save  ·  ESC cancel"),
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -1334,14 +1329,14 @@ func (m *tuiModel) viewRunning() string {
 	cw := w - 4
 
 	lines := []string{
-		lipgloss.NewStyle().Width(cw).Render("Идёт обработка…"),
-		lipgloss.NewStyle().Width(cw).Render("Прогресс отображается в консоли"),
+		lipgloss.NewStyle().Width(cw).Render("Processing…"),
+		lipgloss.NewStyle().Width(cw).Render("Progress shown in console"),
 	}
 	if m.phaseErr != nil {
-		lines = append(lines, tuiRed.Width(cw).Render("Ошибка: "+m.phaseErr.Error()))
-		lines = append(lines, tuiDim.Width(cw).Render("Нажмите любую клавишу для возврата"))
+		lines = append(lines, tuiRed.Width(cw).Render("Error: "+m.phaseErr.Error()))
+		lines = append(lines, tuiDim.Width(cw).Render("Press any key to return"))
 	} else {
-		lines = append(lines, tuiDim.Width(cw).Render("Ожидание завершения…"))
+		lines = append(lines, tuiDim.Width(cw).Render("Waiting for completion…"))
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -1353,10 +1348,10 @@ func (m *tuiModel) viewFilePicker() string {
 	cw := w - 4
 
 	var lines []string
-	// строка фильтра
+	// filter line
 	filterLine := m.fileFilter
 	if filterLine == "" {
-		filterLine = tuiDim.Render("начните вводить для фильтра…")
+		filterLine = tuiDim.Render("start typing to filter…")
 	} else {
 		filterLine += "█"
 	}
@@ -1365,7 +1360,7 @@ func (m *tuiModel) viewFilePicker() string {
 
 	filtered := m.filteredNotes()
 	if len(filtered) == 0 {
-		lines = append(lines, tuiDim.Width(cw).Render("ничего не найдено"))
+		lines = append(lines, tuiDim.Width(cw).Render("nothing found"))
 	} else {
 		for i, n := range filtered {
 			cursor := "  "
@@ -1376,7 +1371,7 @@ func (m *tuiModel) viewFilePicker() string {
 		}
 	}
 	lines = append(lines, "")
-	footer := fmt.Sprintf("найдено: %d  ·  ↑↓ выбор  ·  Enter оценить  ·  ESC назад", len(filtered))
+	footer := fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter evaluate  ·  ESC back", len(filtered))
 	lines = append(lines, tuiDim.Width(cw).Render(footer))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -1389,14 +1384,14 @@ func (m *tuiModel) viewEval() string {
 
 	var lines []string
 	if m.evalLoading {
-		lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Анализ заметки…"))
-		lines = append(lines, tuiDim.Width(cw).Render("Отправка в ollama…"))
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Analyzing note…"))
+		lines = append(lines, tuiDim.Width(cw).Render("Sending to ollama…"))
 	} else if m.evalErr != "" {
-		lines = append(lines, tuiRed.Width(cw).Render("Ошибка: "+m.evalErr))
+		lines = append(lines, tuiRed.Width(cw).Render("Error: "+m.evalErr))
 		lines = append(lines, "")
-		lines = append(lines, tuiDim.Width(cw).Render("Нажмите любую клавишу для возврата"))
+		lines = append(lines, tuiDim.Width(cw).Render("Press any key to return"))
 	} else {
-		// парсим JSON-результат и форматируем
+		// parse JSON result and format
 		var res struct {
 			Novelty string `json:"novelty"`
 			Summary string `json:"summary"`
@@ -1414,16 +1409,16 @@ func (m *tuiModel) viewEval() string {
 			case "низкая":
 				nov = tuiDim.Render
 			}
-			lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Уникальность: "+nov(res.Novelty)))
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Novelty: "+nov(res.Novelty)))
 			lines = append(lines, "")
-			lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Содержание:"))
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Summary:"))
 			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(res.Summary))
 			lines = append(lines, "")
-			lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Новая информация:"))
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("New information:"))
 			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(res.NewInfo))
 		}
 		lines = append(lines, "")
-		lines = append(lines, tuiDim.Width(cw).Render("Нажмите любую клавишу для возврата"))
+		lines = append(lines, tuiDim.Width(cw).Render("Press any key to return"))
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -1466,7 +1461,7 @@ func tuiFetchModels(host string) ([]string, error) {
 
 func phase1(ctx context.Context, ui *UI, db *sql.DB, src string) error {
 	if src == "" {
-		return errors.New("укажите исходную папку: -src ПАПКА")
+		return errors.New("specify source folder: -src FOLDER")
 	}
 	absSrc, err := filepath.Abs(src)
 	if err != nil {
@@ -1492,8 +1487,8 @@ func phase1(ctx context.Context, ui *UI, db *sql.DB, src string) error {
 		return err
 	}
 	sort.Strings(files)
-	ui.setPhase("1/3 импорт md → sqlite", 0, len(files))
-	ui.logf("найдено md-файлов: %d", len(files))
+	ui.setPhase("1/3 import md → sqlite", 0, len(files))
+	ui.logf("found md files: %d", len(files))
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -1543,7 +1538,7 @@ func phase1(ctx context.Context, ui *UI, db *sql.DB, src string) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	ui.logf("фаза 1: добавлено новых — %d", added)
+	ui.logf("phase 1: added new — %d", added)
 	return nil
 }
 
@@ -1575,7 +1570,7 @@ func loadNote(db *sql.DB, id int64, maxChars int) (note, error) {
 	if len(n.Content) > maxChars {
 		r := []rune(n.Content)
 		if len(r) > maxChars {
-			n.Content = string(r[:maxChars]) + "\n[…обрезано…]"
+			n.Content = string(r[:maxChars]) + "\n[…truncated…]"
 		}
 	}
 	return n, err
@@ -1598,7 +1593,7 @@ func cleanTag(s string) string {
 		return ""
 	}
 	if strings.IndexFunc(s, func(r rune) bool { return !unicode.IsDigit(r) }) == -1 {
-		return "" // obsidian не принимает теги только из цифр
+		return "" // obsidian does not accept digit-only tags
 	}
 	return s
 }
@@ -1680,12 +1675,12 @@ func askOllama(ctx context.Context, c cfg, prompt string) (pairResult, error) {
 	}
 	clean := stripCodeFences(out.Response)
 	if err := json.Unmarshal([]byte(clean), &res); err != nil {
-		return res, fmt.Errorf("невалидный JSON от модели: %w", err)
+		return res, fmt.Errorf("invalid JSON from model: %w", err)
 	}
 	return res, nil
 }
 
-// savePair сохраняет результат пары и возвращает, сколько НОВЫХ тегов и связей добавилось.
+// savePair saves the pair result and returns how many NEW tags and links were added.
 func savePair(ctx context.Context, db *sql.DB, a, b note, r pairResult, model string) (newTags, newLinks int, err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1719,7 +1714,7 @@ func savePair(ctx context.Context, db *sql.DB, a, b note, r pairResult, model st
 		if tx.QueryRow(`SELECT 1 FROM links WHERE src_id=? AND dst_id=?`, a.ID, b.ID).Scan(&one) != nil {
 			newLinks = 1
 		}
-		// двусторонняя связь
+		// bidirectional link
 		for _, p := range [][2]int64{{a.ID, b.ID}, {b.ID, a.ID}} {
 			if _, err := tx.Exec(`INSERT OR REPLACE INTO links(src_id, dst_id, reason) VALUES(?,?,?)`, p[0], p[1], reason); err != nil {
 				return 0, 0, err
@@ -1739,14 +1734,14 @@ func savePair(ctx context.Context, db *sql.DB, a, b note, r pairResult, model st
 	return newTags, newLinks, tx.Commit()
 }
 
-// saveMu защищает savePair от гонок при параллельной пересборке links_md.
+// saveMu protects savePair from races during parallel links_md rebuilds.
 var saveMu sync.Mutex
 
 func phase2(ctx context.Context, ui *UI, db *sql.DB, c cfg) error {
-	// проверка доступности ollama
+	// check ollama availability
 	hc := http.Client{Timeout: 5 * time.Second}
 	if resp, err := hc.Get(strings.TrimRight(c.Host, "/") + "/api/tags"); err != nil {
-		return fmt.Errorf("ollama недоступна по %s: %w", c.Host, err)
+		return fmt.Errorf("ollama unavailable at %s: %w", c.Host, err)
 	} else {
 		resp.Body.Close()
 	}
@@ -1781,14 +1776,14 @@ func phase2(ctx context.Context, ui *UI, db *sql.DB, c cfg) error {
 	if workers < 1 {
 		workers = 1
 	}
-	ui.setPhase("2/3 ollama: теги и связи ("+c.Model+", ×"+fmt.Sprint(workers)+")", len(done), total)
+	ui.setPhase("2/3 ollama: tags & links ("+c.Model+", ×"+fmt.Sprint(workers)+")", len(done), total)
 	if total == 0 {
-		ui.logf("недостаточно заметок для сравнения пар")
+		ui.logf("not enough notes for pair comparison")
 		return nil
 	}
-	ui.logf("пар всего: %d, уже готово: %d, потоков: %d", total, len(done), workers)
+	ui.logf("total pairs: %d, already done: %d, workers: %d", total, len(done), workers)
 
-	// собираем все необработанные пары
+	// collect all unprocessed pairs
 	type job struct {
 		a, b note
 		key  [2]int64
@@ -1816,18 +1811,18 @@ func phase2(ctx context.Context, ui *UI, db *sql.DB, c cfg) error {
 		}
 	}
 	remaining := len(jobs)
-	ui.logf("осталось обработать: %d пар", remaining)
+	ui.logf("remaining: %d pairs", remaining)
 
-	// пул воркеров
+	// worker pool
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
-	errCh := make(chan error, 1) // буфер 1 — первый fatal error останавливает всё
+	errCh := make(chan error, 1) // buffer 1 — first fatal error stops everything
 
 	for _, j := range jobs {
 		if ctx.Err() != nil {
 			break
 		}
-		// проверяем, не было ли фатальной ошибки
+		// check for fatal error
 		select {
 		case e := <-errCh:
 			wg.Wait()
@@ -1871,14 +1866,14 @@ func phase2(ctx context.Context, ui *UI, db *sql.DB, c cfg) error {
 			ui.addRun(nt, nl)
 			ui.advance(false)
 			if res.Related {
-				ui.logf(cGreen+"связь"+cReset+": %s ↔ %s", j.a.Name, j.b.Name)
+				ui.logf(cGreen+"link"+cReset+": %s ↔ %s", j.a.Name, j.b.Name)
 			}
-			ui.logf("%s ↔ %s: +%d тегов", j.a.Name, j.b.Name, nt)
+			ui.logf("%s ↔ %s: +%d tags", j.a.Name, j.b.Name, nt)
 		}(j)
 	}
 	wg.Wait()
 
-	// проверяем фатальные ошибки после завершения
+	// check for fatal errors after completion
 	select {
 	case e := <-errCh:
 		return e
@@ -1922,7 +1917,7 @@ func splitFrontMatter(s string) (fm []string, body string, ok bool) {
 	return fm, strings.TrimPrefix(rest[idx+3:], "\n"), true
 }
 
-// extractTags вынимает существующий ключ tags: из front matter и возвращает остальные строки.
+// extractTags extracts the existing tags: key from front matter and returns the remaining lines.
 func extractTags(fm []string) (rest []string, tags []string) {
 	inTags := false
 	add := func(s string) {
@@ -1982,24 +1977,24 @@ func compose(content string, tags []string, linksMD string) string {
 	b.WriteString(strings.TrimRight(body, "\n"))
 	b.WriteString("\n")
 	if strings.TrimSpace(linksMD) != "" {
-		b.WriteString("\n## Связанные заметки\n" + linksMD + "\n")
+		b.WriteString("\n## Related notes\n" + linksMD + "\n")
 	}
 	return b.String()
 }
 
 func phase3(ctx context.Context, ui *UI, db *sql.DB, out, src string) error {
 	if out == "" {
-		return errors.New("укажите папку для клона: -out ПАПКА")
+		return errors.New("specify output folder: -out FOLDER")
 	}
 	absOut, _ := filepath.Abs(out)
 	if src != "" {
 		if absSrc, _ := filepath.Abs(src); absSrc == absOut {
-			return errors.New("-out не должен совпадать с исходной папкой")
+			return errors.New("-out must not match source folder")
 		}
 	}
 	var total int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&total)
-	ui.setPhase("3/3 запись vault → "+out, 0, total)
+	ui.setPhase("3/3 write vault → "+out, 0, total)
 
 	type rec struct {
 		id            int64
@@ -2063,112 +2058,21 @@ func phase3(ctx context.Context, ui *UI, db *sql.DB, out, src string) error {
 		written++
 		ui.advance(false)
 	}
-	ui.logf("фаза 3: записано/обновлено файлов — %d", written)
+	ui.logf("phase 3: written/updated files — %d", written)
 	return nil
 }
 
 // ───────────────────────────── main ─────────────────────────────
 
-const usage = `obsidianize — конвертер md-заметок в Obsidian-vault (теги + двусторонние ссылки через ollama)
-
-Использование:
-  obsidianize phase1 -src ПАПКА_С_MD [-db notes.db]
-      Создаёт sqlite (если нет) и импортирует все .md (путь, имя файла, текст).
-      Уже импортированные файлы пропускаются.
-
-  obsidianize phase2 [-db notes.db] [-model gemma4:31b-cloud] [-host http://localhost:11434] [-maxchars 4000] [-workers 1]
-      Ollama попарно сравнивает заметки (1-2, 1-3, 2-3 ...), ставит теги и [[ссылки]].
-      Уже обработанные пары пропускаются; новые заметки добавляют только новые пары.
-      Внимание: пар N*(N-1)/2 — на больших коллекциях это долго.
-
-  obsidianize phase3 -out ПАПКА_VAULT [-src ИСХОДНАЯ] [-db notes.db]
-      Пишет клон папки с front matter (tags) и разделом «Связанные заметки».
-      Неизменившиеся файлы не перезаписываются.
-
-  obsidianize all -src ... -out ...   — все три фазы подряд
-  obsidianize status [-db notes.db]   — только статистика
-
-Ctrl+C безопасно останавливает работу — прогресс сохраняется в базе.
-`
-
 func main() {
-	// без аргументов — интерактивный TUI
-	if len(os.Args) < 2 {
-		db, err := openDB("notes.db")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "sqlite:", err)
-			os.Exit(1)
-		}
-		defer db.Close()
-		if err := runTUI(db); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	if os.Args[1] == "help" || os.Args[1] == "-h" || os.Args[1] == "--help" {
-		fmt.Print(usage)
-		return
-	}
-	cmd := os.Args[1]
-	fl := flag.NewFlagSet(cmd, flag.ExitOnError)
-	dbPath := fl.String("db", "notes.db", "путь к sqlite-базе")
-	src := fl.String("src", "", "исходная папка с md (phase1)")
-	out := fl.String("out", "", "папка для результата (phase3)")
-	model := fl.String("model", defaultModel, "модель ollama")
-	host := fl.String("host", "http://localhost:11434", "адрес ollama")
-	maxChars := fl.Int("maxchars", 4000, "максимум символов заметки в промпте")
-	workers := fl.Int("workers", 1, "число потоков для ollama (1–100)")
-	_ = fl.Parse(os.Args[2:])
-
-	switch cmd {
-	case "phase1", "phase2", "phase3", "all", "status":
-	default:
-		fmt.Fprintf(os.Stderr, "неизвестная команда %q\n\n%s", cmd, usage)
-		os.Exit(2)
-	}
-
-	db, err := openDB(*dbPath)
+	db, err := openDB("notes.db")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sqlite:", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-
-	ctx, stopSig := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSig()
-
-	ui := newUI(db)
-	ui.start()
-
-	var runErr error
-	run := func(f func() error) {
-		if runErr == nil && ctx.Err() == nil {
-			runErr = f()
-		}
-	}
-	c := cfg{Host: *host, Model: *model, MaxChars: *maxChars, Workers: *workers}
-	switch cmd {
-	case "phase1":
-		run(func() error { return phase1(ctx, ui, db, *src) })
-	case "phase2":
-		run(func() error { return phase2(ctx, ui, db, c) })
-	case "phase3":
-		run(func() error { return phase3(ctx, ui, db, *out, *src) })
-	case "all":
-		run(func() error { return phase1(ctx, ui, db, *src) })
-		run(func() error { return phase2(ctx, ui, db, c) })
-		run(func() error { return phase3(ctx, ui, db, *out, *src) })
-	case "status":
-		ui.setPhase("status", 0, 0)
-	}
-
-	ui.stop()
-	if runErr != nil {
-		fmt.Fprintln(os.Stderr, "\n"+cRed+"ошибка:"+cReset, runErr)
+	if err := runTUI(db); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
-	}
-	if ctx.Err() != nil {
-		fmt.Println("\nОстановлено. Прогресс сохранён, запустите команду снова, чтобы продолжить.")
 	}
 }
