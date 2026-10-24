@@ -35,6 +35,9 @@ import (
 	"time"
 	"unicode"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 	_ "modernc.org/sqlite"
 )
 
@@ -349,6 +352,673 @@ func (u *UI) stop() {
 	fmt.Print(strings.ReplaceAll(u.render(), eol, ""))
 }
 
+// ═══════════════════════ TUI (bubbletea) ═══════════════════════
+
+type tuiScreen int
+
+const (
+	scrMenu tuiScreen = iota
+	scrSettings
+	scrModelPicker
+	scrRunning
+)
+
+type ollamaMsg struct {
+	models []string
+	err    error
+}
+type phaseMsg struct{ err error }
+type resetMsg struct {
+	err error
+	db  *sql.DB
+}
+
+type tuiModel struct {
+	db      *sql.DB
+	program *tea.Program
+	screen  tuiScreen
+	cursor  int
+
+	src, out, dbPath, modelName, host string
+	maxChars, workers                  int
+
+	ollamaModels []string
+	ollamaOK     bool
+	ollamaErr    string
+	ollamaReady  bool
+
+	textInput    textinput.Model
+	editingField string
+
+	phaseErr error
+
+	confirmReset bool
+	resetting    bool
+	resetErr     string
+
+	width int
+}
+
+// ─── TUI styles ───────────────────────────────────────────────────────────────
+
+var (
+	tuiBorder = lipgloss.Border{
+		Top: "─", Bottom: "─", Left: "│", Right: "│",
+		TopLeft: "┌", TopRight: "┐", BottomLeft: "└", BottomRight: "┘",
+	}
+	tuiBox = lipgloss.NewStyle().Border(tuiBorder).Padding(0, 1)
+
+	tuiSel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
+	tuiDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	tuiRed   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	tuiGreen = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	tuiYel   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+)
+
+func tuiLabel(k, v string) string         { return k + ": " + v }
+func tuiEmpty(v string) string            { if v == "" { return tuiDim.Render("(не задан)") }; return v }
+
+func newTUIModel(db *sql.DB) *tuiModel {
+	ti := textinput.New()
+	ti.Prompt = ""
+
+	return &tuiModel{
+		db:        db,
+		screen:    scrMenu,
+		src:       ".",
+		out:       "out",
+		dbPath:    "notes.db",
+		modelName: defaultModel,
+		host:      "http://localhost:11434",
+		maxChars:  4000,
+		workers:   1,
+		textInput: ti,
+	}
+}
+
+// ─── commands ─────────────────────────────────────────────────────────────────
+
+func fetchOllamaCmd(host string) tea.Cmd {
+	return func() tea.Msg {
+		models, err := tuiFetchModels(host)
+		return ollamaMsg{models, err}
+	}
+}
+
+func runPhaseCmd(m *tuiModel) tea.Cmd {
+	phase := m.cursor
+	src, out, modelName, host, maxChars, workers := m.src, m.out, m.modelName, m.host, m.maxChars, m.workers
+	return func() tea.Msg {
+		m.program.ReleaseTerminal()
+		defer m.program.RestoreTerminal()
+
+		cfg := cfg{Host: host, Model: modelName, MaxChars: maxChars, Workers: workers}
+		ui := newUI(m.db)
+		ui.start()
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		var err error
+		switch phase {
+		case 0:
+			err = phase1(ctx, ui, m.db, src)
+		case 1:
+			err = phase2(ctx, ui, m.db, cfg)
+		case 2:
+			err = phase3(ctx, ui, m.db, out, src)
+		case 3:
+			err = phase1(ctx, ui, m.db, src)
+			if err == nil && ctx.Err() == nil {
+				err = phase2(ctx, ui, m.db, cfg)
+			}
+			if err == nil && ctx.Err() == nil {
+				err = phase3(ctx, ui, m.db, out, src)
+			}
+		}
+		ui.stop()
+		return phaseMsg{err}
+	}
+}
+
+func resetDBCmd(db *sql.DB, path string) tea.Cmd {
+	return func() tea.Msg {
+		db.Close()
+		os.Remove(path)
+		os.Remove(path + "-wal")
+		os.Remove(path + "-shm")
+		newDB, err := openDB(path)
+		return resetMsg{err, newDB}
+	}
+}
+
+// ─── Init / Update / View ─────────────────────────────────────────────────────
+
+func (m *tuiModel) Init() tea.Cmd {
+	return fetchOllamaCmd(m.host)
+}
+
+func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// если редактируем поле — делегируем textinput
+	if m.editingField != "" {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "enter":
+				m.saveField()
+				m.editingField = ""
+				return m, fetchOllamaCmd(m.host)
+			case "esc":
+				m.editingField = ""
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+	}
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		return m, nil
+
+	case tea.KeyMsg:
+		return m, m.handleKey(msg)
+
+	case ollamaMsg:
+		m.ollamaReady = true
+		if msg.err != nil {
+			m.ollamaOK = false
+			m.ollamaErr = msg.err.Error()
+		} else {
+			m.ollamaOK = true
+			m.ollamaModels = msg.models
+		}
+		return m, nil
+
+	case phaseMsg:
+		m.phaseErr = msg.err
+		m.screen = scrMenu
+		return m, nil
+
+	case resetMsg:
+		m.resetting = false
+		if msg.err != nil {
+			m.resetErr = msg.err.Error()
+		} else {
+			m.db = msg.db
+			m.resetErr = ""
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
+	switch m.screen {
+	case scrMenu:
+		return m.menuKeys(msg)
+	case scrSettings:
+		return m.settingsKeys(msg)
+	case scrModelPicker:
+		return m.modelPickerKeys(msg)
+	case scrRunning:
+		// waiting for phase to finish
+	}
+	return nil
+}
+
+func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
+	// если ждём подтверждения сброса
+	if m.confirmReset {
+		switch msg.String() {
+		case "y", "Y":
+			m.confirmReset = false
+			m.resetting = true
+			m.resetErr = ""
+			return resetDBCmd(m.db, m.dbPath)
+		default:
+			m.confirmReset = false
+		}
+		return nil
+	}
+
+	items := 4 // 0..4
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return tea.Quit
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		m.resetErr = ""
+	case "down":
+		if m.cursor < items {
+			m.cursor++
+		}
+		m.resetErr = ""
+	case "tab":
+		m.screen = scrSettings
+		m.cursor = 0
+	case "enter":
+		switch m.cursor {
+		case 4: // сброс базы
+			m.confirmReset = true
+		default:
+			// проверка обязательных полей
+			if missing := m.checkMissing(); missing != "" {
+				m.phaseErr = fmt.Errorf("Не задано: %s", missing)
+			} else {
+				m.screen = scrRunning
+				m.phaseErr = nil
+				return runPhaseCmd(m)
+			}
+		}
+	}
+	return nil
+}
+
+func (m *tuiModel) settingsKeys(msg tea.KeyMsg) tea.Cmd {
+	max := 6 // 0..6
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor < max {
+			m.cursor++
+		}
+	case "tab", "esc":
+		m.screen = scrMenu
+		m.cursor = 0
+	case "enter":
+		m.startEdit()
+	}
+	return nil
+}
+
+func (m *tuiModel) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor < len(m.ollamaModels)-1 {
+			m.cursor++
+		}
+	case "enter":
+		if len(m.ollamaModels) > 0 && m.cursor < len(m.ollamaModels) {
+			m.modelName = m.ollamaModels[m.cursor]
+		}
+		m.screen = scrSettings
+		m.cursor = 3
+	case "esc":
+		m.screen = scrSettings
+		m.cursor = 3
+	}
+	return nil
+}
+
+// ─── field editing ───────────────────────────────────────────────────────────
+
+func (m *tuiModel) startEdit() {
+	switch m.cursor {
+	case 0: // SRC
+		m.textInput.SetValue(m.src)
+		m.textInput.Focus()
+		m.editingField = "SRC — путь к md-заметкам"
+	case 1: // OUT
+		m.textInput.SetValue(m.out)
+		m.textInput.Focus()
+		m.editingField = "OUT — папка для vault"
+	case 2: // DB
+		m.textInput.SetValue(m.dbPath)
+		m.textInput.Focus()
+		m.editingField = "DB — файл базы"
+	case 3: // MODEL
+		if m.ollamaOK && len(m.ollamaModels) > 0 {
+			m.screen = scrModelPicker
+			m.cursor = 0
+			for i, mod := range m.ollamaModels {
+				if mod == m.modelName {
+					m.cursor = i
+					break
+				}
+			}
+			return
+		}
+		m.textInput.SetValue(m.modelName)
+		m.textInput.Focus()
+		m.editingField = "MODEL — модель ollama"
+	case 4: // HOST
+		m.textInput.SetValue(m.host)
+		m.textInput.Focus()
+		m.editingField = "HOST — адрес ollama"
+	case 5: // MAXCHARS
+		m.textInput.SetValue(fmt.Sprintf("%d", m.maxChars))
+		m.textInput.Focus()
+		m.editingField = "MAXCHARS — макс. символов"
+	case 6: // WORKERS
+		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
+		m.textInput.Focus()
+		m.editingField = "WORKERS — число потоков (1–100)"
+	}
+}
+
+func (m *tuiModel) saveField() {
+	val := m.textInput.Value()
+	switch m.cursor {
+	case 0:
+		m.src = val
+	case 1:
+		m.out = val
+	case 2:
+		m.dbPath = val
+	case 3:
+		m.modelName = val
+	case 4:
+		m.host = val
+	case 5:
+		if n, _ := fmt.Sscanf(val, "%d", &m.maxChars); n != 1 {
+			m.maxChars = 4000
+		}
+	case 6:
+		if n, _ := fmt.Sscanf(val, "%d", &m.workers); n != 1 || m.workers < 1 {
+			m.workers = 1
+		}
+		if m.workers > 100 {
+			m.workers = 100
+		}
+	}
+}
+
+func (m *tuiModel) checkMissing() string {
+	var missing []string
+	switch m.cursor {
+	case 0: // phase1
+		if m.src == "" {
+			missing = append(missing, "SRC")
+		}
+	case 1: // phase2 — достаточно базы
+	case 2: // phase3
+		if m.out == "" {
+			missing = append(missing, "OUT")
+		}
+		if m.src == "" {
+			missing = append(missing, "SRC")
+		}
+	case 3: // all
+		if m.src == "" {
+			missing = append(missing, "SRC")
+		}
+		if m.out == "" {
+			missing = append(missing, "OUT")
+		}
+	}
+	return strings.Join(missing, ", ")
+}
+
+// ─── View ─────────────────────────────────────────────────────────────────────
+
+func (m *tuiModel) View() string {
+	if m.width == 0 {
+		m.width = 80
+	}
+	if m.width < 50 {
+		m.width = 50
+	}
+
+	switch m.screen {
+	case scrSettings:
+		return m.viewSettings()
+	case scrModelPicker:
+		return m.viewModelPicker()
+	case scrRunning:
+		return m.viewRunning()
+	default:
+		return m.viewMenu()
+	}
+}
+
+func (m *tuiModel) viewMenu() string {
+	if m.editingField != "" {
+		return m.viewTextEdit()
+	}
+	w := m.width
+	cw := w - 4 // inside border+padding
+
+	var s Stats
+	if m.db != nil {
+		s = loadStats(m.db)
+	}
+	n := s.Notes
+	pairsTotal := n * (n - 1) / 2
+
+	items := []string{
+		"Фаза 1 — Импорт md → sqlite",
+		"Фаза 2 — Теги и связи (ollama)",
+		"Фаза 3 — Запись vault",
+		"Все фазы подряд",
+		"Сброс базы данных",
+	}
+
+	// ── фазы ──
+	var phaseLines []string
+	for i, item := range items {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		line := cursor + item
+		if i == 4 {
+			line = tuiRed.Render(line)
+		}
+		phaseLines = append(phaseLines, lipgloss.NewStyle().Width(cw).Render(line))
+	}
+
+	// ── настройки (две колонки) ──
+	half := (cw - 1) / 2
+	col := func(s string) string { return lipgloss.NewStyle().Width(half).Render(s) }
+	settingsLines := []string{
+		tuiLabel("SRC", tuiEmpty(m.src)),
+		tuiLabel("OUT", tuiEmpty(m.out)),
+		tuiLabel("DB", m.dbPath),
+		tuiLabel("MODEL", m.modelName),
+		tuiLabel("HOST", m.host),
+		fmt.Sprintf("MAXCHARS: %d", m.maxChars),
+		fmt.Sprintf("WORKERS: %d", m.workers),
+	}
+	// разбиваем на пары
+	var settingPairs []string
+	for i := 0; i < len(settingsLines); i += 2 {
+		l := col(settingsLines[i])
+		r := ""
+		if i+1 < len(settingsLines) {
+			r = col(settingsLines[i+1])
+		}
+		settingPairs = append(settingPairs, lipgloss.JoinHorizontal(lipgloss.Top, l, r))
+	}
+
+	// ── статус ──
+	statsLines := []string{
+		fmt.Sprintf("Заметок: %d │ С тегами: %d │ Тегов: %d │ Связей: %d", s.Notes, s.Tagged, s.UniqTags, s.Links),
+		fmt.Sprintf("Пар: %d/%d │ Записано: %d", s.PairsDone, pairsTotal, s.Written),
+	}
+
+	// ── ollama ──
+	var ollamaLine string
+	if !m.ollamaReady {
+		ollamaLine = tuiDim.Render("… проверка ollama …")
+	} else if m.ollamaOK && len(m.ollamaModels) > 0 {
+		ollamaLine = tuiGreen.Render("ollama ✓") + "  " + strings.Join(m.ollamaModels, ", ")
+	} else {
+		ollamaLine = tuiRed.Render("ollama ✗ ") + m.ollamaErr + tuiDim.Render("  (запустите ollama serve)")
+	}
+	ollamaLine = lipgloss.NewStyle().Width(cw).Render(ollamaLine)
+
+	// ── сообщения ──
+	var messages []string
+	if m.phaseErr != nil {
+		messages = append(messages, tuiRed.Render(m.phaseErr.Error()))
+	}
+	if m.confirmReset {
+		messages = append(messages, tuiYel.Render("Удалить базу "+m.dbPath+" и все данные? (y/N)"))
+	} else if m.resetting {
+		messages = append(messages, tuiDim.Render("Сброс базы…"))
+	} else if m.resetErr != "" {
+		messages = append(messages, tuiRed.Render("Ошибка сброса: "+m.resetErr))
+	}
+
+	// ── футер ──
+	footer := "↑↓ выбор  ·  Enter запуск  ·  Tab настройки  ·  Q выход"
+	if m.confirmReset {
+		footer = "y — удалить всё  ·  любая другая клавиша — отмена"
+	}
+
+	// ── сборка ──
+	sep := func(title string) string {
+		return lipgloss.NewStyle().Width(cw).Border(
+			lipgloss.Border{Bottom: "─"}, false, false, true, false,
+		).Render(title)
+	}
+
+	var parts []string
+	parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, phaseLines...))
+	parts = append(parts, sep("Настройки"))
+	parts = append(parts, settingPairs...)
+	parts = append(parts, sep("Статус"))
+	for _, sl := range statsLines {
+		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(sl))
+	}
+	parts = append(parts, sep(""))
+	parts = append(parts, ollamaLine)
+	for _, msg := range messages {
+		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(msg))
+	}
+	parts = append(parts, sep(""))
+	parts = append(parts, tuiDim.Width(cw).Render(footer))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *tuiModel) viewSettings() string {
+	if m.editingField != "" {
+		return m.viewTextEdit()
+	}
+	w := m.width
+	cw := w - 4
+
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS"}
+	vals := []string{m.src, m.out, m.dbPath, m.modelName, m.host,
+		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers)}
+
+	var lines []string
+	for i, k := range keys {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(
+			fmt.Sprintf("%s%-9s: %s", cursor, k, vals[i]),
+		))
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter изменить  ·  Tab/ESC назад"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *tuiModel) viewModelPicker() string {
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	if len(m.ollamaModels) == 0 {
+		lines = append(lines, tuiRed.Width(cw).Render("нет доступных моделей"))
+	} else {
+		for i, mod := range m.ollamaModels {
+			cursor := "  "
+			if m.cursor == i {
+				cursor = tuiSel.Render("▸ ")
+			}
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+mod))
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter выбрать  ·  ESC назад"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *tuiModel) viewTextEdit() string {
+	w := m.width
+	cw := w - 4
+
+	lines := []string{
+		lipgloss.NewStyle().Width(cw).Render(m.textInput.View()),
+		"",
+		tuiDim.Width(cw).Render("Enter сохранить  ·  ESC отмена"),
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *tuiModel) viewRunning() string {
+	w := m.width
+	cw := w - 4
+
+	lines := []string{
+		lipgloss.NewStyle().Width(cw).Render("Идёт обработка…"),
+		lipgloss.NewStyle().Width(cw).Render("Прогресс отображается в консоли"),
+	}
+	if m.phaseErr != nil {
+		lines = append(lines, tuiRed.Width(cw).Render("Ошибка: "+m.phaseErr.Error()))
+		lines = append(lines, tuiDim.Width(cw).Render("Нажмите любую клавишу для возврата"))
+	} else {
+		lines = append(lines, tuiDim.Width(cw).Render("Ожидание завершения…"))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+// ─── entry point ──────────────────────────────────────────────────────────────
+
+func runTUI(db *sql.DB) error {
+	m := newTUIModel(db)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	m.program = p
+	_, err := p.Run()
+	return err
+}
+
+// ─── ollama helpers ──────────────────────────────────────────────────────────
+
+func tuiFetchModels(host string) ([]string, error) {
+	hc := http.Client{Timeout: 5 * time.Second}
+	resp, err := hc.Get(strings.TrimRight(host, "/") + "/api/tags")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Models []struct{ Name string } `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, m := range result.Models {
+		names = append(names, m.Name)
+	}
+	return names, nil
+}
+
 // ───────────────────────────── Phase 1 ─────────────────────────────
 
 func phase1(ctx context.Context, ui *UI, db *sql.DB, src string) error {
@@ -453,6 +1123,7 @@ type cfg struct {
 	Host     string
 	Model    string
 	MaxChars int
+	Workers  int
 }
 
 func loadNote(db *sql.DB, id int64, maxChars int) (note, error) {
@@ -634,6 +1305,9 @@ func savePair(ctx context.Context, db *sql.DB, a, b note, r pairResult, model st
 	return newTags, newLinks, tx.Commit()
 }
 
+// saveMu защищает savePair от гонок при параллельной пересборке links_md.
+var saveMu sync.Mutex
+
 func phase2(ctx context.Context, ui *UI, db *sql.DB, c cfg) error {
 	// проверка доступности ollama
 	hc := http.Client{Timeout: 5 * time.Second}
@@ -669,63 +1343,112 @@ func phase2(ctx context.Context, ui *UI, db *sql.DB, c cfg) error {
 
 	n := len(ids)
 	total := n * (n - 1) / 2
-	ui.setPhase("2/3 ollama: теги и связи ("+c.Model+")", len(done), total)
+	workers := c.Workers
+	if workers < 1 {
+		workers = 1
+	}
+	ui.setPhase("2/3 ollama: теги и связи ("+c.Model+", ×"+fmt.Sprint(workers)+")", len(done), total)
 	if total == 0 {
 		ui.logf("недостаточно заметок для сравнения пар")
 		return nil
 	}
-	ui.logf("пар всего: %d, уже готово: %d", total, len(done))
+	ui.logf("пар всего: %d, уже готово: %d, потоков: %d", total, len(done), workers)
 
+	// собираем все необработанные пары
+	type job struct {
+		a, b note
+		key  [2]int64
+	}
+	var jobs []job
 	for i := 0; i < n; i++ {
 		var a note
-		aLoaded := false
+		loadedA := false
 		for j := i + 1; j < n; j++ {
-			if ctx.Err() != nil {
-				return nil
-			}
 			key := [2]int64{ids[i], ids[j]}
 			if done[key] {
 				continue
 			}
-			if !aLoaded {
+			if !loadedA {
 				if a, err = loadNote(db, ids[i], c.MaxChars); err != nil {
 					return err
 				}
-				aLoaded = true
+				loadedA = true
 			}
 			b, err := loadNote(db, ids[j], c.MaxChars)
 			if err != nil {
 				return err
 			}
-			ui.setCurrent(a.Name + "  ↔  " + b.Name)
+			jobs = append(jobs, job{a, b, key})
+		}
+	}
+	remaining := len(jobs)
+	ui.logf("осталось обработать: %d пар", remaining)
+
+	// пул воркеров
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	errCh := make(chan error, 1) // буфер 1 — первый fatal error останавливает всё
+
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			break
+		}
+		// проверяем, не было ли фатальной ошибки
+		select {
+		case e := <-errCh:
+			wg.Wait()
+			return e
+		default:
+		}
+
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			ui.setCurrent(j.a.Name + "  ↔  " + j.b.Name)
 
 			var res pairResult
 			var lastErr error
 			for attempt := 0; attempt < 3; attempt++ {
-				if res, lastErr = askOllama(ctx, c, buildPrompt(a, b)); lastErr == nil {
+				if res, lastErr = askOllama(ctx, c, buildPrompt(j.a, j.b)); lastErr == nil {
 					break
 				}
 				if ctx.Err() != nil {
-					return nil
+					return
 				}
 			}
 			if lastErr != nil {
-				ui.fail("%s ↔ %s: %v", a.Name, b.Name, lastErr)
-				ui.advance(false) // не помечаем как done — повторится при следующем запуске
-				continue
+				ui.fail("%s ↔ %s: %v", j.a.Name, j.b.Name, lastErr)
+				ui.advance(false)
+				return
 			}
-			nt, nl, err := savePair(ctx, db, a, b, res, c.Model)
+			saveMu.Lock()
+			nt, nl, err := savePair(ctx, db, j.a, j.b, res, c.Model)
+			saveMu.Unlock()
 			if err != nil {
-				return err
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
 			}
-			done[key] = true
 			ui.addRun(nt, nl)
 			ui.advance(false)
 			if res.Related {
-				ui.logf(cGreen+"связь"+cReset+": %s ↔ %s", a.Name, b.Name)
+				ui.logf(cGreen+"связь"+cReset+": %s ↔ %s", j.a.Name, j.b.Name)
 			}
-			ui.logf("%s ↔ %s: +%d тегов", a.Name, b.Name, nt)
-		}
+			ui.logf("%s ↔ %s: +%d тегов", j.a.Name, j.b.Name, nt)
+		}(j)
+	}
+	wg.Wait()
+
+	// проверяем фатальные ошибки после завершения
+	select {
+	case e := <-errCh:
+		return e
+	default:
 	}
 	return nil
 }
@@ -919,7 +1642,7 @@ const usage = `obsidianize — конвертер md-заметок в Obsidian-
       Создаёт sqlite (если нет) и импортирует все .md (путь, имя файла, текст).
       Уже импортированные файлы пропускаются.
 
-  obsidianize phase2 [-db notes.db] [-model gemma4:31b-cloud] [-host http://localhost:11434] [-maxchars 4000]
+  obsidianize phase2 [-db notes.db] [-model gemma4:31b-cloud] [-host http://localhost:11434] [-maxchars 4000] [-workers 1]
       Ollama попарно сравнивает заметки (1-2, 1-3, 2-3 ...), ставит теги и [[ссылки]].
       Уже обработанные пары пропускаются; новые заметки добавляют только новые пары.
       Внимание: пар N*(N-1)/2 — на больших коллекциях это долго.
@@ -935,7 +1658,21 @@ Ctrl+C безопасно останавливает работу — прогр
 `
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] == "help" || os.Args[1] == "-h" || os.Args[1] == "--help" {
+	// без аргументов — интерактивный TUI
+	if len(os.Args) < 2 {
+		db, err := openDB("notes.db")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sqlite:", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+		if err := runTUI(db); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if os.Args[1] == "help" || os.Args[1] == "-h" || os.Args[1] == "--help" {
 		fmt.Print(usage)
 		return
 	}
@@ -947,6 +1684,7 @@ func main() {
 	model := fl.String("model", defaultModel, "модель ollama")
 	host := fl.String("host", "http://localhost:11434", "адрес ollama")
 	maxChars := fl.Int("maxchars", 4000, "максимум символов заметки в промпте")
+	workers := fl.Int("workers", 1, "число потоков для ollama (1–100)")
 	_ = fl.Parse(os.Args[2:])
 
 	switch cmd {
@@ -975,7 +1713,7 @@ func main() {
 			runErr = f()
 		}
 	}
-	c := cfg{Host: *host, Model: *model, MaxChars: *maxChars}
+	c := cfg{Host: *host, Model: *model, MaxChars: *maxChars, Workers: *workers}
 	switch cmd {
 	case "phase1":
 		run(func() error { return phase1(ctx, ui, db, *src) })

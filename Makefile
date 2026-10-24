@@ -2,11 +2,12 @@
 
 # Default values — override on command line, e.g. make phase1 SRC=~/notes MODEL=qwen2.5:7b
 DB       ?= notes.db
-SRC      ?=
-OUT      ?=
+SRC      ?= .
+OUT      ?= out
 MODEL    ?= gemma4:31b-cloud
 HOST     ?= http://localhost:11434
 MAXCHARS ?= 4000
+WORKERS  ?= 1
 
 BIN := obsid
 MODEL_STAMP := .model-stamp
@@ -24,7 +25,7 @@ help: ## Show this help
 	@echo "  make status                        только счётчики"
 	@echo "  make clean                         удалить бинарник и базу"
 	@echo ""
-	@echo "  Переменные:  DB=$(DB)  MODEL=$(MODEL)  HOST=$(HOST)  MAXCHARS=$(MAXCHARS)"
+	@echo "  Переменные:  DB=$(DB)  MODEL=$(MODEL)  HOST=$(HOST)  MAXCHARS=$(MAXCHARS)  WORKERS=$(WORKERS)"
 
 build: $(BIN)
 
@@ -40,13 +41,13 @@ phase1: $(BIN) ## Фаза 1: импорт md → sqlite
 	./$(BIN) phase1 -src "$(SRC)" -db "$(DB)"
 
 phase2: $(BIN) ## Фаза 2: ollama теги и связи
-	./$(BIN) phase2 -db "$(DB)" -model "$(MODEL)" -host "$(HOST)" -maxchars "$(MAXCHARS)"
+	./$(BIN) phase2 -db "$(DB)" -model "$(MODEL)" -host "$(HOST)" -maxchars "$(MAXCHARS)" -workers "$(WORKERS)"
 
 phase3: $(BIN) ## Фаза 3: запись vault
 	./$(BIN) phase3 -out "$(OUT)" -src "$(SRC)" -db "$(DB)"
 
 all: $(BIN) ## Все три фазы
-	./$(BIN) all -src "$(SRC)" -out "$(OUT)" -db "$(DB)" -model "$(MODEL)" -host "$(HOST)" -maxchars "$(MAXCHARS)"
+	./$(BIN) all -src "$(SRC)" -out "$(OUT)" -db "$(DB)" -model "$(MODEL)" -host "$(HOST)" -maxchars "$(MAXCHARS)" -workers "$(WORKERS)"
 
 status: $(BIN) ## Статистика
 	./$(BIN) status -db "$(DB)"
