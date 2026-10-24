@@ -361,6 +361,8 @@ const (
 	scrSettings
 	scrModelPicker
 	scrRunning
+	scrFilePicker
+	scrEval
 )
 
 type ollamaMsg struct {
@@ -371,6 +373,14 @@ type phaseMsg struct{ err error }
 type resetMsg struct {
 	err error
 	db  *sql.DB
+}
+type evalMsg struct {
+	result string
+	err    error
+}
+type noteInfo struct {
+	id   int64
+	name string
 }
 
 type tuiModel struct {
@@ -395,6 +405,12 @@ type tuiModel struct {
 	confirmReset bool
 	resetting    bool
 	resetErr     string
+
+	fileNotes    []noteInfo
+	evalResult   string
+	evalErr      string
+	evalLoading  bool
+	fileFilter   string
 
 	width int
 }
@@ -491,6 +507,64 @@ func resetDBCmd(db *sql.DB, path string) tea.Cmd {
 	}
 }
 
+func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, linkedIDs []int64) tea.Cmd {
+	return func() tea.Msg {
+		// загружаем саму заметку
+		var content, fileName string
+		db.QueryRow(`SELECT file_name, content FROM notes WHERE id=?`, noteID).Scan(&fileName, &content)
+
+		// загружаем связанные заметки
+		var linkedTexts []string
+		for _, lid := range linkedIDs {
+			var lc, ln string
+			if db.QueryRow(`SELECT file_name, content FROM notes WHERE id=?`, lid).Scan(&ln, &lc) == nil {
+				r := []rune(lc)
+				if len(r) > maxChars {
+					lc = string(r[:maxChars]) + "\n[…обрезано…]"
+				}
+				linkedTexts = append(linkedTexts, "=== "+ln+" ===\n"+lc)
+			}
+		}
+
+		// обрезаем саму заметку для промпта
+		r := []rune(content)
+		if len(r) > maxChars {
+			content = string(r[:maxChars]) + "\n[…обрезано…]"
+		}
+
+		prompt := `Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.
+
+=== ОСНОВНАЯ ЗАМЕТКА (` + fileName + `) ===
+` + content + `
+
+=== СВЯЗАННЫЕ ЗАМЕТКИ ===
+` + strings.Join(linkedTexts, "\n\n") + `
+
+Ответь ТОЛЬКО JSON, без пояснений, в формате:
+{"novelty":"высокая/средняя/низкая","summary":"краткое содержание заметки (1-2 предложения)","new_info":"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')"}`
+
+		body, _ := json.Marshal(map[string]any{
+			"model":   model,
+			"prompt":  prompt,
+			"stream":  false,
+			"format":  "json",
+			"options": map[string]any{"temperature": 0},
+		})
+		resp, err := http.Post(strings.TrimRight(host, "/")+"/api/generate", "application/json", bytes.NewReader(body))
+		if err != nil {
+			return evalMsg{err: err}
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		var out struct{ Response string }
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return evalMsg{err: fmt.Errorf("не удалось прочитать ответ ollama")}
+		}
+		clean := stripCodeFences(out.Response)
+		return evalMsg{result: clean}
+	}
+}
+
 // ─── Init / Update / View ─────────────────────────────────────────────────────
 
 func (m *tuiModel) Init() tea.Cmd {
@@ -550,6 +624,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetErr = ""
 		}
 		return m, nil
+
+	case evalMsg:
+		m.evalLoading = false
+		if msg.err != nil {
+			m.evalErr = msg.err.Error()
+		} else {
+			m.evalResult = msg.result
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -562,8 +645,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.settingsKeys(msg)
 	case scrModelPicker:
 		return m.modelPickerKeys(msg)
+	case scrFilePicker:
+		return m.filePickerKeys(msg)
+	case scrEval:
+		return m.evalKeys(msg)
 	case scrRunning:
-		// waiting for phase to finish
 	}
 	return nil
 }
@@ -583,7 +669,7 @@ func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	items := 4 // 0..4
+	items := 5 // 0..5
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return tea.Quit
@@ -602,7 +688,9 @@ func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		m.cursor = 0
 	case "enter":
 		switch m.cursor {
-		case 4: // сброс базы
+		case 4: // оценить файл
+			m.openFilePicker()
+		case 5: // сброс базы
 			m.confirmReset = true
 		default:
 			// проверка обязательных полей
@@ -657,6 +745,93 @@ func (m *tuiModel) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.screen = scrSettings
 		m.cursor = 3
+	}
+	return nil
+}
+
+func (m *tuiModel) openFilePicker() {
+	rows, err := m.db.Query(`SELECT id, file_name FROM notes ORDER BY file_name`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	m.fileNotes = nil
+	for rows.Next() {
+		var ni noteInfo
+		rows.Scan(&ni.id, &ni.name)
+		m.fileNotes = append(m.fileNotes, ni)
+	}
+	m.cursor = 0
+	m.fileFilter = ""
+	m.screen = scrFilePicker
+}
+
+func (m *tuiModel) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		filtered := m.filteredNotes()
+		if m.cursor < len(filtered)-1 {
+			m.cursor++
+		}
+	case "enter":
+		filtered := m.filteredNotes()
+		if len(filtered) > 0 && m.cursor < len(filtered) {
+			id := filtered[m.cursor].id
+			linkedRows, _ := m.db.Query(`SELECT dst_id FROM links WHERE src_id=?`, id)
+			var linked []int64
+			for linkedRows.Next() {
+				var lid int64
+				linkedRows.Scan(&lid)
+				linked = append(linked, lid)
+			}
+			linkedRows.Close()
+			m.evalResult = ""
+			m.evalErr = ""
+			m.evalLoading = true
+			m.screen = scrEval
+			return evalNoteCmd(m.db, id, m.host, m.modelName, m.maxChars, linked)
+		}
+	case "esc":
+		m.screen = scrMenu
+		m.cursor = 4
+	case "backspace":
+		r := []rune(m.fileFilter)
+		if len(r) > 0 {
+			m.fileFilter = string(r[:len(r)-1])
+		}
+		m.cursor = 0
+	default:
+		// любой печатный символ — фильтр
+		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.fileFilter += string(msg.Runes[0])
+			m.cursor = 0
+		}
+	}
+	return nil
+}
+
+func (m *tuiModel) filteredNotes() []noteInfo {
+	if m.fileFilter == "" {
+		return m.fileNotes
+	}
+	lower := strings.ToLower(m.fileFilter)
+	var out []noteInfo
+	for _, n := range m.fileNotes {
+		if strings.Contains(strings.ToLower(n.name), lower) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func (m *tuiModel) evalKeys(msg tea.KeyMsg) tea.Cmd {
+	if !m.evalLoading {
+		m.screen = scrMenu
+		m.cursor = 4
 	}
 	return nil
 }
@@ -777,6 +952,10 @@ func (m *tuiModel) View() string {
 		return m.viewModelPicker()
 	case scrRunning:
 		return m.viewRunning()
+	case scrFilePicker:
+		return m.viewFilePicker()
+	case scrEval:
+		return m.viewEval()
 	default:
 		return m.viewMenu()
 	}
@@ -801,6 +980,7 @@ func (m *tuiModel) viewMenu() string {
 		"Фаза 2 — Теги и связи (ollama)",
 		"Фаза 3 — Запись vault",
 		"Все фазы подряд",
+		"Оценить уникальность файла",
 		"Сброс базы данных",
 	}
 
@@ -812,7 +992,7 @@ func (m *tuiModel) viewMenu() string {
 			cursor = tuiSel.Render("▸ ")
 		}
 		line := cursor + item
-		if i == 4 {
+		if i == 5 {
 			line = tuiRed.Render(line)
 		}
 		phaseLines = append(phaseLines, lipgloss.NewStyle().Width(cw).Render(line))
@@ -981,6 +1161,88 @@ func (m *tuiModel) viewRunning() string {
 		lines = append(lines, tuiDim.Width(cw).Render("Нажмите любую клавишу для возврата"))
 	} else {
 		lines = append(lines, tuiDim.Width(cw).Render("Ожидание завершения…"))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *tuiModel) viewFilePicker() string {
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	// строка фильтра
+	filterLine := m.fileFilter
+	if filterLine == "" {
+		filterLine = tuiDim.Render("начните вводить для фильтра…")
+	} else {
+		filterLine += "█"
+	}
+	lines = append(lines, lipgloss.NewStyle().Width(cw).Render(filterLine))
+	lines = append(lines, "")
+
+	filtered := m.filteredNotes()
+	if len(filtered) == 0 {
+		lines = append(lines, tuiDim.Width(cw).Render("ничего не найдено"))
+	} else {
+		for i, n := range filtered {
+			cursor := "  "
+			if m.cursor == i {
+				cursor = tuiSel.Render("▸ ")
+			}
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n.name))
+		}
+	}
+	lines = append(lines, "")
+	footer := fmt.Sprintf("найдено: %d  ·  ↑↓ выбор  ·  Enter оценить  ·  ESC назад", len(filtered))
+	lines = append(lines, tuiDim.Width(cw).Render(footer))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *tuiModel) viewEval() string {
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	if m.evalLoading {
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Анализ заметки…"))
+		lines = append(lines, tuiDim.Width(cw).Render("Отправка в ollama…"))
+	} else if m.evalErr != "" {
+		lines = append(lines, tuiRed.Width(cw).Render("Ошибка: "+m.evalErr))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("Нажмите любую клавишу для возврата"))
+	} else {
+		// парсим JSON-результат и форматируем
+		var res struct {
+			Novelty string `json:"novelty"`
+			Summary string `json:"summary"`
+			NewInfo string `json:"new_info"`
+		}
+		if err := json.Unmarshal([]byte(m.evalResult), &res); err != nil {
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(m.evalResult))
+		} else {
+			nov := tuiSel.Render
+			switch res.Novelty {
+			case "высокая":
+				nov = tuiGreen.Render
+			case "средняя":
+				nov = tuiYel.Render
+			case "низкая":
+				nov = tuiDim.Render
+			}
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Уникальность: "+nov(res.Novelty)))
+			lines = append(lines, "")
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Содержание:"))
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(res.Summary))
+			lines = append(lines, "")
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Новая информация:"))
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(res.NewInfo))
+		}
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("Нажмите любую клавишу для возврата"))
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
