@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS pairs(
 	done_at TEXT NOT NULL,
 	PRIMARY KEY(a_id, b_id)
 );
+CREATE TABLE IF NOT EXISTS prompts(
+	name   TEXT PRIMARY KEY,
+	prompt TEXT NOT NULL
+);
 `
 
 func openDB(path string) (*sql.DB, error) {
@@ -88,7 +92,64 @@ func openDB(path string) (*sql.DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
+	seedPrompts(db)
 	return db, nil
+}
+
+func seedPrompts(db *sql.DB) {
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM prompts`).Scan(&count)
+	if count > 0 {
+		return
+	}
+	// пробуем из файлов — сначала рядом с бинарником, потом в cwd
+	tryDir := func(dir string) bool {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".txt") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".txt")
+			db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, name, string(data))
+		}
+		return true
+	}
+	if exe, err := os.Executable(); err == nil {
+		tryDir(filepath.Join(filepath.Dir(exe), "prompts"))
+	}
+	tryDir("prompts")
+	// если всё ещё пусто — дефолтные промпты
+	db.QueryRow(`SELECT COUNT(*) FROM prompts`).Scan(&count)
+	if count > 0 {
+		return
+	}
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "phase2",
+		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}")
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "eval",
+		"Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}")
+}
+
+func loadPrompt(db *sql.DB, name string) string {
+	var p string
+	if db.QueryRow(`SELECT prompt FROM prompts WHERE name=?`, name).Scan(&p) == nil {
+		return p
+	}
+	return ""
+}
+
+func expandPrompt(tmpl string, vars map[string]string) string {
+	s := tmpl
+	for k, v := range vars {
+		s = strings.ReplaceAll(s, "{"+k+"}", v)
+	}
+	return s
 }
 
 type execer interface {
@@ -412,6 +473,10 @@ type tuiModel struct {
 	evalLoading  bool
 	fileFilter   string
 
+	promptList    []string
+	promptViewing string
+	promptText    string
+
 	width int
 }
 
@@ -532,16 +597,15 @@ func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, lin
 			content = string(r[:maxChars]) + "\n[…обрезано…]"
 		}
 
-		prompt := `Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.
-
-=== ОСНОВНАЯ ЗАМЕТКА (` + fileName + `) ===
-` + content + `
-
-=== СВЯЗАННЫЕ ЗАМЕТКИ ===
-` + strings.Join(linkedTexts, "\n\n") + `
-
-Ответь ТОЛЬКО JSON, без пояснений, в формате:
-{"novelty":"высокая/средняя/низкая","summary":"краткое содержание заметки (1-2 предложения)","new_info":"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')"}`
+		tmpl := loadPrompt(db, "eval")
+		if tmpl == "" {
+			tmpl = "Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}"
+		}
+		prompt := expandPrompt(tmpl, map[string]string{
+			"FILE_NAME":    fileName,
+			"CONTENT":      content,
+			"LINKED_NOTES": strings.Join(linkedTexts, "\n\n"),
+		})
 
 		body, _ := json.Marshal(map[string]any{
 			"model":   model,
@@ -669,7 +733,7 @@ func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	items := 5 // 0..5
+	items := 6 // 0..6
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return tea.Quit
@@ -683,14 +747,14 @@ func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor++
 		}
 		m.resetErr = ""
-	case "tab":
-		m.screen = scrSettings
-		m.cursor = 0
 	case "enter":
 		switch m.cursor {
-		case 4: // оценить файл
+		case 4: // настройки
+			m.screen = scrSettings
+			m.cursor = 0
+		case 5: // оценить файл
 			m.openFilePicker()
-		case 5: // сброс базы
+		case 6: // сброс базы
 			m.confirmReset = true
 		default:
 			// проверка обязательных полей
@@ -707,7 +771,10 @@ func (m *tuiModel) menuKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *tuiModel) settingsKeys(msg tea.KeyMsg) tea.Cmd {
-	max := 6 // 0..6
+	if m.promptList != nil {
+		return m.promptKeys(msg)
+	}
+	max := 7 // 0..7
 	switch msg.String() {
 	case "up":
 		if m.cursor > 0 {
@@ -717,9 +784,9 @@ func (m *tuiModel) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		if m.cursor < max {
 			m.cursor++
 		}
-	case "tab", "esc":
+	case "esc":
 		m.screen = scrMenu
-		m.cursor = 0
+		m.cursor = 4
 	case "enter":
 		m.startEdit()
 	}
@@ -797,7 +864,7 @@ func (m *tuiModel) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.screen = scrMenu
-		m.cursor = 4
+		m.cursor = 5
 	case "backspace":
 		r := []rune(m.fileFilter)
 		if len(r) > 0 {
@@ -831,7 +898,7 @@ func (m *tuiModel) filteredNotes() []noteInfo {
 func (m *tuiModel) evalKeys(msg tea.KeyMsg) tea.Cmd {
 	if !m.evalLoading {
 		m.screen = scrMenu
-		m.cursor = 4
+		m.cursor = 5
 	}
 	return nil
 }
@@ -879,6 +946,10 @@ func (m *tuiModel) startEdit() {
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
 		m.editingField = "WORKERS — число потоков (1–100)"
+	case 7: // PROMPTS
+		m.editingField = ""
+		m.openPromptList()
+		return
 	}
 }
 
@@ -906,6 +977,12 @@ func (m *tuiModel) saveField() {
 		if m.workers > 100 {
 			m.workers = 100
 		}
+	case 7: // PROMPTS — save edited prompt
+		name := strings.TrimPrefix(m.editingField, "Промпт: ")
+		m.db.Exec(`INSERT OR REPLACE INTO prompts(name, prompt) VALUES(?,?)`, name, val)
+		m.promptViewing = name
+		m.promptText = val
+		m.promptList = []string{name}
 	}
 }
 
@@ -933,6 +1010,70 @@ func (m *tuiModel) checkMissing() string {
 		}
 	}
 	return strings.Join(missing, ", ")
+}
+
+func (m *tuiModel) openPromptList() {
+	rows, _ := m.db.Query(`SELECT name FROM prompts ORDER BY name`)
+	defer rows.Close()
+	m.promptList = []string{}
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		m.promptList = append(m.promptList, n)
+	}
+	if len(m.promptList) == 0 {
+		m.promptList = []string{"phase2", "eval"}
+	}
+	m.cursor = 0
+	m.promptViewing = ""
+}
+
+func (m *tuiModel) promptKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.promptViewing == "" {
+			if m.cursor < len(m.promptList)-1 {
+				m.cursor++
+			}
+		}
+	case "enter":
+		if m.promptViewing == "" && m.cursor < len(m.promptList) {
+			m.promptViewing = m.promptList[m.cursor]
+			m.promptText = loadPrompt(m.db, m.promptViewing)
+			m.cursor = 0
+		}
+	case "r", "R":
+		if m.promptViewing != "" {
+			// перезагрузка из файла
+			data, err := os.ReadFile("prompts/" + m.promptViewing + ".txt")
+			if err == nil {
+				m.db.Exec(`INSERT OR REPLACE INTO prompts(name, prompt) VALUES(?,?)`, m.promptViewing, string(data))
+				m.promptText = string(data)
+			}
+		}
+	case "e", "E":
+		if m.promptViewing != "" {
+			m.textInput.SetValue(m.promptText)
+			m.textInput.Focus()
+			m.editingField = "Промпт: " + m.promptViewing
+			m.promptList = nil
+		}
+	case "esc":
+		if m.promptViewing != "" {
+			m.promptViewing = ""
+			m.cursor = 0
+		} else {
+			m.promptList = nil
+			m.promptViewing = ""
+			m.screen = scrSettings
+			m.cursor = 7
+		}
+	}
+	return nil
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -980,6 +1121,7 @@ func (m *tuiModel) viewMenu() string {
 		"Фаза 2 — Теги и связи (ollama)",
 		"Фаза 3 — Запись vault",
 		"Все фазы подряд",
+		"Настройки",
 		"Оценить уникальность файла",
 		"Сброс базы данных",
 	}
@@ -992,7 +1134,7 @@ func (m *tuiModel) viewMenu() string {
 			cursor = tuiSel.Render("▸ ")
 		}
 		line := cursor + item
-		if i == 5 {
+		if i == 6 {
 			line = tuiRed.Render(line)
 		}
 		phaseLines = append(phaseLines, lipgloss.NewStyle().Width(cw).Render(line))
@@ -1052,7 +1194,7 @@ func (m *tuiModel) viewMenu() string {
 	}
 
 	// ── футер ──
-	footer := "↑↓ выбор  ·  Enter запуск  ·  Tab настройки  ·  Q выход"
+	footer := "↑↓ выбор  ·  Enter запуск  ·  Q выход"
 	if m.confirmReset {
 		footer = "y — удалить всё  ·  любая другая клавиша — отмена"
 	}
@@ -1066,7 +1208,7 @@ func (m *tuiModel) viewMenu() string {
 
 	var parts []string
 	parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, phaseLines...))
-	parts = append(parts, sep("Настройки"))
+	parts = append(parts, sep(""))
 	parts = append(parts, settingPairs...)
 	parts = append(parts, sep("Статус"))
 	for _, sl := range statsLines {
@@ -1088,12 +1230,15 @@ func (m *tuiModel) viewSettings() string {
 	if m.editingField != "" {
 		return m.viewTextEdit()
 	}
+	if m.promptList != nil {
+		return m.viewPromptSub()
+	}
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS", "PROMPTS"}
 	vals := []string{m.src, m.out, m.dbPath, m.modelName, m.host,
-		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers)}
+		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "редактировать…"}
 
 	var lines []string
 	for i, k := range keys {
@@ -1106,7 +1251,43 @@ func (m *tuiModel) viewSettings() string {
 		))
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter изменить  ·  Tab/ESC назад"))
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter изменить  ·  ESC назад"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *tuiModel) viewPromptSub() string {
+	w := m.width
+	cw := w - 4
+
+	if m.promptViewing != "" {
+		// показываем текст промпта
+		lines := []string{
+			lipgloss.NewStyle().Bold(true).Width(cw).Render("Промпт: " + m.promptViewing),
+			"",
+		}
+		// разбиваем на строки
+		for _, line := range strings.Split(m.promptText, "\n") {
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(line))
+		}
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("ESC назад  ·  r перезагрузить из файла"))
+		content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+		return tuiBox.Width(w).Render(content)
+	}
+
+	// список промптов
+	var lines []string
+	for i, n := range m.promptList {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n))
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ выбор  ·  Enter посмотреть  ·  ESC назад"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -1456,26 +1637,17 @@ func stripCodeFences(s string) string {
 	return s
 }
 
-func buildPrompt(a, b note) string {
-	return `Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.
-Даны две заметки: A и B.
-
-1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:
-   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,
-   одно-два слова (вместо пробела используй дефис), без символа #.
-2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,
-   продолжение истории, одна и та же тема. Если связи нет — related=false.
-   Если есть — related=true и в reason одна короткая фраза, почему они связаны.
-
-Ответь ТОЛЬКО JSON, без пояснений, в формате:
-{"tags_a":["..."],"tags_b":["..."],"related":true,"reason":"..."}
-
-=== Заметка A (файл: ` + a.Name + `) ===
-` + a.Content + `
-
-=== Заметка B (файл: ` + b.Name + `) ===
-` + b.Content + `
-`
+func buildPrompt(db *sql.DB, a, b note) string {
+	tmpl := loadPrompt(db, "phase2")
+	if tmpl == "" {
+		tmpl = "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}"
+	}
+	return expandPrompt(tmpl, map[string]string{
+		"A_NAME":    a.Name,
+		"A_CONTENT": a.Content,
+		"B_NAME":    b.Name,
+		"B_CONTENT": b.Content,
+	})
 }
 
 func askOllama(ctx context.Context, c cfg, prompt string) (pairResult, error) {
@@ -1674,7 +1846,7 @@ func phase2(ctx context.Context, ui *UI, db *sql.DB, c cfg) error {
 			var res pairResult
 			var lastErr error
 			for attempt := 0; attempt < 3; attempt++ {
-				if res, lastErr = askOllama(ctx, c, buildPrompt(j.a, j.b)); lastErr == nil {
+				if res, lastErr = askOllama(ctx, c, buildPrompt(db, j.a, j.b)); lastErr == nil {
 					break
 				}
 				if ctx.Err() != nil {
