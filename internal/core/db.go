@@ -2,6 +2,7 @@ package core
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,8 @@ CREATE TABLE IF NOT EXISTS notes(
 	file_path   TEXT NOT NULL UNIQUE,   -- path relative to source folder
 	abs_path    TEXT NOT NULL,          -- absolute path at import time
 	file_name   TEXT NOT NULL,          -- filename only
-	content     TEXT NOT NULL,          -- original, never changed
+	content     TEXT NOT NULL,          -- original text, or base64 for binary formats
+	mime_type   TEXT NOT NULL DEFAULT '', -- MIME type (text/markdown, image/png, audio/mpeg…)
 	links_md    TEXT NOT NULL DEFAULT '', -- obsidian links ([[...]]) as a separate column
 	out_hash    TEXT NOT NULL DEFAULT '', -- hash of the file written in phase 3
 	imported_at TEXT NOT NULL
@@ -56,8 +58,35 @@ func OpenDB(path string) (*sql.DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
+	if err := ensureColumn(db, "notes", "mime_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
 	seedPrompts(db)
 	return db, nil
+}
+
+// ensureColumn adds a column to an existing table if it is missing, so that
+// databases created before the column existed keep working. It is a no-op when
+// the column already exists.
+func ensureColumn(db *sql.DB, table, column, decl string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE notes ADD COLUMN %s %s", column, decl))
+	return err
 }
 
 // ResetDB closes the database, removes its files and opens a fresh one.
@@ -70,11 +99,6 @@ func ResetDB(db *sql.DB, path string) (*sql.DB, error) {
 }
 
 func seedPrompts(db *sql.DB) {
-	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM prompts`).Scan(&count)
-	if count > 0 {
-		return
-	}
 	// try file prompts — first next to binary, then in cwd
 	tryDir := func(dir string) bool {
 		entries, err := os.ReadDir(dir)
@@ -98,15 +122,14 @@ func seedPrompts(db *sql.DB) {
 		tryDir(filepath.Join(filepath.Dir(exe), "prompts"))
 	}
 	tryDir("prompts")
-	// if still empty — default prompts
-	db.QueryRow(`SELECT COUNT(*) FROM prompts`).Scan(&count)
-	if count > 0 {
-		return
-	}
+	// always ensure the built-in prompts exist (INSERT OR IGNORE keeps any
+	// user edits and any file-sourced version intact)
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "phase2",
 		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}")
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "eval",
 		"Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}")
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "tag_single",
+		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: {FILE_NAME}) ===\n{CONTENT}")
 }
 
 // LoadPrompt returns a prompt by name, or an empty string if it does not exist.
@@ -182,11 +205,12 @@ func rebuildLinksMD(e execer, noteID int64) error {
 type NoteInfo struct {
 	ID   int64
 	Name string
+	Path string
 }
 
 // ListNotes returns all notes ordered by file name.
 func ListNotes(db *sql.DB) ([]NoteInfo, error) {
-	rows, err := db.Query(`SELECT id, file_name FROM notes ORDER BY file_name`)
+	rows, err := db.Query(`SELECT id, file_name, file_path FROM notes ORDER BY file_name`)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +219,7 @@ func ListNotes(db *sql.DB) ([]NoteInfo, error) {
 	var notes []NoteInfo
 	for rows.Next() {
 		var n NoteInfo
-		if err := rows.Scan(&n.ID, &n.Name); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.Path); err != nil {
 			return nil, err
 		}
 		notes = append(notes, n)

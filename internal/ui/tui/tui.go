@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,6 +21,11 @@ type screen int
 
 const (
 	scrMenu screen = iota
+	scrImport
+	scrFormats
+	scrData
+	scrPickData
+	scrComparePath
 	scrSettings
 	scrModelPicker
 	scrRunning
@@ -39,6 +45,10 @@ type resetMsg struct {
 type evalMsg struct {
 	result string
 	err    error
+}
+type removeMsg struct {
+	removed, scrubbed int
+	err               error
 }
 
 type model struct {
@@ -70,6 +80,27 @@ type model struct {
 	evalLoading bool
 	fileFilter  string
 
+	// where to return after the eval/compare result screen
+	evalReturn       screen
+	evalReturnCursor int
+
+	// import submenu
+	importCursor  int
+	importSource  core.ImportSource
+	importFormats core.FormatSet
+	fmtCursor     int
+
+	// work-with-data submenu
+	dataCursor int
+	pickMode   int // 0 remove, 1 remove+links
+	pickResult string
+	pickErr    string
+
+	pickConfirm   bool
+	pickConfirmID int64
+
+	comparePath string
+
 	promptList    []string
 	promptViewing string
 	promptText    string
@@ -82,17 +113,23 @@ func newModel(db *sql.DB) *model {
 	ti.Prompt = ""
 
 	cfg := core.DefaultConfig()
+	formats := make(core.FormatSet)
+	for _, e := range core.DefaultImportFormats() {
+		formats[e] = true
+	}
 	return &model{
-		db:        db,
-		screen:    scrMenu,
-		src:       ".",
-		out:       "out",
-		dbPath:    "notes.db",
-		modelName: cfg.Model,
-		host:      cfg.Host,
-		maxChars:  cfg.MaxChars,
-		workers:   cfg.Workers,
-		textInput: ti,
+		db:            db,
+		screen:        scrMenu,
+		src:           ".",
+		out:           "out",
+		dbPath:        "notes.db",
+		modelName:     cfg.Model,
+		host:          cfg.Host,
+		maxChars:      cfg.MaxChars,
+		workers:       cfg.Workers,
+		textInput:     ti,
+		importSource:  core.SourceFilesystem,
+		importFormats: formats,
 	}
 }
 
@@ -114,9 +151,7 @@ func fetchOllamaCmd(host string) tea.Cmd {
 	}
 }
 
-func runPhaseCmd(m *model) tea.Cmd {
-	phases := [...]core.Phase{core.PhaseImport, core.PhaseAnalyze, core.PhaseWrite, core.PhaseAll}
-	phase := phases[m.cursor]
+func runPhaseCmd(m *model, phase core.Phase) tea.Cmd {
 	src, out, modelName, host, maxChars, workers := m.src, m.out, m.modelName, m.host, m.maxChars, m.workers
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
@@ -134,6 +169,24 @@ func runPhaseCmd(m *model) tea.Cmd {
 	}
 }
 
+func runImportCmd(m *model) tea.Cmd {
+	src := m.src
+	opts := core.ImportOptions{Source: m.importSource, Formats: m.importFormats}
+	return func() tea.Msg {
+		m.program.ReleaseTerminal()
+		defer m.program.RestoreTerminal()
+
+		progress := consoleshared.New(m.db)
+		progress.Start()
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		err := core.Import(ctx, progress, m.db, src, opts)
+		progress.Stop()
+		return phaseMsg{err}
+	}
+}
+
 func resetDBCmd(db *sql.DB, path string) tea.Cmd {
 	return func() tea.Msg {
 		newDB, err := core.ResetDB(db, path)
@@ -145,6 +198,26 @@ func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, lin
 	return func() tea.Msg {
 		result, err := core.EvalNote(context.Background(), db, noteID, host, model, maxChars, linkedIDs)
 		return evalMsg{result: result, err: err}
+	}
+}
+
+func compareFileCmd(db *sql.DB, path, host, model string, maxChars int) tea.Cmd {
+	return func() tea.Msg {
+		result, err := core.CompareFile(context.Background(), db, path, host, model, maxChars)
+		return evalMsg{result: result, err: err}
+	}
+}
+
+func removeNoteCmd(db *sql.DB, id int64, mode int) tea.Cmd {
+	return func() tea.Msg {
+		var removed, scrubbed int
+		var err error
+		if mode == 0 {
+			removed, err = core.RemoveNoteByID(db, id)
+		} else {
+			removed, scrubbed, err = core.RemoveNoteAndLinksByID(db, id)
+		}
+		return removeMsg{removed: removed, scrubbed: scrubbed, err: err}
 	}
 }
 
@@ -205,17 +278,44 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.db = msg.db
 			m.resetErr = ""
+			m.ollamaModels = nil
+			m.ollamaReady = false
 		}
-		return m, nil
+		return m, fetchOllamaCmd(m.host)
 
 	case evalMsg:
 		m.evalLoading = false
 		if msg.err != nil {
 			m.evalErr = msg.err.Error()
+			m.evalResult = ""
 		} else {
 			m.evalResult = msg.result
+			m.evalErr = ""
 		}
+		m.screen = scrEval
+		return m, nil
+
+	case removeMsg:
+		if msg.err != nil {
+			m.pickErr = msg.err.Error()
+			m.pickResult = ""
+		} else {
+			m.pickResult = fmtRemoveResult(msg.removed, msg.scrubbed)
+			m.pickErr = ""
+		}
+		// reload the list so the removed file disappears
+		if notes, err := core.ListNotes(m.db); err == nil {
+			m.fileNotes = notes
+		}
+		m.screen = scrPickData
 		return m, nil
 	}
 	return m, nil
+}
+
+func fmtRemoveResult(removed, scrubbed int) string {
+	if scrubbed > 0 {
+		return fmt.Sprintf("Removed %d file(s), scrubbed links from %d other file(s)", removed, scrubbed)
+	}
+	return fmt.Sprintf("Removed %d file(s)", removed)
 }

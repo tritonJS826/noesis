@@ -12,6 +12,22 @@ import (
 	"time"
 )
 
+// ensureOllama verifies that the ollama host is reachable before running
+// model phases.
+func ensureOllama(ctx context.Context, c Config) error {
+	hc := http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.Host, "/")+"/api/tags", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("ollama unavailable at %s: %w", c.Host, err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // FetchModels returns the models available on the ollama host.
 func FetchModels(host string) ([]string, error) {
 	hc := http.Client{Timeout: 5 * time.Second}
@@ -37,14 +53,16 @@ func FetchModels(host string) ([]string, error) {
 // notes it is linked to.
 func EvalNote(ctx context.Context, db *sql.DB, noteID int64, host, model string, maxChars int, linkedIDs []int64) (string, error) {
 	// load the note itself
-	var content, fileName string
-	db.QueryRow(`SELECT file_name, content FROM notes WHERE id=?`, noteID).Scan(&fileName, &content)
+	var content, fileName, mime string
+	db.QueryRow(`SELECT file_name, content, mime_type FROM notes WHERE id=?`, noteID).Scan(&fileName, &content, &mime)
+	content = textForModel(content, mime)
 
 	// load linked notes
 	var linkedTexts []string
 	for _, lid := range linkedIDs {
-		var lc, ln string
-		if db.QueryRow(`SELECT file_name, content FROM notes WHERE id=?`, lid).Scan(&ln, &lc) == nil {
+		var lc, ln, lm string
+		if db.QueryRow(`SELECT file_name, content, mime_type FROM notes WHERE id=?`, lid).Scan(&ln, &lc, &lm) == nil {
+			lc = textForModel(lc, lm)
 			if r := []rune(lc); len(r) > maxChars {
 				lc = string(r[:maxChars]) + "\n[…truncated…]"
 			}

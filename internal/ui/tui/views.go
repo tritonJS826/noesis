@@ -25,6 +25,16 @@ func (m *model) View() string {
 		return m.viewModelPicker()
 	case scrRunning:
 		return m.viewRunning()
+	case scrImport:
+		return m.viewImport()
+	case scrFormats:
+		return m.viewFormats()
+	case scrData:
+		return m.viewData()
+	case scrPickData:
+		return m.viewPickData()
+	case scrComparePath:
+		return m.viewComparePath()
 	case scrFilePicker:
 		return m.viewFilePicker()
 	case scrEval:
@@ -49,16 +59,17 @@ func (m *model) viewMenu() string {
 	pairsTotal := n * (n - 1) / 2
 
 	items := []string{
-		"Phase 1 — Import md → sqlite",
-		"Phase 2 — Tags & links (ollama)",
-		"Phase 3 — Write vault",
+		"Import",
+		"Data processing — pairs",
+		"Data processing — one by one (tags)",
+		"Write vault",
 		"All phases",
-		"Settings",
+		"Work with data",
 		"Evaluate note uniqueness",
+		"Settings",
 		"Reset database",
 	}
 
-	// ── phases ──
 	var phaseLines []string
 	for i, item := range items {
 		cursor := "  "
@@ -66,7 +77,7 @@ func (m *model) viewMenu() string {
 			cursor = tuiSel.Render("▸ ")
 		}
 		line := cursor + item
-		if i == 6 {
+		if i == 8 {
 			line = tuiRed.Render(line)
 		}
 		phaseLines = append(phaseLines, lipgloss.NewStyle().Width(cw).Render(line))
@@ -84,7 +95,6 @@ func (m *model) viewMenu() string {
 		fmt.Sprintf("MAXCHARS: %d", m.maxChars),
 		fmt.Sprintf("WORKERS: %d", m.workers),
 	}
-	// split into pairs
 	var settingPairs []string
 	for i := 0; i < len(settingsLines); i += 2 {
 		l := col(settingsLines[i])
@@ -131,7 +141,6 @@ func (m *model) viewMenu() string {
 		footer = "y — delete all  ·  any other key — cancel"
 	}
 
-	// ── assembly ──
 	sep := func(title string) string {
 		return lipgloss.NewStyle().Width(cw).Border(
 			lipgloss.Border{Bottom: "─"}, false, false, true, false,
@@ -155,6 +164,197 @@ func (m *model) viewMenu() string {
 	parts = append(parts, tuiDim.Width(cw).Render(footer))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewImport() string {
+	w := m.width
+	cw := w - 4
+
+	srcLabel := m.importSource.String()
+	formatsLabel := m.formatSummary()
+	items := []string{
+		"Source: " + srcLabel,
+		"Formats: " + formatsLabel,
+		"Run import",
+	}
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Import (Phase 1) — choose source & formats"))
+	lines = append(lines, "")
+	for i, item := range items {
+		cursor := "  "
+		if m.importCursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+item))
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter change/run  ·  ESC back"))
+	lines = append(lines, tuiDim.Width(cw).Render("SRC — filesystem folder, .zip archive or .json file"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) formatSummary() string {
+	if m.importFormats == nil {
+		return "all"
+	}
+	if len(m.importFormats) == 0 {
+		return "none"
+	}
+	var exts []string
+	for e := range m.importFormats {
+		exts = append(exts, "."+e)
+	}
+	sortStrings(exts)
+	return strings.Join(exts, " ")
+}
+
+func (m *model) viewFormats() string {
+	w := m.width
+	cw := w - 4
+
+	formats := core.KnownFormats()
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Select formats to import"))
+	switch {
+	case m.importFormats == nil:
+		lines = append(lines, tuiDim.Width(cw).Render("current: all formats  ·  a — select none"))
+	case len(m.importFormats) == 0:
+		lines = append(lines, tuiYel.Width(cw).Render("current: none  ·  a — select all"))
+	default:
+		lines = append(lines, tuiDim.Width(cw).Render("a — select all / none"))
+	}
+	lines = append(lines, "")
+
+	selected := m.importFormats
+	if selected == nil {
+		selected = core.FormatSet{}
+		for _, f := range formats {
+			selected[f.Ext] = true
+		}
+	}
+	for i, f := range formats {
+		cursor := "  "
+		mark := "[ ]"
+		if selected[f.Ext] {
+			mark = "[x]"
+		}
+		if m.fmtCursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(
+			fmt.Sprintf("%s%s  %-10s (%s)", cursor, mark, f.Ext, f.Kind),
+		))
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter/space toggle  ·  a toggle all  ·  ESC done"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewData() string {
+	w := m.width
+	cw := w - 4
+
+	items := []string{
+		"Remove file",
+		"Remove file + obsidian links",
+		"Compare file (without adding to db)",
+	}
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Work with data"))
+	lines = append(lines, "")
+	for i, item := range items {
+		cursor := "  "
+		if m.dataCursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+item))
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter  ·  ESC back"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewPickData() string {
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	title := "Remove file — search by path"
+	if m.pickMode == 1 {
+		title = "Remove file + obsidian links — search by path"
+	}
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render(title))
+	lines = append(lines, "")
+
+	// filter line
+	filterLine := m.fileFilter
+	if filterLine == "" {
+		filterLine = tuiDim.Render("start typing to filter by path…")
+	} else {
+		filterLine += "█"
+	}
+	lines = append(lines, lipgloss.NewStyle().Width(cw).Render(filterLine))
+	lines = append(lines, "")
+
+	filtered := m.filteredNotes()
+	if m.pickConfirm {
+		lines = append(lines, tuiYel.Width(cw).Render(m.pickResult))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("y — confirm  ·  any other key — cancel"))
+	} else if m.pickErr != "" {
+		lines = append(lines, tuiRed.Width(cw).Render("Error: "+m.pickErr))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("Press any key to continue"))
+	} else if m.pickResult != "" {
+		lines = append(lines, tuiGreen.Width(cw).Render(m.pickResult))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("Press any key to continue"))
+	} else if len(filtered) == 0 {
+		lines = append(lines, tuiDim.Width(cw).Render("nothing found"))
+	} else {
+		for i, n := range filtered {
+			cursor := "  "
+			if m.cursor == i {
+				cursor = tuiSel.Render("▸ ")
+			}
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n.Path))
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter remove  ·  ESC back", len(filtered))))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewComparePath() string {
+	w := m.width
+	cw := w - 4
+
+	filterLine := m.comparePath
+	if filterLine == "" {
+		filterLine = tuiDim.Render("type the file path to compare…")
+	} else {
+		filterLine += "█"
+	}
+
+	lines := []string{
+		lipgloss.NewStyle().Bold(true).Width(cw).Render("Compare file (without adding to db)"),
+		"",
+		lipgloss.NewStyle().Width(cw).Render(filterLine),
+		"",
+		tuiDim.Width(cw).Render("Enter evaluate  ·  ESC back"),
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
 
@@ -194,12 +394,10 @@ func (m *model) viewPromptSub() string {
 	cw := w - 4
 
 	if m.promptViewing != "" {
-		// show prompt text
 		lines := []string{
 			lipgloss.NewStyle().Bold(true).Width(cw).Render("Prompt: " + m.promptViewing),
 			"",
 		}
-		// split into lines
 		for _, line := range strings.Split(m.promptText, "\n") {
 			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(line))
 		}
@@ -209,7 +407,6 @@ func (m *model) viewPromptSub() string {
 		return tuiBox.Width(w).Render(content)
 	}
 
-	// prompt list
 	var lines []string
 	for i, n := range m.promptList {
 		cursor := "  "
@@ -220,7 +417,6 @@ func (m *model) viewPromptSub() string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter view  ·  ESC back"))
-
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
@@ -243,7 +439,6 @@ func (m *model) viewModelPicker() string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter pick  ·  ESC back"))
-
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
@@ -285,7 +480,6 @@ func (m *model) viewFilePicker() string {
 	cw := w - 4
 
 	var lines []string
-	// filter line
 	filterLine := m.fileFilter
 	if filterLine == "" {
 		filterLine = tuiDim.Render("start typing to filter…")
@@ -310,7 +504,6 @@ func (m *model) viewFilePicker() string {
 	lines = append(lines, "")
 	footer := fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter evaluate  ·  ESC back", len(filtered))
 	lines = append(lines, tuiDim.Width(cw).Render(footer))
-
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
@@ -328,7 +521,6 @@ func (m *model) viewEval() string {
 		lines = append(lines, "")
 		lines = append(lines, tuiDim.Width(cw).Render("Press any key to return"))
 	} else {
-		// parse JSON result and format
 		var res struct {
 			Novelty string `json:"novelty"`
 			Summary string `json:"summary"`
@@ -360,4 +552,12 @@ func (m *model) viewEval() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
 }

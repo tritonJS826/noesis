@@ -13,6 +13,7 @@ const (
 	PhaseAnalyze
 	PhaseWrite
 	PhaseAll
+	PhaseTagSingle
 )
 
 // Run executes the selected phase (or the whole pipeline for PhaseAll).
@@ -25,6 +26,8 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 		return Phase2(ctx, r, db, c)
 	case PhaseWrite:
 		return Phase3(ctx, r, db, out, src)
+	case PhaseTagSingle:
+		return TagAllSingle(ctx, r, db, c)
 	case PhaseAll:
 		if err := Phase1(ctx, r, db, src); err != nil {
 			return err

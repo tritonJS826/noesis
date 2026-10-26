@@ -13,6 +13,16 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch m.screen {
 	case scrMenu:
 		return m.menuKeys(msg)
+	case scrImport:
+		return m.importKeys(msg)
+	case scrFormats:
+		return m.formatsKeys(msg)
+	case scrData:
+		return m.dataKeys(msg)
+	case scrPickData:
+		return m.pickDataKeys(msg)
+	case scrComparePath:
+		return m.comparePathKeys(msg)
 	case scrSettings:
 		return m.settingsKeys(msg)
 	case scrModelPicker:
@@ -26,8 +36,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// ─── main menu ───────────────────────────────────────────────────────────────
+
+const menuItems = 8 // 0..8
+
 func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
-	// waiting for reset confirmation
 	if m.confirmReset {
 		switch msg.String() {
 		case "y", "Y":
@@ -41,7 +54,6 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	items := 6 // 0..6
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return tea.Quit
@@ -51,32 +63,286 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.resetErr = ""
 	case "down":
-		if m.cursor < items {
+		if m.cursor < menuItems {
 			m.cursor++
 		}
 		m.resetErr = ""
 	case "enter":
 		switch m.cursor {
-		case 4: // settings
+		case 0: // import
+			m.screen = scrImport
+			m.importCursor = 0
+			m.cursor = 0
+			m.pickResult = ""
+			m.pickErr = ""
+		case 1: // pairs
+			return m.startPhase(core.PhaseAnalyze, false, false)
+		case 2: // one by one
+			return m.startPhase(core.PhaseTagSingle, false, false)
+		case 3: // write vault
+			return m.startPhase(core.PhaseWrite, false, true)
+		case 4: // all phases
+			return m.startPhase(core.PhaseAll, true, true)
+		case 5: // work with data
+			m.screen = scrData
+			m.dataCursor = 0
+			m.cursor = 0
+		case 6: // evaluate note uniqueness
+			m.openFilePicker()
+		case 7: // settings
 			m.screen = scrSettings
 			m.cursor = 0
-		case 5: // evaluate file
-			m.openFilePicker()
-		case 6: // reset database
+		case 8: // reset database
 			m.confirmReset = true
-		default:
-			// check obligatory fields
-			if missing := m.checkMissing(); missing != "" {
-				m.phaseErr = fmt.Errorf("Not set: %s", missing)
-			} else {
-				m.screen = scrRunning
-				m.phaseErr = nil
-				return runPhaseCmd(m)
-			}
 		}
 	}
 	return nil
 }
+
+// startPhase validates required fields and starts a phase from the menu.
+func (m *model) startPhase(phase core.Phase, needSrc, needOut bool) tea.Cmd {
+	var missing []string
+	if needSrc && m.src == "" {
+		missing = append(missing, "SRC")
+	}
+	if needOut && m.out == "" {
+		missing = append(missing, "OUT")
+	}
+	if len(missing) > 0 {
+		m.phaseErr = fmt.Errorf("Not set: %s", strings.Join(missing, ", "))
+		return nil
+	}
+	m.screen = scrRunning
+	m.phaseErr = nil
+	return runPhaseCmd(m, phase)
+}
+
+// ─── import submenu ─────────────────────────────────────────────────────────
+
+func (m *model) importKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "up":
+		if m.importCursor > 0 {
+			m.importCursor--
+		}
+	case "down":
+		if m.importCursor < 2 {
+			m.importCursor++
+		}
+	case "enter":
+		switch m.importCursor {
+		case 0: // cycle source
+			m.importSource = (m.importSource + 1) % 3
+		case 1: // choose formats
+			m.screen = scrFormats
+			m.fmtCursor = 0
+		case 2: // run import
+			if m.src == "" {
+				m.phaseErr = fmt.Errorf("Not set: SRC")
+				return nil
+			}
+			m.screen = scrRunning
+			m.phaseErr = nil
+			return runImportCmd(m)
+		}
+	case "esc", "q":
+		m.screen = scrMenu
+		m.cursor = 0
+	}
+	return nil
+}
+
+// ─── format selection ───────────────────────────────────────────────────────
+
+func (m *model) formatsKeys(msg tea.KeyMsg) tea.Cmd {
+	formats := core.KnownFormats()
+	switch msg.String() {
+	case "up":
+		if m.fmtCursor > 0 {
+			m.fmtCursor--
+		}
+	case "down":
+		if m.fmtCursor < len(formats)-1 {
+			m.fmtCursor++
+		}
+	case "enter", " ":
+		if m.fmtCursor < len(formats) {
+			m.toggleFormat(formats[m.fmtCursor].Ext)
+		}
+	case "a", "A":
+		// toggle between "all formats" (nil) and "none"
+		if m.importFormats == nil {
+			m.importFormats = core.FormatSet{}
+		} else {
+			m.importFormats = nil
+		}
+	case "esc", "q":
+		m.screen = scrImport
+		m.importCursor = 1
+	}
+	return nil
+}
+
+func (m *model) toggleFormat(ext string) {
+	if m.importFormats == nil {
+		m.importFormats = core.FormatSet{}
+	}
+	if m.importFormats[ext] {
+		delete(m.importFormats, ext)
+	} else {
+		m.importFormats[ext] = true
+	}
+}
+
+// ─── work with data submenu ────────────────────────────────────────────────
+
+const dataItems = 2 // 0..2
+
+func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "up":
+		if m.dataCursor > 0 {
+			m.dataCursor--
+		}
+	case "down":
+		if m.dataCursor < dataItems {
+			m.dataCursor++
+		}
+	case "enter":
+		switch m.dataCursor {
+		case 0: // remove file
+			m.openPickData(0)
+		case 1: // remove file + links
+			m.openPickData(1)
+		case 2: // compare file (no db)
+			m.screen = scrComparePath
+			m.comparePath = ""
+			m.cursor = 0
+		}
+	case "esc", "q":
+		m.screen = scrMenu
+		m.cursor = 5
+	}
+	return nil
+}
+
+func (m *model) openPickData(mode int) {
+	notes, err := core.ListNotes(m.db)
+	if err != nil {
+		return
+	}
+	m.fileNotes = notes
+	m.pickMode = mode
+	m.cursor = 0
+	m.fileFilter = ""
+	m.pickResult = ""
+	m.pickErr = ""
+	m.screen = scrPickData
+}
+
+// ─── pick-data (search by path for remove) ─────────────────────────────────
+
+func (m *model) pickDataKeys(msg tea.KeyMsg) tea.Cmd {
+	// a completed/errored remove shows a message; any key returns to the list
+	if !m.pickConfirm && (m.pickResult != "" || m.pickErr != "") {
+		switch msg.String() {
+		case "up", "down":
+			m.pickResult = ""
+			m.pickErr = ""
+			// fall through to navigation below
+		default:
+			m.pickResult = ""
+			m.pickErr = ""
+			return nil
+		}
+	}
+
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		filtered := m.filteredNotes()
+		if m.cursor < len(filtered)-1 {
+			m.cursor++
+		}
+	case "enter":
+		filtered := m.filteredNotes()
+		if len(filtered) > 0 && m.cursor < len(filtered) {
+			id := filtered[m.cursor].ID
+			name := filtered[m.cursor].Name
+			label := "file"
+			if m.pickMode == 1 {
+				label = "file + links"
+			}
+			m.pickResult = fmt.Sprintf("Remove %s %q — are you sure? (y/N)", label, name)
+			m.pickErr = ""
+			m.pickConfirmID = id
+			m.pickConfirm = true
+		}
+	case "y", "Y":
+		if m.pickConfirm {
+			m.pickConfirm = false
+			id := m.pickConfirmID
+			m.pickResult = ""
+			return removeNoteCmd(m.db, id, m.pickMode)
+		}
+	case "esc", "q":
+		if m.pickConfirm {
+			m.pickConfirm = false
+			m.pickResult = ""
+			m.pickErr = ""
+			return nil
+		}
+		m.screen = scrData
+		m.dataCursor = 0
+	case "backspace":
+		r := []rune(m.fileFilter)
+		if len(r) > 0 {
+			m.fileFilter = string(r[:len(r)-1])
+		}
+		m.cursor = 0
+	default:
+		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.fileFilter += string(msg.Runes[0])
+			m.cursor = 0
+		}
+	}
+	return nil
+}
+
+// ─── compare file path input ───────────────────────────────────────────────
+
+func (m *model) comparePathKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		if strings.TrimSpace(m.comparePath) != "" {
+			m.evalResult = ""
+			m.evalErr = ""
+			m.evalLoading = true
+			m.evalReturn = scrComparePath
+			m.evalReturnCursor = 0
+			m.screen = scrEval
+			return compareFileCmd(m.db, m.comparePath, m.host, m.modelName, m.maxChars)
+		}
+	case "esc", "q":
+		m.screen = scrData
+		m.dataCursor = 2
+	case "backspace":
+		r := []rune(m.comparePath)
+		if len(r) > 0 {
+			m.comparePath = string(r[:len(r)-1])
+		}
+	default:
+		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.comparePath += string(msg.Runes[0])
+		}
+	}
+	return nil
+}
+
+// ─── settings ──────────────────────────────────────────────────────────────
 
 func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.promptList != nil {
@@ -94,7 +360,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.screen = scrMenu
-		m.cursor = 4
+		m.cursor = 7
 	case "enter":
 		m.startEdit()
 	}
@@ -132,6 +398,8 @@ func (m *model) openFilePicker() {
 	m.fileNotes = notes
 	m.cursor = 0
 	m.fileFilter = ""
+	m.evalReturn = scrMenu
+	m.evalReturnCursor = 6
 	m.screen = scrFilePicker
 }
 
@@ -154,12 +422,14 @@ func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 			m.evalResult = ""
 			m.evalErr = ""
 			m.evalLoading = true
+			m.evalReturn = scrFilePicker
+			m.evalReturnCursor = m.cursor
 			m.screen = scrEval
 			return evalNoteCmd(m.db, id, m.host, m.modelName, m.maxChars, linked)
 		}
 	case "esc":
 		m.screen = scrMenu
-		m.cursor = 5
+		m.cursor = 6
 	case "backspace":
 		r := []rune(m.fileFilter)
 		if len(r) > 0 {
@@ -167,7 +437,6 @@ func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.cursor = 0
 	default:
-		// any printable character — type to filter
 		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
 			m.fileFilter += string(msg.Runes[0])
 			m.cursor = 0
@@ -183,7 +452,8 @@ func (m *model) filteredNotes() []core.NoteInfo {
 	lower := strings.ToLower(m.fileFilter)
 	var out []core.NoteInfo
 	for _, n := range m.fileNotes {
-		if strings.Contains(strings.ToLower(n.Name), lower) {
+		if strings.Contains(strings.ToLower(n.Name), lower) ||
+			strings.Contains(strings.ToLower(n.Path), lower) {
 			out = append(out, n)
 		}
 	}
@@ -192,8 +462,8 @@ func (m *model) filteredNotes() []core.NoteInfo {
 
 func (m *model) evalKeys(msg tea.KeyMsg) tea.Cmd {
 	if !m.evalLoading {
-		m.screen = scrMenu
-		m.cursor = 5
+		m.screen = m.evalReturn
+		m.cursor = m.evalReturnCursor
 	}
 	return nil
 }
@@ -205,7 +475,7 @@ func (m *model) startEdit() {
 	case 0: // SRC
 		m.textInput.SetValue(m.src)
 		m.textInput.Focus()
-		m.editingField = "SRC — path to md notes"
+		m.editingField = "SRC — path to notes / archive / json"
 	case 1: // OUT
 		m.textInput.SetValue(m.out)
 		m.textInput.Focus()
@@ -281,36 +551,10 @@ func (m *model) saveField() {
 	}
 }
 
-func (m *model) checkMissing() string {
-	var missing []string
-	switch m.cursor {
-	case 0: // phase1
-		if m.src == "" {
-			missing = append(missing, "SRC")
-		}
-	case 1: // phase2 — database is enough
-	case 2: // phase3
-		if m.out == "" {
-			missing = append(missing, "OUT")
-		}
-		if m.src == "" {
-			missing = append(missing, "SRC")
-		}
-	case 3: // all
-		if m.src == "" {
-			missing = append(missing, "SRC")
-		}
-		if m.out == "" {
-			missing = append(missing, "OUT")
-		}
-	}
-	return strings.Join(missing, ", ")
-}
-
 func (m *model) openPromptList() {
 	names, _ := core.ListPrompts(m.db)
 	if len(names) == 0 {
-		names = []string{"phase2", "eval"}
+		names = []string{"phase2", "eval", "tag_single"}
 	}
 	m.promptList = names
 	m.cursor = 0
@@ -337,7 +581,6 @@ func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "r", "R":
 		if m.promptViewing != "" {
-			// reload from file
 			if text, err := core.ReloadPromptFromFile(m.db, m.promptViewing); err == nil {
 				m.promptText = text
 			}

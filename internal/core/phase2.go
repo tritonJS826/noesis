@@ -30,14 +30,16 @@ type pairResult struct {
 
 func loadNote(db *sql.DB, id int64, maxChars int) (note, error) {
 	n := note{ID: id}
-	err := db.QueryRow(`SELECT file_name, content FROM notes WHERE id=?`, id).Scan(&n.Name, &n.Content)
-	if len(n.Content) > maxChars {
-		r := []rune(n.Content)
-		if len(r) > maxChars {
-			n.Content = string(r[:maxChars]) + "\n[…truncated…]"
-		}
+	var mime string
+	err := db.QueryRow(`SELECT file_name, content, mime_type FROM notes WHERE id=?`, id).Scan(&n.Name, &n.Content, &mime)
+	if err != nil {
+		return n, err
 	}
-	return n, err
+	n.Content = textForModel(n.Content, mime)
+	if r := []rune(n.Content); len(r) > maxChars {
+		n.Content = string(r[:maxChars]) + "\n[…truncated…]"
+	}
+	return n, nil
 }
 
 func cleanTag(s string) string {
@@ -204,11 +206,8 @@ var saveMu sync.Mutex
 // Phase2 asks ollama for tags and links for every pair of notes.
 func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	// check ollama availability
-	hc := http.Client{Timeout: 5 * time.Second}
-	if resp, err := hc.Get(strings.TrimRight(c.Host, "/") + "/api/tags"); err != nil {
-		return fmt.Errorf("ollama unavailable at %s: %w", c.Host, err)
-	} else {
-		resp.Body.Close()
+	if err := ensureOllama(ctx, c); err != nil {
+		return err
 	}
 
 	var ids []int64

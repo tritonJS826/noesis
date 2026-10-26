@@ -41,6 +41,8 @@ type state struct {
 
 	src, out, dbEntry, model, host *widget.Entry
 	maxChars, workers              *widget.Entry
+	sourceSelect                   *widget.Select
+	formatsEntry                   *widget.Entry
 
 	phaseLabel   *widget.Label
 	currentLabel *widget.Label
@@ -93,10 +95,18 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.workers = widget.NewEntry()
 	s.workers.SetText(strconv.Itoa(cfg.Workers))
 
+	s.sourceSelect = widget.NewSelect([]string{"filesystem", "zip archive", "json array"}, func(string) {})
+	s.sourceSelect.SetSelected("filesystem")
+	s.formatsEntry = widget.NewEntry()
+	s.formatsEntry.SetText(strings.Join(core.DefaultImportFormats(), ","))
+	s.formatsEntry.SetPlaceHolder("md,txt,csv,png,… (empty = all)")
+
 	form := widget.NewForm(
 		widget.NewFormItem("Source folder", s.folderRow(s.src, "Select source folder")),
 		widget.NewFormItem("Vault folder", s.folderRow(s.out, "Select vault folder")),
 		widget.NewFormItem("Database", s.dbEntry),
+		widget.NewFormItem("Import source", s.sourceSelect),
+		widget.NewFormItem("Formats", s.formatsEntry),
 		widget.NewFormItem("Ollama host", s.host),
 		widget.NewFormItem("Model", s.model),
 		widget.NewFormItem("Max chars", s.maxChars),
@@ -115,10 +125,13 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.logLabel.Selectable = true
 
 	s.runButtons = []*widget.Button{
-		widget.NewButton("Phase 1 — Import", func() { s.startPhase(core.PhaseImport) }),
-		widget.NewButton("Phase 2 — Analyze", func() { s.startPhase(core.PhaseAnalyze) }),
-		widget.NewButton("Phase 3 — Write", func() { s.startPhase(core.PhaseWrite) }),
+		widget.NewButton("Import", func() { s.startImport() }),
+		widget.NewButton("Pairs", func() { s.startPhase(core.PhaseAnalyze) }),
+		widget.NewButton("One-by-one tags", func() { s.startPhase(core.PhaseTagSingle) }),
+		widget.NewButton("Write vault", func() { s.startPhase(core.PhaseWrite) }),
 		widget.NewButton("All phases", func() { s.startPhase(core.PhaseAll) }),
+		widget.NewButton("Remove file…", func() { s.promptRemove(false) }),
+		widget.NewButton("Compare file…", func() { s.promptCompare() }),
 	}
 	s.resetBtn = widget.NewButton("Reset database", s.confirmReset)
 	s.resetBtn.Importance = widget.DangerImportance
@@ -226,6 +239,165 @@ func (s *state) readConfig() (core.Config, string, string, string, error) {
 		Workers:  workers,
 	}
 	return cfg, strings.TrimSpace(s.src.Text), strings.TrimSpace(s.out.Text), strings.TrimSpace(s.dbEntry.Text), nil
+}
+
+// readImportOptions parses the import source and formats from the form.
+func (s *state) readImportOptions() (core.ImportOptions, error) {
+	src2, err := core.ParseImportSource(s.sourceSelect.Selected)
+	if err != nil {
+		return core.ImportOptions{}, err
+	}
+	return core.ImportOptions{Source: src2, Formats: parseFormats(s.formatsEntry.Text)}, nil
+}
+
+func parseFormats(s string) core.FormatSet {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	fs := make(core.FormatSet)
+	for _, e := range strings.Split(s, ",") {
+		e = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(e)), ".")
+		if e != "" {
+			fs[e] = true
+		}
+	}
+	return fs
+}
+
+// startImport runs the import with the chosen source and formats.
+func (s *state) startImport() {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	_, src, _, dbPath, err := s.readConfig()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	opts, err := s.readImportOptions()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	if err := s.useDB(dbPath); err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+
+	s.mu.Lock()
+	s.running = true
+	s.total, s.done, s.ran = 0, 0, 0
+	s.runTags, s.runLinks = 0, 0
+	s.logs = nil
+	db := s.db
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	s.mu.Unlock()
+
+	s.setRunning(true)
+	s.phaseLabel.SetText("Importing…")
+	s.currentLabel.SetText("")
+	s.runLabel.SetText("")
+	s.logLabel.SetText("")
+	s.progress.SetValue(0)
+	s.refreshStats()
+
+	go func() {
+		defer cancel()
+		err := core.Import(ctx, &guiReporter{s: s}, db, src, opts)
+
+		s.mu.Lock()
+		s.running = false
+		s.cancel = nil
+		s.mu.Unlock()
+
+		fyne.Do(func() {
+			s.setRunning(false)
+			s.currentLabel.SetText("")
+			s.refreshStats()
+			if err != nil {
+				s.phaseLabel.SetText("Stopped with error")
+				dialog.ShowError(err, s.win)
+			} else {
+				s.phaseLabel.SetText("Done")
+			}
+		})
+	}()
+}
+
+// promptRemove asks for a file path and removes the matching note (optionally
+// scrubbing its links from other files).
+func (s *state) promptRemove(withLinks bool) {
+	target := widget.NewEntry()
+	target.SetPlaceHolder("path to search")
+	action := "Remove file"
+	if withLinks {
+		action = "Remove file + links"
+	}
+	dialog.ShowCustomConfirm(action, "Remove", "Cancel", target, func(ok bool) {
+		if !ok {
+			return
+		}
+		s.mu.Lock()
+		db := s.db
+		s.mu.Unlock()
+		if db == nil {
+			return
+		}
+		query := strings.TrimSpace(target.Text)
+		if query == "" {
+			return
+		}
+		if withLinks {
+			removed, scrubbed, err := core.RemoveNoteAndLinks(db, query)
+			if err != nil {
+				dialog.ShowError(err, s.win)
+				return
+			}
+			dialog.ShowInformation(action, fmt.Sprintf("Removed %d note(s), scrubbed links in %d other file(s)", removed, scrubbed), s.win)
+		} else {
+			removed, err := core.RemoveNote(db, query)
+			if err != nil {
+				dialog.ShowError(err, s.win)
+				return
+			}
+			dialog.ShowInformation(action, fmt.Sprintf("Removed %d note(s)", removed), s.win)
+		}
+		s.refreshStats()
+	}, s.win)
+}
+
+// promptCompare asks for a file path and evaluates its novelty without adding
+// it to the database.
+func (s *state) promptCompare() {
+	target := widget.NewEntry()
+	target.SetPlaceHolder("file path to compare")
+	dialog.ShowCustomConfirm("Compare file", "Compare", "Cancel", target, func(ok bool) {
+		if !ok {
+			return
+		}
+		s.mu.Lock()
+		db := s.db
+		s.mu.Unlock()
+		if db == nil {
+			return
+		}
+		path := strings.TrimSpace(target.Text)
+		if path == "" {
+			return
+		}
+		cfg, _, _, _, _ := s.readConfig()
+		result, err := core.CompareFile(context.Background(), db, path, cfg.Host, cfg.Model, cfg.MaxChars)
+		if err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		dialog.ShowInformation("Novelty", result, s.win)
+	}, s.win)
 }
 
 // useDB switches to the database at path if needed.
