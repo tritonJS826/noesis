@@ -1,0 +1,1845 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>noesis — локальный второй мозг из Markdown-заметок</title>
+  <meta name="description" content="noesis превращает папку с Markdown-дневником в Obsidian-vault: теги, двусторонние ссылки и оценка новизны. Бесплатно, приватно и локально через Ollama — весь пайплайн одной кнопкой.">
+  <style>
+    :root {
+      --bg: #090b10;
+      --bg-soft: #0d1118;
+      --surface: #11161f;
+      --surface-2: #151b26;
+      --line: #252d3b;
+      --line-bright: #354052;
+      --text: #e9edf5;
+      --muted: #98a4b7;
+      --dim: #6f7b8e;
+      --violet: #a78bfa;
+      --violet-strong: #7c5cff;
+      --mint: #6ee7b7;
+      --amber: #fbbf24;
+      --red: #fb7185;
+      --radius: 20px;
+      --max: 1140px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 92px;
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.6;
+      background:
+        radial-gradient(900px 560px at 12% -8%, rgba(124, 92, 255, .22), transparent 62%),
+        radial-gradient(760px 520px at 94% 8%, rgba(110, 231, 183, .10), transparent 60%),
+        var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -1;
+      opacity: .3;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, .025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, .025) 1px, transparent 1px);
+      background-size: 56px 56px;
+      -webkit-mask-image: linear-gradient(to bottom, black, transparent 70%);
+      mask-image: linear-gradient(to bottom, black, transparent 70%);
+    }
+
+    ::selection { background: rgba(167, 139, 250, .32); }
+
+    a { color: inherit; text-decoration: none; }
+    p { margin: 0 0 1em; }
+    h1, h2, h3 { margin: 0; line-height: 1.08; letter-spacing: -.035em; }
+    h1 { font-size: clamp(2.65rem, 6.1vw, 4.9rem); font-weight: 720; }
+    h2 { font-size: clamp(2rem, 4.2vw, 3.15rem); font-weight: 680; }
+    h3 { font-size: 1.17rem; font-weight: 650; letter-spacing: -.015em; }
+    code, pre { font-family: var(--mono); }
+
+    .wrap {
+      width: min(var(--max), calc(100% - 40px));
+      margin-inline: auto;
+    }
+
+    .skip {
+      position: absolute;
+      left: 16px;
+      top: -80px;
+      z-index: 100;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: var(--text);
+      color: var(--bg);
+      font-weight: 700;
+    }
+    .skip:focus { top: 16px; }
+
+    :focus-visible {
+      outline: 2px solid var(--violet);
+      outline-offset: 3px;
+    }
+
+    /* ── header ───────────────────────────────────────────── */
+
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      border-bottom: 1px solid rgba(37, 45, 59, .75);
+      background: rgba(9, 11, 16, .82);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      min-height: 70px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: max-content;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(167, 139, 250, .34);
+      border-radius: 11px;
+      background: linear-gradient(145deg, rgba(167, 139, 250, .18), rgba(110, 231, 183, .08));
+      color: var(--violet);
+    }
+
+    .brand-name {
+      font-size: 1.1rem;
+      font-weight: 750;
+      letter-spacing: -.03em;
+    }
+
+    .brand-sub {
+      padding-left: 10px;
+      border-left: 1px solid var(--line-bright);
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .66rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .nav {
+      display: none;
+      align-items: center;
+      gap: 24px;
+      margin-left: auto;
+      color: var(--muted);
+      font-size: .87rem;
+    }
+
+    .nav a { transition: color .18s ease; }
+    .nav a:hover { color: var(--text); }
+
+    @media (max-width: 1080px) and (min-width: 900px) {
+      .nav { gap: 15px; font-size: .8rem; }
+    }
+
+    .header-cta { margin-left: auto; }
+
+    @media (min-width: 900px) {
+      .nav { display: flex; }
+      .header-cta { margin-left: 0; }
+    }
+
+    /* ── buttons ─────────────────────────────────────────── */
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      min-height: 47px;
+      padding: 0 20px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--violet), #8b76ff 58%, #7dd3fc);
+      color: #0b0713;
+      box-shadow: 0 14px 40px -18px rgba(167, 139, 250, .75);
+      font-size: .93rem;
+      font-weight: 750;
+      transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 20px 46px -18px rgba(167, 139, 250, .9);
+    }
+
+    .btn-ghost {
+      border-color: var(--line-bright);
+      background: rgba(17, 22, 31, .7);
+      box-shadow: none;
+      color: var(--text);
+    }
+
+    .btn-ghost:hover {
+      border-color: #4a586d;
+      background: var(--surface-2);
+    }
+
+    .btn-small {
+      min-height: 39px;
+      padding: 0 15px;
+      border-radius: 10px;
+      font-size: .82rem;
+    }
+
+    /* ── hero ────────────────────────────────────────────── */
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.04fr) minmax(0, .96fr);
+      gap: clamp(34px, 6vw, 76px);
+      align-items: center;
+      padding-block: clamp(58px, 8vw, 104px) clamp(48px, 7vw, 86px);
+    }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 20px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: .69rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 0 4px rgba(110, 231, 183, .1);
+    }
+
+    .hero h1 em {
+      font-style: normal;
+      background: linear-gradient(100deg, var(--violet) 5%, #d8ccff 48%, var(--mint));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .lead {
+      max-width: 610px;
+      margin-top: 24px;
+      color: var(--muted);
+      font-size: clamp(1.03rem, 1.7vw, 1.2rem);
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 30px;
+    }
+
+    .hero-points {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 20px;
+      margin: 28px 0 0;
+      padding: 0;
+      color: var(--dim);
+      font-size: .8rem;
+      list-style: none;
+    }
+
+    .hero-points li { display: flex; align-items: center; gap: 7px; }
+    .hero-points li::before { content: "✓"; color: var(--mint); font-family: var(--mono); }
+
+    .hero-visual { position: relative; }
+
+    .hero-visual::before {
+      content: "";
+      position: absolute;
+      inset: 14% 6% 4%;
+      border-radius: 50%;
+      background: rgba(124, 92, 255, .2);
+      filter: blur(64px);
+      z-index: -1;
+    }
+
+    .window {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 19px;
+      background: linear-gradient(180deg, rgba(23, 29, 41, .94), rgba(11, 15, 22, .96));
+      box-shadow: 0 40px 100px -42px rgba(0, 0, 0, .95), inset 0 1px 0 rgba(255, 255, 255, .04);
+    }
+
+    .window-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 43px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .018);
+    }
+
+    .dots { display: flex; gap: 5px; }
+    .dots i {
+      display: block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #3d4759;
+    }
+
+    .window-path {
+      overflow: hidden;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .68rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .badge-local {
+      margin-left: auto;
+      padding: 3px 7px;
+      border: 1px solid rgba(110, 231, 183, .2);
+      border-radius: 6px;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .6rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .window-body { padding: 22px; }
+
+    .preview-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+
+    .preview-tags span,
+    .tag {
+      padding: 3px 8px;
+      border: 1px solid rgba(167, 139, 250, .18);
+      border-radius: 6px;
+      background: rgba(167, 139, 250, .09);
+      color: #c9baff;
+      font-family: var(--mono);
+      font-size: .65rem;
+    }
+
+    .preview-title { margin-bottom: 10px; color: #f4f7fc; font-size: 1.05rem; }
+    .preview-text { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.65; }
+
+    .preview-rule { height: 1px; margin: 18px 0 15px; background: var(--line); }
+
+    .preview-label {
+      margin-bottom: 10px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .68rem;
+    }
+
+    .preview-links {
+      display: grid;
+      gap: 9px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      color: var(--dim);
+      font-size: .72rem;
+      line-height: 1.5;
+    }
+
+    .preview-links span {
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .68rem;
+      overflow-wrap: anywhere;
+    }
+
+    .float-badge {
+      position: absolute;
+      z-index: 2;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border: 1px solid var(--line-bright);
+      border-radius: 10px;
+      background: rgba(15, 20, 29, .92);
+      box-shadow: 0 16px 36px -20px #000;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: .67rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .float-badge strong { color: var(--mint); font-size: .8rem; }
+    .float-badge-top { top: -20px; right: -14px; }
+    .float-badge-bottom { bottom: -18px; left: -24px; }
+    .dot-green { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
+
+    @media (min-width: 900px) { .float-badge { display: inline-flex; } }
+
+    /* ── strip ───────────────────────────────────────────── */
+
+    .strip { border-block: 1px solid var(--line); background: rgba(13, 17, 24, .55); }
+
+    .strip-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 26px;
+      min-height: 64px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .69rem;
+      letter-spacing: .05em;
+    }
+
+    .strip-inner span:first-child { color: var(--text); }
+    .strip-inner span + span { position: relative; }
+    .strip-inner span + span::before {
+      content: "·";
+      position: absolute;
+      left: -15px;
+      color: #3d4759;
+    }
+
+    /* ── shared section ──────────────────────────────────── */
+
+    .section { padding-block: clamp(66px, 8.5vw, 108px); }
+
+    .section-head {
+      max-width: 790px;
+      margin-bottom: clamp(30px, 5vw, 48px);
+    }
+
+    .section-head .eyebrow { margin-bottom: 16px; }
+    .section-sub {
+      max-width: 650px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 1.02rem;
+      line-height: 1.7;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(22, 28, 39, .85), rgba(14, 18, 26, .78));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025);
+      padding: 26px;
+    }
+
+    /* ── steps ───────────────────────────────────────────── */
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .step { position: relative; overflow: hidden; }
+
+    .step::after {
+      content: "";
+      position: absolute;
+      right: -40px;
+      top: -50px;
+      width: 130px;
+      height: 130px;
+      border-radius: 50%;
+      background: rgba(167, 139, 250, .07);
+      filter: blur(10px);
+    }
+
+    .step-num {
+      display: block;
+      margin-bottom: 34px;
+      color: var(--violet);
+      font-family: var(--mono);
+      font-size: .72rem;
+      letter-spacing: .15em;
+    }
+
+    .step h3 { margin-bottom: 11px; }
+    .step p { margin-bottom: 18px; color: var(--muted); font-size: .9rem; line-height: 1.65; }
+    .step code { color: #cfd6e3; font-size: .82em; }
+
+    .mini-code {
+      display: inline-block;
+      padding: 5px 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #090c12;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .68rem;
+    }
+
+    .pair-note {
+      display: flex;
+      gap: 12px;
+      margin-top: 18px;
+      padding: 15px 18px;
+      border: 1px solid rgba(167, 139, 250, .18);
+      border-radius: 12px;
+      background: rgba(167, 139, 250, .055);
+      color: var(--muted);
+      font-size: .84rem;
+    }
+
+    .pair-note strong { color: var(--text); }
+
+    /* ── free ────────────────────────────────────────────── */
+
+    .free-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr);
+      gap: clamp(30px, 6vw, 70px);
+      align-items: center;
+    }
+
+    .free-copy p { max-width: 620px; color: var(--muted); }
+
+    .free-list {
+      display: grid;
+      gap: 18px;
+      margin-top: 30px;
+    }
+
+    .free-item { display: flex; gap: 13px; }
+    .check {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 23px;
+      height: 23px;
+      margin-top: 2px;
+      border: 1px solid rgba(110, 231, 183, .25);
+      border-radius: 50%;
+      background: rgba(110, 231, 183, .08);
+      color: var(--mint);
+      font-size: .7rem;
+      font-weight: 800;
+    }
+    .free-item strong { display: block; margin-bottom: 3px; font-size: .93rem; }
+    .free-item p { margin: 0; color: var(--dim); font-size: .84rem; line-height: 1.55; }
+
+    .price-panel {
+      position: relative;
+      overflow: hidden;
+      padding: 30px;
+      border: 1px solid rgba(167, 139, 250, .3);
+      border-radius: 24px;
+      background:
+        radial-gradient(360px 220px at 90% 0%, rgba(110, 231, 183, .12), transparent 65%),
+        linear-gradient(155deg, rgba(124, 92, 255, .17), rgba(17, 22, 31, .95) 65%);
+      box-shadow: 0 30px 80px -50px rgba(124, 92, 255, .8);
+    }
+
+    .price-panel::before {
+      content: "";
+      position: absolute;
+      right: -40px;
+      top: -50px;
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      border: 1px solid rgba(167, 139, 250, .22);
+    }
+
+    .price-kicker {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: .67rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .price {
+      margin: 8px 0 4px;
+      background: linear-gradient(100deg, #fff, var(--mint));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      font-size: clamp(4rem, 8vw, 6rem);
+      font-weight: 760;
+      letter-spacing: -.07em;
+      line-height: 1;
+    }
+
+    .price-sub { color: var(--muted); font-size: .87rem; }
+
+    .price-lines {
+      display: grid;
+      gap: 11px;
+      margin: 26px 0 0;
+      padding: 22px 0 0;
+      border-top: 1px solid var(--line);
+      list-style: none;
+      font-size: .82rem;
+    }
+
+    .price-lines li { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); }
+    .price-lines b { color: var(--text); font-weight: 600; }
+    .price-lines .zero { color: var(--mint); font-family: var(--mono); }
+
+    .callout {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      padding: 15px 17px;
+      border: 1px solid rgba(251, 191, 36, .18);
+      border-radius: 12px;
+      background: rgba(251, 191, 36, .055);
+      color: #cbb98c;
+      font-size: .8rem;
+      line-height: 1.6;
+    }
+
+    .callout strong { color: var(--amber); }
+    .callout code { color: #e8d7ae; font-size: .9em; }
+
+    /* ── privacy & one click ─────────────────────────────── */
+
+    .privacy-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .privacy-card,
+    .oneclick-card {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(24px, 3vw, 32px);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+    }
+
+    .privacy-card {
+      background:
+        radial-gradient(620px 320px at 0% 0%, rgba(110, 231, 183, .09), transparent 62%),
+        linear-gradient(180deg, rgba(20, 27, 33, .88), rgba(13, 18, 24, .82));
+    }
+
+    .oneclick-card {
+      background:
+        radial-gradient(620px 320px at 100% 0%, rgba(167, 139, 250, .12), transparent 62%),
+        linear-gradient(180deg, rgba(24, 24, 38, .9), rgba(13, 17, 25, .84));
+    }
+
+    .privacy-kicker,
+    .oneclick-kicker {
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .64rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .oneclick-kicker { color: var(--violet); }
+
+    .privacy-card h3,
+    .oneclick-card h3 {
+      margin: 12px 0 10px;
+      font-size: clamp(1.35rem, 2.5vw, 1.7rem);
+    }
+
+    .privacy-card > p,
+    .oneclick-card > p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .9rem;
+      line-height: 1.65;
+    }
+
+    .privacy-points {
+      display: grid;
+      gap: 12px;
+      margin: 24px 0 0;
+      padding: 0;
+      list-style: none;
+      color: var(--muted);
+      font-size: .85rem;
+    }
+
+    .privacy-points li { position: relative; padding-left: 20px; }
+    .privacy-points li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 0;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .78rem;
+    }
+
+    .privacy-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 24px;
+      padding-top: 17px;
+      border-top: 1px solid var(--line);
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .65rem;
+      line-height: 1.5;
+    }
+
+    .privacy-status::before {
+      content: "";
+      flex: 0 0 auto;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 0 4px rgba(110, 231, 183, .08);
+    }
+
+    .demo {
+      margin: 22px 0 24px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #080b11;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+    }
+
+    .demo-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .6rem;
+    }
+
+    .demo-live { color: var(--mint); }
+    .demo-live::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: var(--mint);
+      vertical-align: 1px;
+    }
+
+    .demo-button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--violet), #8b76ff 58%, #7dd3fc);
+      color: #0b0713;
+      box-shadow: 0 14px 32px -18px rgba(167, 139, 250, .8);
+      font-size: .84rem;
+      font-weight: 750;
+    }
+
+    .demo-button small {
+      font-family: var(--mono);
+      font-size: .54rem;
+      font-weight: 650;
+      letter-spacing: .1em;
+      opacity: .7;
+      text-transform: uppercase;
+    }
+
+    .demo-flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 7px;
+      margin-top: 12px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .61rem;
+    }
+
+    .demo-flow b { color: var(--mint); font-weight: 500; }
+    .demo-flow .arrow { color: #4a586d; }
+
+    .oneclick-code {
+      margin-top: 20px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #080b11;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: .65rem;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+    }
+
+    .oneclick-code b { color: var(--mint); font-weight: 500; }
+
+    /* ── examples ────────────────────────────────────────── */
+
+    .example-card {
+      padding: clamp(20px, 3vw, 30px);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background:
+        radial-gradient(700px 300px at 100% 0%, rgba(167, 139, 250, .06), transparent 60%),
+        rgba(15, 20, 29, .72);
+    }
+
+    .example-card + .example-card { margin-top: 20px; }
+
+    .example-head { max-width: 780px; margin-bottom: 24px; }
+    .example-head .badge {
+      display: inline-block;
+      margin-bottom: 13px;
+      padding: 4px 8px;
+      border: 1px solid rgba(110, 231, 183, .18);
+      border-radius: 6px;
+      background: rgba(110, 231, 183, .06);
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .63rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .example-head h3 { margin-bottom: 9px; font-size: clamp(1.35rem, 2.7vw, 1.85rem); }
+    .example-head p { margin: 0; color: var(--muted); font-size: .92rem; }
+
+    .compare {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .compare-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .65rem;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+
+    .tag-small {
+      padding: 2px 6px;
+      border: 1px solid rgba(110, 231, 183, .18);
+      border-radius: 5px;
+      color: var(--mint);
+      font-size: .55rem;
+      letter-spacing: .04em;
+      text-transform: none;
+    }
+
+    .code {
+      min-height: 100%;
+      margin: 0;
+      padding: 18px;
+      overflow: auto;
+      border: 1px solid #202837;
+      border-radius: 13px;
+      background: #080b11;
+      color: #c7d1e0;
+      font-size: .75rem;
+      line-height: 1.75;
+      tab-size: 2;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .code .muted { color: #667287; }
+    .code .key { color: #c4b5fd; }
+    .code .tag-word { color: var(--mint); }
+    .code .link { color: #93c5fd; }
+    .code .heading { color: #f1f5fb; font-weight: 700; }
+
+    .after-note {
+      margin: 10px 2px 0;
+      color: var(--dim);
+      font-size: .72rem;
+    }
+
+    .eval-grid {
+      display: grid;
+      grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+      gap: 16px;
+    }
+
+    .eval-note,
+    .eval-result {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #0b0f16;
+    }
+
+    .eval-note .note-label {
+      margin-bottom: 12px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .64rem;
+    }
+
+    .eval-note p { margin: 0; color: #b9c3d3; font-size: .84rem; line-height: 1.7; }
+    .eval-note .draft { color: var(--dim); }
+
+    .eval-result {
+      border-color: rgba(251, 191, 36, .2);
+      background:
+        radial-gradient(400px 200px at 100% 0%, rgba(251, 191, 36, .075), transparent 65%),
+        #0b0f16;
+    }
+
+    .eval-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .eval-top span:first-child {
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .63rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .rating {
+      padding: 4px 9px;
+      border: 1px solid rgba(251, 191, 36, .26);
+      border-radius: 999px;
+      background: rgba(251, 191, 36, .08);
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: .64rem;
+    }
+
+    .eval-result h4 { margin: 0 0 14px; font-size: 1rem; letter-spacing: -.01em; }
+
+    .eval-field + .eval-field { margin-top: 14px; }
+    .eval-field b {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .61rem;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .eval-field p { margin: 0; color: #c2cbd9; font-size: .82rem; line-height: 1.62; }
+    .eval-field .accent { color: var(--mint); }
+
+    .chain {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .chain-node {
+      flex: 1 1 180px;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(20, 26, 37, .8);
+      font-size: .8rem;
+      line-height: 1.4;
+    }
+
+    .chain-node small {
+      display: block;
+      margin-top: 4px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .61rem;
+    }
+
+    .chain-arrow { color: var(--violet); font-family: var(--mono); font-size: .82rem; }
+
+    /* ── scenarios ───────────────────────────────────────── */
+
+    .scenario-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .scenario-card { padding: 22px; }
+    .scenario-card .mini-label {
+      margin-bottom: 28px;
+      color: var(--violet);
+      font-family: var(--mono);
+      font-size: .64rem;
+      letter-spacing: .1em;
+    }
+    .scenario-card h3 { margin-bottom: 8px; font-size: 1rem; }
+    .scenario-card p { margin: 0; color: var(--dim); font-size: .82rem; line-height: 1.6; }
+
+    /* ── quickstart ──────────────────────────────────────── */
+
+    .quickstart-grid {
+      display: grid;
+      grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+      gap: clamp(30px, 5vw, 56px);
+      align-items: start;
+    }
+
+    .quickstart-copy p { color: var(--muted); }
+
+    .requirements {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 22px 0;
+    }
+
+    .requirements span {
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: .65rem;
+    }
+
+    .terminal {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #070a0f;
+      box-shadow: 0 32px 80px -46px #000;
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 39px;
+      padding: 0 13px;
+      border-bottom: 1px solid var(--line);
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .64rem;
+    }
+
+    .terminal-bar .dots { margin-right: 4px; }
+
+    .terminal-pre {
+      margin: 0;
+      padding: 20px;
+      overflow: auto;
+      color: #c5d0df;
+      font-size: .73rem;
+      line-height: 1.8;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .terminal-pre .comment { color: #5f6b7e; }
+    .terminal-pre .cmd { color: var(--mint); }
+    .terminal-pre .flag { color: #c4b5fd; }
+
+    .run-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 14px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(17, 22, 31, .65);
+    }
+
+    .run-row p { margin: 3px 0 0; color: var(--dim); font-size: .76rem; }
+    .run-row strong { font-size: .86rem; }
+    .run-row code {
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #080b11;
+      color: var(--mint);
+      font-size: .7rem;
+    }
+
+    /* ── faq ─────────────────────────────────────────────── */
+
+    .faq { border-top: 1px solid var(--line); }
+    .faq details { border-bottom: 1px solid var(--line); }
+
+    .faq summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 19px 0;
+      cursor: pointer;
+      list-style: none;
+      font-size: .95rem;
+      font-weight: 600;
+    }
+
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::after {
+      content: "+";
+      flex: 0 0 auto;
+      color: var(--violet);
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      font-weight: 400;
+    }
+    .faq details[open] summary::after { content: "−"; }
+
+    .faq details p {
+      max-width: 850px;
+      margin: 0;
+      padding: 0 0 20px;
+      color: var(--muted);
+      font-size: .88rem;
+      line-height: 1.7;
+    }
+
+    .faq details code { color: #d8ccff; font-size: .92em; }
+
+    /* ── footer ──────────────────────────────────────────── */
+
+    .site-footer {
+      border-top: 1px solid var(--line);
+      background: rgba(8, 10, 15, .7);
+    }
+
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 26px;
+      padding-block: 38px;
+    }
+
+    .footer-brand p { max-width: 380px; margin: 9px 0 0; color: var(--dim); font-size: .8rem; }
+    .footer-meta { max-width: 430px; color: var(--dim); font-size: .76rem; line-height: 1.65; }
+    .footer-meta a { color: var(--muted); text-decoration: underline; text-decoration-color: var(--line-bright); text-underline-offset: 3px; }
+    .footer-meta a:hover { color: var(--text); }
+
+    /* ── animation ───────────────────────────────────────── */
+
+    @media (prefers-reduced-motion: no-preference) {
+      .hero-copy,
+      .hero-visual {
+        animation: rise .7s cubic-bezier(.2, .7, .2, 1) both;
+      }
+      .hero-visual { animation-delay: .12s; }
+      .pulse { animation: pulse 2.4s ease-in-out infinite; }
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 4px rgba(110, 231, 183, .08); }
+      50% { box-shadow: 0 0 0 7px rgba(110, 231, 183, .02); }
+    }
+
+    /* ── responsive ──────────────────────────────────────── */
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; }
+      .hero-visual { max-width: 680px; }
+      .free-grid,
+      .quickstart-grid,
+      .privacy-grid { grid-template-columns: 1fr; }
+      .free-grid { gap: 38px; }
+      .steps,
+      .scenario-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .compare { grid-template-columns: 1fr; }
+      .eval-grid { grid-template-columns: 1fr; }
+      .price-panel { max-width: 520px; }
+    }
+
+    @media (max-width: 620px) {
+      .wrap { width: min(var(--max), calc(100% - 28px)); }
+      .brand-sub { display: none; }
+      .header-inner { min-height: 62px; gap: 14px; }
+      .hero { padding-block: 46px 58px; }
+      .hero-actions .btn { width: 100%; }
+      .hero-points { display: grid; gap: 7px; }
+      .steps,
+      .scenario-grid { grid-template-columns: 1fr; }
+      .step-num { margin-bottom: 20px; }
+      .section { padding-block: 58px; }
+      .run-row { align-items: flex-start; flex-direction: column; }
+      .run-row code { width: 100%; overflow-x: auto; }
+      .footer-inner { padding-block: 30px; }
+    }
+  </style>
+</head>
+<body id="top">
+  <a class="skip" href="#main">Перейти к содержанию</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top" aria-label="noesis — на главную">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="12" r="2.4"></circle>
+            <circle cx="18" cy="6" r="2.4"></circle>
+            <circle cx="18" cy="18" r="2.4"></circle>
+            <path d="M8.2 10.9 15.8 7.1M8.2 13.1l7.6 3.8"></path>
+          </svg>
+        </span>
+        <span class="brand-name">noesis</span>
+        <span class="brand-sub">второй мозг</span>
+      </a>
+
+      <nav class="nav" aria-label="Основная навигация">
+        <a href="#how">Как работает</a>
+        <a href="#free">Бесплатно</a>
+        <a href="#privacy">Приватность</a>
+        <a href="#examples">Примеры</a>
+        <a href="#quickstart">Запуск</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+
+      <a class="btn btn-small header-cta" href="#quickstart">Попробовать</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- HERO -->
+    <section class="hero wrap">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="pulse" aria-hidden="true"></span> локально · приватно · одна кнопка</div>
+        <h1>Ваш дневник заслуживает <em>второго мозга</em></h1>
+        <p class="lead">
+          noesis читает обычные Markdown-заметки, находит смысловые связи и собирает из них
+          Obsidian-vault. Всё работает на вашем компьютере через Ollama: без API-ключей,
+          облака и ежемесячных платежей. Полностью приватно — и весь пайплайн одной кнопкой.
+        </p>
+        <div class="hero-actions">
+          <a class="btn" href="#quickstart">Запустить локально <span aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost" href="#examples">Посмотреть примеры</a>
+        </div>
+        <ul class="hero-points">
+          <li>Всё на вашем железе</li>
+          <li>Одна кнопка — весь пайплайн</li>
+          <li>Оригиналы не меняются</li>
+          <li>SQLite + plain text</li>
+        </ul>
+      </div>
+
+      <div class="hero-visual" aria-label="Пример заметки в Obsidian-vault">
+        <div class="float-badge float-badge-top"><span class="dot-green" aria-hidden="true"></span> Ollama · localhost</div>
+        <div class="float-badge float-badge-bottom"><strong>0 ₽</strong> за токены</div>
+
+        <div class="window">
+          <div class="window-bar">
+            <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="window-path">vault / 2024-03-05-dnevnik.md</span>
+            <span class="badge-local">local</span>
+          </div>
+          <div class="window-body">
+            <div class="preview-tags">
+              <span>#дневник</span>
+              <span>#sqlite</span>
+              <span>#дюна</span>
+              <span>#планы-на-март</span>
+            </div>
+            <h2 class="preview-title">Дневник — 5 марта</h2>
+            <p class="preview-text">
+              Сегодня весь день шёл дождь. Работал из дома, сварил большой чайник зелёного чая…
+            </p>
+            <div class="preview-rule"></div>
+            <div class="preview-label">## Related notes</div>
+            <ul class="preview-links">
+              <li><span>[[2024-03-25-den-rozhdeniya-mamy]]</span> — подарок маме на день рождения</li>
+              <li><span>[[2024-03-20-progress-taska]]</span> — доделать таск-трекер до MVP</li>
+              <li><span>[[2024-04-05-reabilitatsiya-posle-bolezni]]</span> — продолжение истории с «Дюной»</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="strip">
+      <div class="wrap strip-inner" aria-label="Технологии">
+        <span>Внутри:</span>
+        <span>Ollama</span>
+        <span>SQLite</span>
+        <span>Markdown</span>
+        <span>Obsidian wikilinks</span>
+        <span>Go</span>
+      </div>
+    </div>
+
+    <!-- HOW -->
+    <section id="how" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow">как это работает</div>
+        <h2>Три шага — и заметки начинают разговаривать</h2>
+        <p class="section-sub">
+          Пайплайн простой: модель предлагает теги и связи, всё остальное — локальная
+          обработка. Никакой магии и переписывания ваших текстов.
+        </p>
+      </div>
+
+      <div class="steps">
+        <article class="card step">
+          <span class="step-num">01 / IMPORT</span>
+          <h3>Импорт</h3>
+          <p>
+            Находит <code>.md</code> в папке и складывает их в SQLite. Текст,
+            имена файлов и структура папок остаются прежними.
+          </p>
+          <div class="mini-code">-phase 1</div>
+        </article>
+
+        <article class="card step">
+          <span class="step-num">02 / ANALYZE</span>
+          <h3>Анализ</h3>
+          <p>
+            Ollama сравнивает заметки попарно: просит 2–8 тегов для каждой заметки в паре
+            и решает, есть ли между ними общие люди, проекты или продолжение истории.
+          </p>
+          <div class="mini-code">-phase 2</div>
+        </article>
+
+        <article class="card step">
+          <span class="step-num">03 / WRITE</span>
+          <h3>Vault</h3>
+          <p>
+            Собирает папку для Obsidian: front matter с тегами, двусторонние
+            <code>[[ссылки]]</code> и блок <code>## Related notes</code>.
+          </p>
+          <div class="mini-code">-phase 3</div>
+        </article>
+      </div>
+
+      <div class="pair-note">
+        <span aria-hidden="true">↔</span>
+        <span>
+          <strong>Связи двусторонние.</strong> Если заметка A связана с B, то в B появится
+          ссылка на A с той же причиной. В Obsidian из этого сразу собирается граф.
+        </span>
+      </div>
+    </section>
+
+    <!-- FREE -->
+    <section id="free" class="section wrap">
+      <div class="free-grid">
+        <div class="free-copy">
+          <div class="eyebrow">0 ₽ за запросы</div>
+          <h2>Бесплатно, потому что локально</h2>
+          <p>
+            Второй мозг не обязан быть подпиской. Модель запускается на вашем железе,
+            заметки лежат в обычных файлах, а база — в одном SQLite-файле.
+            Платить за токены и хранилище не нужно.
+          </p>
+
+          <div class="free-list">
+            <div class="free-item">
+              <span class="check" aria-hidden="true">✓</span>
+              <div>
+                <strong>Открытые модели через Ollama</strong>
+                <p>Например, <code>qwen2.5:7b</code>, <code>llama3.1:8b</code> или <code>mistral:7b</code>. Модель можно поменять одной командой.</p>
+              </div>
+            </div>
+            <div class="free-item">
+              <span class="check" aria-hidden="true">✓</span>
+              <div>
+                <strong>Данные не уходят в облако</strong>
+                <p>При локальной модели запросы идут только на <code>localhost</code>. Ваш дневник остаётся вашим.</p>
+              </div>
+            </div>
+            <div class="free-item">
+              <span class="check" aria-hidden="true">✓</span>
+              <div>
+                <strong>Без vendor lock-in</strong>
+                <p>Результат — папка с Markdown. Obsidian не обязателен: подойдёт любой редактор или Git.</p>
+              </div>
+            </div>
+            <div class="free-item">
+              <span class="check" aria-hidden="true">✓</span>
+              <div>
+                <strong>Свои промпты</strong>
+                <p>Правила разметки и оценки новизны лежат в <code>prompts/phase2.txt</code> и <code>prompts/eval.txt</code> — это обычный текст, который можно адаптировать под свой дневник.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="callout">
+            <span aria-hidden="true">!</span>
+            <span>
+              <strong>Важно про модель по умолчанию.</strong> В Makefile указана облачная
+              <code>gemma4:31b-cloud</code>. Для полностью бесплатного локального режима
+              переопределите её: <code>MODEL=qwen2.5:7b</code>.
+            </span>
+          </div>
+        </div>
+
+        <aside class="price-panel" aria-label="Смета локального запуска">
+          <div class="price-kicker">смета на месяц</div>
+          <div class="price">0 ₽</div>
+          <div class="price-sub">за API, токены и подписки</div>
+          <ul class="price-lines">
+            <li><span>Модель</span> <span class="zero">0 ₽</span></li>
+            <li><span>API-запросы</span> <span class="zero">0 ₽</span></li>
+            <li><span>База и vault</span> <span class="zero">0 ₽</span></li>
+            <li><span>Железо</span> <b>ваше</b></li>
+          </ul>
+        </aside>
+      </div>
+    </section>
+
+    <!-- PRIVACY & ONE CLICK -->
+    <section id="privacy" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow">приватность и простота</div>
+        <h2>Полностью на вашем железе. И в одну кнопку.</h2>
+        <p class="section-sub">
+          Никаких аккаунтов, облачных баз и очередей на отправку. После загрузки модели интернет
+          не нужен: Ollama, SQLite и vault остаются на вашей машине. А запуск всего пайплайна
+          сводится к одному действию.
+        </p>
+      </div>
+
+      <div class="privacy-grid">
+        <article class="privacy-card">
+          <div class="privacy-kicker">private by design</div>
+          <h3>Данные не покидают ваш компьютер</h3>
+          <p>
+            Ноутбук, домашний сервер или мини-ПК — подойдёт любое собственное железо,
+            на котором живёт выбранная модель. Никаких внешних сервисов для работы не требуется.
+          </p>
+          <ul class="privacy-points">
+            <li>Ollama отвечает на <code>localhost</code>, а не в облаке.</li>
+            <li>SQLite-база и vault лежат рядом, на вашем диске.</li>
+            <li>Нет аккаунтов, отправки заметок и облачных хранилищ.</li>
+          </ul>
+          <div class="privacy-status">после загрузки модели интернет не обязателен</div>
+        </article>
+
+        <article class="oneclick-card">
+          <div class="oneclick-kicker">one button</div>
+          <h3>Импорт → анализ → vault. Один клик.</h3>
+          <p>
+            В GUI нажмите <strong>All phases</strong>, в TUI выберите тот же пункт.
+            CLI пройдёт весь путь по одной команде <code>-phase all</code>.
+          </p>
+          <div class="demo" aria-hidden="true">
+            <div class="demo-bar"><span>noesis-gui</span><span class="demo-live">ready</span></div>
+            <div class="demo-button"><span>▶ All phases</span><small>start</small></div>
+            <div class="demo-flow"><b>01 импорт</b><span class="arrow">→</span><b>02 теги</b><span class="arrow">→</span><b>03 vault</b></div>
+          </div>
+          <div class="oneclick-code"><b>./noesis-cli ... -phase all</b> — и всё готово</div>
+        </article>
+      </div>
+    </section>
+
+    <!-- EXAMPLES -->
+    <section id="examples" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow">примеры</div>
+        <h2>Что это даёт на практике</h2>
+        <p class="section-sub">
+          Два самых понятных сценария: превратить текстовый дневник в vault
+          и проверить, есть ли в новой заметке что-то новое.
+        </p>
+      </div>
+
+      <article class="example-card">
+        <div class="example-head">
+          <span class="badge">пример 01</span>
+          <h3>Текстовый дневник → Obsidian с тегами и связями</h3>
+          <p>
+            На входе — обычный текст без разметки. На выходе — та же заметка,
+            но с front matter, тегами и ссылками на связанные записи.
+          </p>
+        </div>
+
+        <div class="compare">
+          <div>
+            <div class="compare-title"><span>Было: обычный Markdown</span></div>
+<pre class="code"><span class="heading"># Дневник — 5 марта</span>
+
+Сегодня весь день шёл дождь.
+Работал из дома, сварил большой
+чайник зелёного чая.
+
+Прочитал статью про внутреннее
+устройство SQLite — архитектура
+на базе виртуальной машины.
+
+Вечером смотрел «Дюну» с Леной.
+
+План на март:
+1. Доделать таск-трекер до MVP
+2. Сходить к стоматологу
+3. Купить подарок маме (25 марта)</pre>
+          </div>
+
+          <div>
+            <div class="compare-title"><span>Стало: заметка в vault</span> <span class="tag-small">текст сохранён</span></div>
+<pre class="code"><span class="muted">---</span>
+<span class="key">tags:</span>
+  - <span class="tag-word">дневник</span>
+  - <span class="tag-word">дождь</span>
+  - <span class="tag-word">sqlite</span>
+  - <span class="tag-word">виртуальная-машина</span>
+  - <span class="tag-word">дюна</span>
+  - <span class="tag-word">лена</span>
+  - <span class="tag-word">планы-на-март</span>
+  - <span class="tag-word">день-рождения-мамы</span>
+<span class="muted">---</span>
+
+<span class="heading"># Дневник — 5 марта</span>
+
+Сегодня весь день шёл дождь…
+<span class="muted">(текст не изменён)</span>
+
+<span class="muted">## Related notes</span>
+- <span class="link">[[2024-03-25-den-rozhdeniya-mamy]]</span> — подарок маме на день рождения
+- <span class="link">[[2024-03-20-progress-taska]]</span> — доделать таск-трекер до MVP
+- <span class="link">[[2024-04-05-reabilitatsiya-posle-bolezni]]</span> — продолжение истории с «Дюной»</pre>
+          </div>
+        </div>
+        <p class="after-note">
+          Теги и связи добавляются в конец и в front matter. Исходный текст заметки не перезаписывается.
+        </p>
+      </article>
+
+      <article class="example-card">
+        <div class="example-head">
+          <span class="badge">пример 02</span>
+          <h3>Оценить новизну информации</h3>
+          <p>
+            Перед тем как писать новую заметку или статью, можно сравнить её
+            с уже связанными записями и понять: это действительно новая мысль
+            или вы уже проходили этот путь?
+          </p>
+        </div>
+
+        <div class="eval-grid">
+          <div class="eval-note">
+            <div class="note-label">new.md · черновик</div>
+            <p>
+              «Я строю систему со связями между сущностями — задачи, пользователи,
+              комментарии. Это реляционная модель. Не стоит изобретать велосипед,
+              бери PostgreSQL или SQLite.»
+            </p>
+            <p class="draft" style="margin-top:14px;">
+              Связанные заметки: консультация с Иваном, встреча с Анной.
+            </p>
+          </div>
+
+          <div class="eval-result">
+            <div class="eval-top">
+              <span>Evaluate note uniqueness</span>
+              <span class="rating">новизна: низкая</span>
+            </div>
+            <h4>Черновик мысли о реляционной модели</h4>
+            <div class="eval-field">
+              <b>Summary</b>
+              <p>Короткая мысль о том, что для задач с явными связями нужна реляционная база.</p>
+            </div>
+            <div class="eval-field">
+              <b>New information</b>
+              <p>
+                <span class="accent">Всё уже описано в других заметках:</span>
+                Иван уже советовал PostgreSQL, а Анна зафиксировала это решение
+                на встрече по архитектуре таск-трекера. Новых деталей нет.
+              </p>
+            </div>
+          </div>
+        </div>
+        <p class="after-note">
+          Оценка идёт относительно заметок, с которыми уже есть связи. Это помогает не повторяться и видеть,
+          где мысль действительно развивается.
+        </p>
+      </article>
+
+      <article class="example-card">
+        <div class="example-head">
+          <span class="badge">пример 03</span>
+          <h3>Цепочка, которую видно в графе</h3>
+          <p>
+            Модель ищет не просто похожие слова, а общих людей, проекты и продолжение
+            истории. Вот как может выглядеть одна из цепочек в вашем vault.
+          </p>
+        </div>
+
+        <div class="chain" aria-label="Пример цепочки связанных заметок">
+          <span class="chain-node">Консультация с Иваном<small>postgresql · keycloak · gophercon</small></span>
+          <span class="chain-arrow" aria-hidden="true">↔</span>
+          <span class="chain-node">Изучаю PostgreSQL<small>cte · индексы · таск-трекер</small></span>
+          <span class="chain-arrow" aria-hidden="true">↔</span>
+          <span class="chain-node">Встреча с Анной<small>архитектура · go · postgresql</small></span>
+          <span class="chain-arrow" aria-hidden="true">↔</span>
+          <span class="chain-node">Прогресс по таск-трекеру<small>gRPC · docker · Иван</small></span>
+        </div>
+        <p class="after-note">
+          В Obsidian такие связи превращаются в граф, по которому удобно вспоминать контекст
+          и находить забытые пересечения.
+        </p>
+      </article>
+    </section>
+
+    <!-- SCENARIOS -->
+    <section class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow">сценарии</div>
+        <h2>Не только дневник</h2>
+        <p class="section-sub">
+          Любая папка с Markdown подойдёт: заметки с встреч, идеи, книжные выписки,
+          рабочий журнал или архив проектов.
+        </p>
+      </div>
+
+      <div class="scenario-grid">
+        <article class="card scenario-card">
+          <div class="mini-label">01 / АРХИВ</div>
+          <h3>Разобрать дневник за годы</h3>
+          <p>Импортировать старые записи и получить теги, по которым легко искать людей, места и события.</p>
+        </article>
+        <article class="card scenario-card">
+          <div class="mini-label">02 / ДУБЛИ</div>
+          <h3>Найти повторяющиеся мысли</h3>
+          <p>Оценка новизны показывает, где вы снова пишете то, что уже разобрали раньше.</p>
+        </article>
+        <article class="card scenario-card">
+          <div class="mini-label">03 / ЛЮДИ</div>
+          <h3>Вспомнить контекст встреч</h3>
+          <p>Связи по общим именам и проектам собирают разрозненные записи в историю отношений.</p>
+        </article>
+        <article class="card scenario-card">
+          <div class="mini-label">04 / ПРОЕКТЫ</div>
+          <h3>Собрать хронологию</h3>
+          <p>Заметки о проекте, решения, ретро и следующие шаги оказываются связанными между собой.</p>
+        </article>
+        <article class="card scenario-card">
+          <div class="mini-label">05 / БЛОГ</div>
+          <h3>Подготовить материал</h3>
+          <p>Теги быстро выводят на нужную тему, а связи подсказывают, чего не хватает в черновике.</p>
+        </article>
+        <article class="card scenario-card">
+          <div class="mini-label">06 / ПРИВАТНОСТЬ</div>
+          <h3>Оставить данные у себя</h3>
+          <p>Локальная модель, локальная база, локальный vault. Никаких аккаунтов и облачных хранилищ.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- QUICKSTART -->
+    <section id="quickstart" class="section wrap">
+      <div class="quickstart-grid">
+        <div class="quickstart-copy">
+          <div class="eyebrow">запуск</div>
+          <h2>От папки с заметками до vault — четыре команды</h2>
+          <p>
+            Нужен только компьютер с Ollama и Go. Если 7B-модель уже скачана,
+            первый прогон на небольшой папке занимает несколько минут — дальше всё зависит
+            от числа заметок.
+          </p>
+          <div class="requirements" aria-label="Требования">
+            <span>Ollama</span>
+            <span>Go</span>
+            <span>8–16 ГБ RAM *</span>
+            <span>Markdown-заметки</span>
+          </div>
+          <p style="color:var(--dim); font-size:.76rem; margin-top:-8px;">
+            * Ориентир для моделей 7–8B. Для больших моделей лучше GPU.
+          </p>
+          <div class="callout" style="border-color:rgba(110,231,183,.18); background:rgba(110,231,183,.055); color:#a6c9bb;">
+            <span aria-hidden="true">✓</span>
+            <span>
+              <strong style="color:var(--mint);">Совет:</strong> начните с 20–50 заметок.
+              Сравнение идёт попарно, поэтому на большом архиве первый прогон может быть долгим.
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>zsh — noesis</span>
+            </div>
+<pre class="terminal-pre"><span class="comment"># 1. Ollama — локальный движок моделей</span>
+<span class="cmd">ollama serve</span>
+<span class="cmd">ollama pull</span> qwen2.5:7b
+
+<span class="comment"># 2. Сборка CLI с локальной моделью</span>
+<span class="cmd">make build-cli</span> <span class="flag">MODEL=qwen2.5:7b</span>
+
+<span class="comment"># 3. Дневник → Obsidian-vault</span>
+<span class="cmd">./noesis-cli</span> \
+  <span class="flag">-src</span> ~/notes/diary \
+  <span class="flag">-out</span> ~/vault \
+  <span class="flag">-db</span> ~/vault.db \
+  <span class="flag">-model</span> qwen2.5:7b \
+  <span class="flag">-phase</span> all
+
+<span class="comment"># 4. Открыть папку ~/vault в Obsidian</span></pre>
+          </div>
+
+          <div class="run-row">
+            <div>
+              <strong>Хочется мышкой?</strong>
+              <p>В TUI есть настройки, прогресс и оценка новизны: <em>Evaluate note uniqueness</em>.</p>
+            </div>
+            <code>make run MODEL=qwen2.5:7b</code>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow">вопросы</div>
+        <h2>Коротко о главном</h2>
+      </div>
+
+      <div class="faq">
+        <details>
+          <summary>Это правда бесплатно?</summary>
+          <p>
+            Да, если использовать локальную модель через Ollama: нет оплаты за API и токены.
+            Нужен только компьютер, который потянет выбранную модель. Ориентир для 7–8B — от 8–16 ГБ RAM;
+            большие модели комфортнее работают на GPU.
+          </p>
+        </details>
+        <details>
+          <summary>Куда уходят мои заметки?</summary>
+          <p>
+            При локальной модели — никуда: Ollama отвечает на <code>localhost</code>, SQLite и vault лежат на диске.
+            Если вы сами укажете облачную модель или удалённый хост, запросы уйдут туда — это отдельный режим,
+            и его нужно выбирать осознанно.
+          </p>
+        </details>
+        <details>
+          <summary>Обязательно ли устанавливать Obsidian?</summary>
+          <p>
+            Нет. На выходе получается обычная папка с Markdown-файлами. Obsidian просто удобно показывает
+            теги, ссылки и граф. Vault можно открыть в любом редакторе, запушить в Git или читать с телефона.
+          </p>
+        </details>
+        <details>
+          <summary>Почему сравнение попарное? Это же долго.</summary>
+          <p>
+            Каждая пара проверяется отдельно, зато связи получаются осмысленными, а не только по совпадению слов.
+            50 заметок — это 1225 пар. Поэтому для начала лучше взять небольшую папку, а уже обработанные пары
+            сохраняются в SQLite: повторный запуск не пересчитывает их заново.
+          </p>
+        </details>
+        <details>
+          <summary>Что если модель ошиблась с тегом или связью?</summary>
+          <p>
+            Исходные заметки не перезаписываются, а теги и связи хранятся в базе и в Markdown.
+            Их можно поправить вручную и пересобрать vault. Ошибочные связи не ломают текст — они просто
+            будут видны в блоке <code>## Related notes</code>.
+          </p>
+        </details>
+        <details>
+          <summary>Можно использовать свою модель и свои правила?</summary>
+          <p>
+            Да. Модель задаётся флагом <code>-model</code> или в настройках TUI/GUI. Промпты лежат в
+            <code>prompts/phase2.txt</code> (теги и связи) и <code>prompts/eval.txt</code> (оценка новизны) —
+            это обычные текстовые файлы, их можно адаптировать под свой дневник.
+          </p>
+        </details>
+        <details>
+          <summary>Можно всё сделать в одну кнопку?</summary>
+          <p>
+            Да. В GUI и TUI есть пункт <strong>All phases</strong>: он запускает импорт, анализ
+            и запись vault подряд. В CLI это флаг <code>-phase all</code>. Отдельные фазы нужны,
+            если вы хотите остановиться, проверить теги или продолжить обработку позже.
+          </p>
+        </details>
+        <details>
+          <summary>Это отдельный интерфейс приложения?</summary>
+          <p>
+            Нет. Это статическая страница в папке <code>landings/</code>. Она не подключена к Go-приложению
+            и живёт как самостоятельный лендинг: открывается прямо в браузере или раздаётся любым
+            статическим сервером.
+          </p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <a class="brand" href="#top">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="6" cy="12" r="2.4"></circle>
+              <circle cx="18" cy="6" r="2.4"></circle>
+              <circle cx="18" cy="18" r="2.4"></circle>
+              <path d="M8.2 10.9 15.8 7.1M8.2 13.1l7.6 3.8"></path>
+            </svg>
+          </span>
+          <span class="brand-name">noesis</span>
+        </a>
+        <p>Локальный второй мозг из обычных Markdown-заметок.</p>
+      </div>
+      <div class="footer-meta">
+        <p>
+          Статический лендинг в папке <code>landings/</code>. Не является отдельным UI приложения.
+          <a href="#top">Наверх ↑</a>
+        </p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

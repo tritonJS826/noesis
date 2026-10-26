@@ -1,3 +1,14 @@
 test-notes
-../notes.db-shm
-../noteas.db-wal
+
+# build outputs
+/dist/
+/noesis-tui
+/noesis-cli
+/noesis-gui
+/.model-stamp
+
+# local database
+/notes.db
+/notes.db-wal
+/notes.db-shm
+
