@@ -59,8 +59,10 @@ Output goes to `dist/release/`.
 
 Requirements:
 
-- **Linux:** Go, gcc, and the X11/OpenGL headers for Fyne
-  (`sudo apt-get install libgl1-mesa-dev xorg-dev`).
+- **Linux:** Go, gcc, and the X11/OpenGL/Wayland headers for Fyne:
+  ```sh
+  sudo apt-get install libgl1-mesa-dev libwayland-dev libxkbcommon-dev wayland-protocols xorg-dev
+  ```
 - **Windows:** Go and a MinGW-w64 `gcc` (GitHub's `windows-latest` image
   includes one). The GUI is linked with `-H windowsgui` so it starts without a
   console window.

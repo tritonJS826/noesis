@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build distribution binaries for Linux.
-# Run this on Linux (Fyne needs cgo and the X11/OpenGL development headers).
+# Run this on Linux (Fyne needs cgo and the X11/OpenGL/Wayland development headers):
+#   sudo apt-get install libgl1-mesa-dev libwayland-dev libxkbcommon-dev wayland-protocols xorg-dev
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -52,7 +52,12 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            wayland-protocols \
+            xorg-dev
 
       - name: Check C compiler
         shell: bash
