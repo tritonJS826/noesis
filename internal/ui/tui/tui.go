@@ -31,6 +31,9 @@ const (
 	scrRunning
 	scrFilePicker
 	scrEval
+	scrProcessList
+	scrProcessDetail
+	scrFsSearch
 )
 
 type ollamaMsg struct {
@@ -105,6 +108,16 @@ type model struct {
 	promptViewing string
 	promptText    string
 
+	// process submenu
+	processType          string   // "pair" or "single"
+	processList          []string // processes of current type
+	processName          string   // selected process for detail view
+	processConfirmDelete bool
+
+	// filesystem search for compare file
+	fsFiles  []string // matching filesystem files
+	fsFilter string   // current search filter
+
 	width int
 }
 
@@ -151,13 +164,13 @@ func fetchOllamaCmd(host string) tea.Cmd {
 	}
 }
 
-func runPhaseCmd(m *model, phase core.Phase) tea.Cmd {
+func runPhaseCmd(m *model, phase core.Phase, promptName string) tea.Cmd {
 	src, out, modelName, host, maxChars, workers := m.src, m.out, m.modelName, m.host, m.maxChars, m.workers
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
 		defer m.program.RestoreTerminal()
 
-		cfg := core.Config{Host: host, Model: modelName, MaxChars: maxChars, Workers: workers}
+		cfg := core.Config{Host: host, Model: modelName, MaxChars: maxChars, Workers: workers, PromptName: promptName}
 		progress := consoleshared.New(m.db)
 		progress.Start()
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -308,6 +321,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fileNotes = notes
 		}
 		m.screen = scrPickData
+		return m, nil
+
+	case fsSearchMsg:
+		m.fsFiles = msg.files
 		return m, nil
 	}
 	return m, nil

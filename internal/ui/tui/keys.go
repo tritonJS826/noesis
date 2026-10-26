@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,6 +32,12 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.filePickerKeys(msg)
 	case scrEval:
 		return m.evalKeys(msg)
+	case scrProcessList:
+		return m.processListKeys(msg)
+	case scrProcessDetail:
+		return m.processDetailKeys(msg)
+	case scrFsSearch:
+		return m.fsSearchKeys(msg)
 	case scrRunning:
 	}
 	return nil
@@ -38,22 +45,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // ─── main menu ───────────────────────────────────────────────────────────────
 
-const menuItems = 8 // 0..8
+const menuItems = 7 // 0..7
 
 func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
-	if m.confirmReset {
-		switch msg.String() {
-		case "y", "Y":
-			m.confirmReset = false
-			m.resetting = true
-			m.resetErr = ""
-			return resetDBCmd(m.db, m.dbPath)
-		default:
-			m.confirmReset = false
-		}
-		return nil
-	}
-
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return tea.Quit
@@ -75,14 +69,14 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor = 0
 			m.pickResult = ""
 			m.pickErr = ""
-		case 1: // pairs
-			return m.startPhase(core.PhaseAnalyze, false, false)
-		case 2: // one by one
-			return m.startPhase(core.PhaseTagSingle, false, false)
-		case 3: // write vault
-			return m.startPhase(core.PhaseWrite, false, true)
+		case 1: // data processing — pairs → open pair list
+			m.openProcessList("pair")
+		case 2: // data processing — one by one → open single list
+			m.openProcessList("single")
+		case 3: // export for obsidian
+			return m.startPhase(core.PhaseWrite, false, true, "")
 		case 4: // all phases
-			return m.startPhase(core.PhaseAll, true, true)
+			return m.startPhase(core.PhaseAll, true, true, "")
 		case 5: // work with data
 			m.screen = scrData
 			m.dataCursor = 0
@@ -92,15 +86,13 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		case 7: // settings
 			m.screen = scrSettings
 			m.cursor = 0
-		case 8: // reset database
-			m.confirmReset = true
 		}
 	}
 	return nil
 }
 
 // startPhase validates required fields and starts a phase from the menu.
-func (m *model) startPhase(phase core.Phase, needSrc, needOut bool) tea.Cmd {
+func (m *model) startPhase(phase core.Phase, needSrc, needOut bool, promptName string) tea.Cmd {
 	var missing []string
 	if needSrc && m.src == "" {
 		missing = append(missing, "SRC")
@@ -114,7 +106,7 @@ func (m *model) startPhase(phase core.Phase, needSrc, needOut bool) tea.Cmd {
 	}
 	m.screen = scrRunning
 	m.phaseErr = nil
-	return runPhaseCmd(m, phase)
+	return runPhaseCmd(m, phase, promptName)
 }
 
 // ─── import submenu ─────────────────────────────────────────────────────────
@@ -214,9 +206,10 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 			m.openPickData(0)
 		case 1: // remove file + links
 			m.openPickData(1)
-		case 2: // compare file (no db)
-			m.screen = scrComparePath
-			m.comparePath = ""
+		case 2: // compare file — file system search
+			m.screen = scrFsSearch
+			m.fsFilter = ""
+			m.fsFiles = nil
 			m.cursor = 0
 		}
 	case "esc", "q":
@@ -345,10 +338,22 @@ func (m *model) comparePathKeys(msg tea.KeyMsg) tea.Cmd {
 // ─── settings ──────────────────────────────────────────────────────────────
 
 func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.confirmReset {
+		switch msg.String() {
+		case "y", "Y":
+			m.confirmReset = false
+			m.resetting = true
+			m.resetErr = ""
+			return resetDBCmd(m.db, m.dbPath)
+		default:
+			m.confirmReset = false
+		}
+		return nil
+	}
 	if m.promptList != nil {
 		return m.promptKeys(msg)
 	}
-	max := 7 // 0..7
+	max := 8 // 0..8 (added Reset database)
 	switch msg.String() {
 	case "up":
 		if m.cursor > 0 {
@@ -362,7 +367,12 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		m.screen = scrMenu
 		m.cursor = 7
 	case "enter":
-		m.startEdit()
+		if m.cursor == 8 {
+			// Reset database
+			m.confirmReset = true
+		} else {
+			m.startEdit()
+		}
 	}
 	return nil
 }
@@ -520,6 +530,32 @@ func (m *model) startEdit() {
 
 func (m *model) saveField() {
 	val := m.textInput.Value()
+
+	// Handle new process creation
+	if strings.HasPrefix(m.editingField, "New ") {
+		ptype := m.processType
+		if ptype == "" {
+			if strings.Contains(m.editingField, "pair") {
+				ptype = "pair"
+			} else {
+				ptype = "single"
+			}
+		}
+		_ = core.SavePromptWithType(m.db, val, "", ptype)
+		m.openProcessList(ptype)
+		return
+	}
+
+	// Handle prompt editing
+	if strings.HasPrefix(m.editingField, "Prompt: ") {
+		name := strings.TrimPrefix(m.editingField, "Prompt: ")
+		_ = core.SavePrompt(m.db, name, val)
+		m.promptViewing = name
+		m.promptText = val
+		// stay on the process detail view
+		return
+	}
+
 	switch m.cursor {
 	case 0:
 		m.src = val
@@ -604,4 +640,219 @@ func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// ─── process submenu ────────────────────────────────────────────────────────
+
+func (m *model) openProcessList(ptype string) {
+	names, _ := core.ListPromptsByType(m.db, ptype)
+	if len(names) == 0 {
+		// fallback to defaults
+		if ptype == "pair" {
+			names = []string{"phase2"}
+		} else {
+			names = []string{"tag_single"}
+		}
+	}
+	m.processType = ptype
+	m.processList = names
+	m.processName = ""
+	m.cursor = 0
+	m.screen = scrProcessList
+}
+
+func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.editingField != "" {
+		// editing a new process prompt
+		switch msg.String() {
+		case "enter":
+			// save the new prompt
+			name := strings.TrimPrefix(m.editingField, "New "+m.processType+" process: ")
+			val := m.textInput.Value()
+			_ = core.SavePromptWithType(m.db, name, val, m.processType)
+			m.editingField = ""
+			m.openProcessList(m.processType)
+			return nil
+		case "esc":
+			m.editingField = ""
+			m.openProcessList(m.processType)
+			return nil
+		}
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return cmd
+	}
+
+	max := len(m.processList) // last item is "add new"
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor < max {
+			m.cursor++
+		}
+	case "enter":
+		if m.cursor < len(m.processList) {
+			// open process detail
+			m.processName = m.processList[m.cursor]
+			m.cursor = 0
+			m.processConfirmDelete = false
+			m.screen = scrProcessDetail
+		} else {
+			// add new process
+			m.textInput.SetValue("")
+			m.textInput.Focus()
+			m.editingField = "New " + m.processType + " process: "
+		}
+	case "esc":
+		m.screen = scrMenu
+		m.cursor = 1
+		if m.processType == "single" {
+			m.cursor = 2
+		}
+		m.processType = ""
+		m.processList = nil
+	}
+	return nil
+}
+
+func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.promptViewing != "" {
+		return m.promptDetailKeys(msg)
+	}
+	if m.processConfirmDelete {
+		switch msg.String() {
+		case "y", "Y":
+			_ = core.DeletePrompt(m.db, m.processName)
+			m.processConfirmDelete = false
+			m.openProcessList(m.processType)
+			return nil
+		default:
+			m.processConfirmDelete = false
+		}
+		return nil
+	}
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor < 4 {
+			m.cursor++
+		}
+	case "enter":
+		switch m.cursor {
+		case 0: // run
+			var phase core.Phase
+			if m.processType == "pair" {
+				phase = core.PhaseAnalyze
+			} else {
+				phase = core.PhaseTagSingle
+			}
+			return m.startPhase(phase, false, false, m.processName)
+		case 1: // export for this process
+			return m.startPhase(core.PhaseExportProcess, false, true, m.processName)
+		case 2: // edit prompt
+			m.promptViewing = m.processName
+			m.promptText = core.LoadPrompt(m.db, m.promptViewing)
+			m.cursor = 0
+		case 3: // delete
+			m.processConfirmDelete = true
+		case 4: // back
+			m.openProcessList(m.processType)
+		}
+	case "esc":
+		m.openProcessList(m.processType)
+	}
+	return nil
+}
+
+func (m *model) promptDetailKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "e", "E":
+		m.textInput.SetValue(m.promptText)
+		m.textInput.Focus()
+		m.editingField = "Prompt: " + m.promptViewing
+		return nil
+	case "r", "R":
+		if text, err := core.ReloadPromptFromFile(m.db, m.promptViewing); err == nil {
+			m.promptText = text
+		}
+	case "esc":
+		m.promptViewing = ""
+	}
+	return nil
+}
+
+// ─── filesystem search for compare ──────────────────────────────────────────
+
+type fsSearchMsg struct {
+	files  []string
+	err    error
+	filter string
+}
+
+func (m *model) openFsSearch() {
+	m.fsFilter = ""
+	m.fsFiles = nil
+	m.cursor = 0
+	m.screen = scrFsSearch
+}
+
+func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		max := len(m.fsFiles)
+		if max > 30 {
+			max = 30
+		}
+		if m.cursor < max-1 {
+			m.cursor++
+		}
+	case "enter":
+		if len(m.fsFiles) > 0 && m.cursor < len(m.fsFiles) {
+			m.evalResult = ""
+			m.evalErr = ""
+			m.evalLoading = true
+			m.evalReturn = scrFsSearch
+			m.evalReturnCursor = m.cursor
+			m.screen = scrEval
+			return compareFileCmd(m.db, m.fsFiles[m.cursor], m.host, m.modelName, m.maxChars)
+		}
+	case "esc":
+		m.screen = scrData
+		m.dataCursor = 2
+	case "backspace":
+		r := []rune(m.fsFilter)
+		if len(r) > 0 {
+			m.fsFilter = string(r[:len(r)-1])
+		}
+		m.cursor = 0
+		return fsSearchCmd(m.fsFilter)
+	default:
+		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.fsFilter += string(msg.Runes[0])
+			m.cursor = 0
+			return fsSearchCmd(m.fsFilter)
+		}
+	}
+	return nil
+}
+
+func fsSearchCmd(filter string) tea.Cmd {
+	return func() tea.Msg {
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+		files, err := core.FindFiles(cwd, filter)
+		return fsSearchMsg{files: files, err: err, filter: filter}
+	}
 }

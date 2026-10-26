@@ -98,8 +98,12 @@ func stripCodeFences(s string) string {
 	return s
 }
 
-func buildPrompt(db *sql.DB, a, b note) string {
-	tmpl := LoadPrompt(db, "phase2")
+func buildPrompt(db *sql.DB, c Config, a, b note) string {
+	promptName := c.PromptName
+	if promptName == "" {
+		promptName = "phase2"
+	}
+	tmpl := LoadPrompt(db, promptName)
 	if tmpl == "" {
 		tmpl = "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}"
 	}
@@ -147,7 +151,7 @@ func askOllama(ctx context.Context, c Config, prompt string) (pairResult, error)
 }
 
 // savePair saves the pair result and returns how many NEW tags and links were added.
-func savePair(ctx context.Context, db *sql.DB, a, b note, r pairResult, model string) (newTags, newLinks int, err error) {
+func savePair(ctx context.Context, db *sql.DB, a, b note, r pairResult, model, promptName string) (newTags, newLinks int, err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, 0, err
@@ -197,7 +201,18 @@ func savePair(ctx context.Context, db *sql.DB, a, b note, r pairResult, model st
 		a.ID, b.ID, rel, model, time.Now().Format(time.RFC3339)); err != nil {
 		return 0, 0, err
 	}
-	return newTags, newLinks, tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return newTags, newLinks, err
+	}
+	// Save process output per note
+	if promptName != "" {
+		tagsA, _ := json.Marshal(map[string]any{"tags": r.TagsA})
+		tagsB, _ := json.Marshal(map[string]any{"tags": r.TagsB})
+		SaveProcessOutput(db, a.ID, promptName, string(tagsA))
+		SaveProcessOutput(db, b.ID, promptName, string(tagsB))
+	}
+	return newTags, newLinks, nil
 }
 
 // saveMu protects savePair from races during parallel links_md rebuilds.
@@ -305,7 +320,7 @@ func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 			var res pairResult
 			var lastErr error
 			for attempt := 0; attempt < 3; attempt++ {
-				if res, lastErr = askOllama(ctx, c, buildPrompt(db, j.a, j.b)); lastErr == nil {
+				if res, lastErr = askOllama(ctx, c, buildPrompt(db, c, j.a, j.b)); lastErr == nil {
 					break
 				}
 				if ctx.Err() != nil {
@@ -318,7 +333,7 @@ func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 				return
 			}
 			saveMu.Lock()
-			nt, nl, err := savePair(ctx, db, j.a, j.b, res, c.Model)
+			nt, nl, err := savePair(ctx, db, j.a, j.b, res, c.Model, c.PromptName)
 			saveMu.Unlock()
 			if err != nil {
 				select {

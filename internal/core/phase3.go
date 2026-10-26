@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -123,7 +124,7 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src string) error 
 	}
 	var total int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&total)
-	r.SetPhase("3/3 write vault → "+out, 0, total)
+	r.SetPhase("3/3 export for Obsidian → "+out, 0, total)
 
 	type rec struct {
 		id            int64
@@ -188,5 +189,67 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src string) error 
 		r.Advance(false)
 	}
 	r.Logf("phase 3: written/updated files — %d", written)
+	return nil
+}
+
+// ExportForProcess writes process-specific output to a subfolder.
+func ExportForProcess(ctx context.Context, r Reporter, db *sql.DB, out, processName string, src string) error {
+	absOut, err := filepath.Abs(out)
+	if err != nil {
+		return err
+	}
+	// Write to a subfolder named after the process
+	absOut = filepath.Join(absOut, "process_"+processName)
+
+	ids, err := ListNotesWithOutput(db, processName)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		r.Logf("no output for process %q", processName)
+		return nil
+	}
+
+	r.SetPhase("export for process "+processName+" → "+absOut, 0, len(ids))
+
+	written := 0
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return nil
+		}
+		var path, content string
+		if err := db.QueryRow(`SELECT file_path, content FROM notes WHERE id=?`, id).Scan(&path, &content); err != nil {
+			r.Fail("note %d: %v", id, err)
+			r.Advance(true)
+			continue
+		}
+		r.SetCurrent(path)
+
+		output := LoadProcessOutput(db, id, processName)
+		var res struct {
+			Tags []string `json:"tags"`
+		}
+		tags := []string{}
+		if json.Unmarshal([]byte(output), &res) == nil {
+			tags = cleanTags(res.Tags)
+		}
+
+		// Compose with process-specific tags
+		text := compose(content, tags, "")
+		dst := filepath.Join(absOut, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			r.Fail("%s: %v", path, err)
+			r.Advance(true)
+			continue
+		}
+		if err := os.WriteFile(dst, []byte(text), 0o644); err != nil {
+			r.Fail("%s: %v", path, err)
+			r.Advance(true)
+			continue
+		}
+		written++
+		r.Advance(false)
+	}
+	r.Logf("process %q: written files — %d", processName, written)
 	return nil
 }

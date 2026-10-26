@@ -43,6 +43,8 @@ type state struct {
 	maxChars, workers              *widget.Entry
 	sourceSelect                   *widget.Select
 	formatsEntry                   *widget.Entry
+	pairSelect                     *widget.Select
+	singleSelect                   *widget.Select
 
 	phaseLabel   *widget.Label
 	currentLabel *widget.Label
@@ -126,15 +128,30 @@ func newState(db *sql.DB, dbPath string) *state {
 
 	s.runButtons = []*widget.Button{
 		widget.NewButton("Import", func() { s.startImport() }),
-		widget.NewButton("Pairs", func() { s.startPhase(core.PhaseAnalyze) }),
-		widget.NewButton("One-by-one tags", func() { s.startPhase(core.PhaseTagSingle) }),
-		widget.NewButton("Write vault", func() { s.startPhase(core.PhaseWrite) }),
+		widget.NewButton("Pairs", func() { s.startPhasePrompt(core.PhaseAnalyze, s.pairSelect.Selected) }),
+		widget.NewButton("Tags one-by-one", func() { s.startPhasePrompt(core.PhaseTagSingle, s.singleSelect.Selected) }),
+		widget.NewButton("Export for Obsidian", func() { s.startPhase(core.PhaseWrite) }),
 		widget.NewButton("All phases", func() { s.startPhase(core.PhaseAll) }),
 		widget.NewButton("Remove file…", func() { s.promptRemove(false) }),
 		widget.NewButton("Compare file…", func() { s.promptCompare() }),
 	}
 	s.resetBtn = widget.NewButton("Reset database", s.confirmReset)
 	s.resetBtn.Importance = widget.DangerImportance
+
+	// Pair and single process selectors
+	s.pairSelect = widget.NewSelect([]string{"phase2"}, func(string) {})
+	s.singleSelect = widget.NewSelect([]string{"tag_single"}, func(string) {})
+
+	// Helper to create a process management row with add/remove buttons
+	processRow := func(sel *widget.Select, ptype string) fyne.CanvasObject {
+		addBtn := widget.NewButton("+", func() { s.promptAddProcess(ptype) })
+		remBtn := widget.NewButton("−", func() { s.promptRemoveProcess(ptype, sel) })
+		return container.NewBorder(nil, nil, remBtn, addBtn, sel)
+	}
+
+	// Add selectors with management buttons to the form
+	form.Append("Pair process", processRow(s.pairSelect, "pair"))
+	form.Append("Single process", processRow(s.singleSelect, "single"))
 
 	var buttons []fyne.CanvasObject
 	for _, b := range s.runButtons {
@@ -371,23 +388,21 @@ func (s *state) promptRemove(withLinks bool) {
 	}, s.win)
 }
 
-// promptCompare asks for a file path and evaluates its novelty without adding
-// it to the database.
+// promptCompare opens a file picker and evaluates the selected file's novelty.
 func (s *state) promptCompare() {
-	target := widget.NewEntry()
-	target.SetPlaceHolder("file path to compare")
-	dialog.ShowCustomConfirm("Compare file", "Compare", "Cancel", target, func(ok bool) {
-		if !ok {
+	d := dialog.NewFileOpen(func(uri fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, s.win)
 			return
 		}
+		if uri == nil {
+			return
+		}
+		path := uri.URI().Path()
 		s.mu.Lock()
 		db := s.db
 		s.mu.Unlock()
 		if db == nil {
-			return
-		}
-		path := strings.TrimSpace(target.Text)
-		if path == "" {
 			return
 		}
 		cfg, _, _, _, _ := s.readConfig()
@@ -398,6 +413,8 @@ func (s *state) promptCompare() {
 		}
 		dialog.ShowInformation("Novelty", result, s.win)
 	}, s.win)
+	d.SetTitleText("Select file to compare")
+	d.Show()
 }
 
 // useDB switches to the database at path if needed.
@@ -423,6 +440,10 @@ func (s *state) useDB(path string) error {
 }
 
 func (s *state) startPhase(phase core.Phase) {
+	s.startPhasePrompt(phase, "")
+}
+
+func (s *state) startPhasePrompt(phase core.Phase, promptName string) {
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
@@ -435,6 +456,7 @@ func (s *state) startPhase(phase core.Phase) {
 		dialog.ShowError(err, s.win)
 		return
 	}
+	cfg.PromptName = promptName
 	if err := s.useDB(dbPath); err != nil {
 		dialog.ShowError(err, s.win)
 		return
@@ -528,6 +550,75 @@ func (s *state) refreshStats() {
 		"Notes: %d  |  With tags: %d  |  Tags: %d  |  Links: %d  |  Pairs: %d/%d  |  Written: %d",
 		st.Notes, st.Tagged, st.UniqTags, st.Links, st.PairsDone, pairs, st.Written,
 	))
+	// Refresh process selectors
+	if pairNames, _ := core.ListPromptsByType(db, "pair"); len(pairNames) > 0 {
+		s.pairSelect.Options = pairNames
+		if s.pairSelect.Selected == "" {
+			s.pairSelect.SetSelected(pairNames[0])
+		}
+	} else {
+		s.pairSelect.Options = []string{"phase2"}
+		s.pairSelect.SetSelected("phase2")
+	}
+	s.pairSelect.Refresh()
+	if singleNames, _ := core.ListPromptsByType(db, "single"); len(singleNames) > 0 {
+		s.singleSelect.Options = singleNames
+		if s.singleSelect.Selected == "" {
+			s.singleSelect.SetSelected(singleNames[0])
+		}
+	} else {
+		s.singleSelect.Options = []string{"tag_single"}
+		s.singleSelect.SetSelected("tag_single")
+	}
+	s.singleSelect.Refresh()
+}
+
+// promptAddProcess opens a dialog to create a new process.
+func (s *state) promptAddProcess(ptype string) {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("process name")
+	label := "Add pair process"
+	if ptype == "single" {
+		label = "Add one-by-one process"
+	}
+	dialog.ShowCustomConfirm(label, "Create", "Cancel", nameEntry, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(nameEntry.Text)
+		if name == "" {
+			return
+		}
+		s.mu.Lock()
+		db := s.db
+		s.mu.Unlock()
+		if db == nil {
+			return
+		}
+		core.SavePromptWithType(db, name, "", ptype)
+		s.refreshStats()
+	}, s.win)
+}
+
+// promptRemoveProcess opens a confirmation to remove the selected process.
+func (s *state) promptRemoveProcess(ptype string, sel *widget.Select) {
+	name := sel.Selected
+	if name == "" {
+		return
+	}
+	dialog.ShowConfirm("Remove process", "Delete process "+name+" and all its data?", func(ok bool) {
+		if !ok {
+			return
+		}
+		s.mu.Lock()
+		db := s.db
+		s.mu.Unlock()
+		if db == nil {
+			return
+		}
+		core.DeletePrompt(db, name)
+		s.refreshStats()
+	}, s.win)
 }
 
 // guiReporter translates core progress events into Fyne UI updates.

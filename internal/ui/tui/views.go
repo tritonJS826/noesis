@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -39,6 +40,12 @@ func (m *model) View() string {
 		return m.viewFilePicker()
 	case scrEval:
 		return m.viewEval()
+	case scrProcessList:
+		return m.viewProcessList()
+	case scrProcessDetail:
+		return m.viewProcessDetail()
+	case scrFsSearch:
+		return m.viewFsSearch()
 	default:
 		return m.viewMenu()
 	}
@@ -61,13 +68,12 @@ func (m *model) viewMenu() string {
 	items := []string{
 		"Import",
 		"Data processing — pairs",
-		"Data processing — one by one (tags)",
-		"Write vault",
+		"Data processing — one by one",
+		"Export for Obsidian",
 		"All phases",
 		"Work with data",
 		"Evaluate note uniqueness",
 		"Settings",
-		"Reset database",
 	}
 
 	var phaseLines []string
@@ -77,9 +83,6 @@ func (m *model) viewMenu() string {
 			cursor = tuiSel.Render("▸ ")
 		}
 		line := cursor + item
-		if i == 8 {
-			line = tuiRed.Render(line)
-		}
 		phaseLines = append(phaseLines, lipgloss.NewStyle().Width(cw).Render(line))
 	}
 
@@ -263,7 +266,7 @@ func (m *model) viewData() string {
 	items := []string{
 		"Remove file",
 		"Remove file + obsidian links",
-		"Compare file (without adding to db)",
+		"Compare file (filesystem search)",
 	}
 
 	var lines []string
@@ -365,12 +368,15 @@ func (m *model) viewSettings() string {
 	if m.promptList != nil {
 		return m.viewPromptSub()
 	}
+	if m.confirmReset {
+		return m.viewResetConfirm()
+	}
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS", "PROMPTS"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS", "PROMPTS", "Reset database"}
 	vals := []string{m.src, m.out, m.dbPath, m.modelName, m.host,
-		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "edit…"}
+		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "edit…", ""}
 
 	var lines []string
 	for i, k := range keys {
@@ -378,13 +384,32 @@ func (m *model) viewSettings() string {
 		if m.cursor == i {
 			cursor = tuiSel.Render("▸ ")
 		}
-		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(
-			fmt.Sprintf("%s%-9s: %s", cursor, k, vals[i]),
-		))
+		style := lipgloss.NewStyle().Width(cw)
+		line := fmt.Sprintf("%s%-9s: %s", cursor, k, vals[i])
+		if i == 8 {
+			if m.cursor == i {
+				line = cursor + tuiRed.Render(k)
+			} else {
+				line = style.Render("  " + tuiRed.Render(k))
+			}
+		} else {
+			line = style.Render(line)
+		}
+		lines = append(lines, line)
 	}
 	lines = append(lines, "")
 	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter edit  ·  ESC back"))
 
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewResetConfirm() string {
+	w := m.width
+	cw := w - 4
+	lines := []string{
+		tuiYel.Width(cw).Render("Delete database " + m.dbPath + " and all data? (y/N)"),
+	}
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
@@ -549,6 +574,149 @@ func (m *model) viewEval() string {
 		lines = append(lines, "")
 		lines = append(lines, tuiDim.Width(cw).Render("Press any key to return"))
 	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewProcessList() string {
+	if m.editingField != "" {
+		return m.viewTextEdit()
+	}
+	w := m.width
+	cw := w - 4
+
+	label := "Pair processes"
+	if m.processType == "single" {
+		label = "One-by-one processes"
+	}
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render(label))
+	lines = append(lines, "")
+
+	for i, n := range m.processList {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n))
+	}
+
+	// "Add new" row
+	addCursor := "  "
+	if m.cursor == len(m.processList) {
+		addCursor = tuiSel.Render("▸ ")
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiGreen.Width(cw).Render(addCursor+"+ Add new "+m.processType+" process"))
+
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter open  ·  ESC back"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewProcessDetail() string {
+	if m.editingField != "" {
+		return m.viewTextEdit()
+	}
+	if m.promptViewing != "" {
+		// viewing/editing a prompt
+		return m.viewProcessPrompt()
+	}
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Process: "+m.processName))
+	lines = append(lines, "")
+
+	items := []string{
+		"Run",
+		"Export for " + m.processName,
+		"Edit prompt",
+		"Delete",
+		"Back",
+	}
+
+	for i, item := range items {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		style := lipgloss.NewStyle().Width(cw)
+		if m.processConfirmDelete && i == 3 {
+			style = style.Foreground(lipgloss.Color("#ff0000"))
+			item = "Delete — are you sure? (y/N)"
+		}
+		lines = append(lines, style.Render(cursor+item))
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter  ·  ESC back"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewProcessPrompt() string {
+	w := m.width
+	cw := w - 4
+
+	lines := []string{
+		lipgloss.NewStyle().Bold(true).Width(cw).Render("Prompt: " + m.promptViewing),
+		"",
+	}
+	for _, line := range strings.Split(m.promptText, "\n") {
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(line))
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("ESC back  ·  e edit  ·  r reload from file"))
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewFsSearch() string {
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Compare file — search filesystem"))
+
+	filterLine := m.fsFilter
+	if filterLine == "" {
+		filterLine = tuiDim.Render("type to search files…")
+	} else {
+		filterLine += "█"
+	}
+	lines = append(lines, lipgloss.NewStyle().Width(cw).Render(filterLine))
+	lines = append(lines, "")
+
+	if len(m.fsFiles) == 0 && m.fsFilter != "" {
+		lines = append(lines, tuiDim.Width(cw).Render("no files found"))
+	} else {
+		// Show first 30 results
+		show := m.fsFiles
+		if len(show) > 30 {
+			show = show[:30]
+		}
+		for i, f := range show {
+			cursor := "  "
+			if m.cursor == i {
+				cursor = tuiSel.Render("▸ ")
+			}
+			// Show relative path
+			display := f
+			if cwd, err := os.Getwd(); err == nil {
+				display = strings.TrimPrefix(f, cwd+string(os.PathSeparator))
+			}
+			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+display))
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter compare  ·  ESC back", len(m.fsFiles))))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)

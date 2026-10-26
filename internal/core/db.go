@@ -43,7 +43,14 @@ CREATE TABLE IF NOT EXISTS pairs(
 );
 CREATE TABLE IF NOT EXISTS prompts(
 	name   TEXT PRIMARY KEY,
-	prompt TEXT NOT NULL
+	prompt TEXT NOT NULL,
+	type   TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS process_output(
+	note_id      INTEGER NOT NULL REFERENCES notes(id),
+	process_name TEXT NOT NULL,
+	output       TEXT NOT NULL,
+	PRIMARY KEY(note_id, process_name)
 );
 `
 
@@ -59,6 +66,9 @@ func OpenDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if err := ensureColumn(db, "notes", "mime_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
+	if err := ensureColumn(db, "prompts", "type", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
 	seedPrompts(db)
@@ -85,7 +95,7 @@ func ensureColumn(db *sql.DB, table, column, decl string) error {
 			return nil
 		}
 	}
-	_, err = db.Exec(fmt.Sprintf("ALTER TABLE notes ADD COLUMN %s %s", column, decl))
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl))
 	return err
 }
 
@@ -114,7 +124,8 @@ func seedPrompts(db *sql.DB) {
 				continue
 			}
 			name := strings.TrimSuffix(e.Name(), ".txt")
-			db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, name, string(data))
+			ptype := guessPromptType(name, "")
+			db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, name, string(data), ptype)
 		}
 		return true
 	}
@@ -124,12 +135,24 @@ func seedPrompts(db *sql.DB) {
 	tryDir("prompts")
 	// always ensure the built-in prompts exist (INSERT OR IGNORE keeps any
 	// user edits and any file-sourced version intact)
-	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "phase2",
-		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}")
-	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "eval",
-		"Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}")
-	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt) VALUES(?,?)`, "tag_single",
-		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: {FILE_NAME}) ===\n{CONTENT}")
+	pairFallback := "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}"
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "phase2", pairFallback, "pair")
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "eval",
+		"Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}", "")
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "tag_single",
+		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: {FILE_NAME}) ===\n{CONTENT}", "single")
+}
+
+// guessPromptType returns a prompt type based on naming conventions.
+func guessPromptType(name, fallback string) string {
+	lower := strings.ToLower(name)
+	if strings.Contains(lower, "pair") || strings.Contains(lower, "phase2") {
+		return "pair"
+	}
+	if strings.Contains(lower, "single") || strings.Contains(lower, "tag_single") || strings.Contains(lower, "one") {
+		return "single"
+	}
+	return fallback
 }
 
 // LoadPrompt returns a prompt by name, or an empty string if it does not exist.
@@ -265,10 +288,86 @@ func ListPrompts(db *sql.DB) ([]string, error) {
 	return names, rows.Err()
 }
 
-// SavePrompt stores a prompt in the database.
+// SavePrompt stores a prompt in the database, preserving its existing type.
 func SavePrompt(db *sql.DB, name, text string) error {
-	_, err := db.Exec(`INSERT OR REPLACE INTO prompts(name, prompt) VALUES(?,?)`, name, text)
+	_, err := db.Exec(`INSERT OR REPLACE INTO prompts(name, prompt, type) VALUES(?,?,COALESCE((SELECT type FROM prompts WHERE name=?),''))`, name, text, name)
 	return err
+}
+
+// SavePromptWithType stores a prompt with an explicit type.
+func SavePromptWithType(db *sql.DB, name, text, ptype string) error {
+	_, err := db.Exec(`INSERT OR REPLACE INTO prompts(name, prompt, type) VALUES(?,?,?)`, name, text, ptype)
+	return err
+}
+
+// DeletePrompt removes a prompt and its associated process output from the database.
+func DeletePrompt(db *sql.DB, name string) error {
+	if _, err := db.Exec(`DELETE FROM process_output WHERE process_name=?`, name); err != nil {
+		return err
+	}
+	_, err := db.Exec(`DELETE FROM prompts WHERE name=?`, name)
+	return err
+}
+
+// SaveProcessOutput stores the process output for a specific note.
+func SaveProcessOutput(db *sql.DB, noteID int64, processName, output string) error {
+	_, err := db.Exec(`INSERT OR REPLACE INTO process_output(note_id, process_name, output) VALUES(?,?,?)`, noteID, processName, output)
+	return err
+}
+
+// LoadProcessOutput returns the stored output for a note and process.
+func LoadProcessOutput(db *sql.DB, noteID int64, processName string) string {
+	var out string
+	if db.QueryRow(`SELECT output FROM process_output WHERE note_id=? AND process_name=?`, noteID, processName).Scan(&out) == nil {
+		return out
+	}
+	return ""
+}
+
+// ListNotesWithOutput returns note IDs that have output for the given process.
+func ListNotesWithOutput(db *sql.DB, processName string) ([]int64, error) {
+	rows, err := db.Query(`SELECT note_id FROM process_output WHERE process_name=? ORDER BY note_id`, processName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ListPromptsByType returns prompt names filtered by type, ordered alphabetically.
+func ListPromptsByType(db *sql.DB, ptype string) ([]string, error) {
+	rows, err := db.Query(`SELECT name FROM prompts WHERE type=? ORDER BY name`, ptype)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		names = append(names, n)
+	}
+	return names, rows.Err()
+}
+
+// LoadPromptType returns the type of a prompt, or empty string.
+func LoadPromptType(db *sql.DB, name string) string {
+	var ptype string
+	if db.QueryRow(`SELECT type FROM prompts WHERE name=?`, name).Scan(&ptype) == nil {
+		return ptype
+	}
+	return ""
 }
 
 // ReloadPromptFromFile reads prompts/<name>.txt, saves it to the database and

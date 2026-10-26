@@ -15,7 +15,7 @@ import (
 	"noesis/internal/ui/consoleShared"
 )
 
-const usageHeader = `noesis-cli — import notes, tag/link them with ollama and write an Obsidian vault.
+const usageHeader = `noesis-cli — import notes, tag/link them with ollama and export an Obsidian vault.
 
 Usage:
   noesis-cli [flags]
@@ -40,9 +40,10 @@ func Run(args []string) error {
 	model := fs.String("model", def.Model, "ollama model")
 	maxChars := fs.Int("maxchars", def.MaxChars, "max characters per note sent to ollama")
 	workers := fs.Int("workers", def.Workers, "concurrent ollama requests (1-100)")
-	phaseName := fs.String("phase", "all", "phase to run: import, pairs, single, write, all")
+	phaseName := fs.String("phase", "all", "phase to run: import, pairs, single, export, all")
 	source := fs.String("source", "", "import source: filesystem, zip or json (default filesystem)")
 	format := fs.String("format", "", "comma-separated extensions to import, e.g. md,txt,csv,png (empty = default set)")
+	promptName := fs.String("prompt", "", "prompt name for pairs/single phases (empty uses default)")
 
 	removePath := fs.String("remove", "", "remove note matching this path from the db")
 	removeLinksPath := fs.String("remove-links", "", "remove note matching this path and scrub its obsidian links")
@@ -71,7 +72,7 @@ func Run(args []string) error {
 	}
 	defer db.Close()
 
-	cfg := core.Config{Host: *host, Model: *model, MaxChars: *maxChars, Workers: *workers}
+	cfg := core.Config{Host: *host, Model: *model, MaxChars: *maxChars, Workers: *workers, PromptName: *promptName}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -145,13 +146,13 @@ func parsePhase(s string) (core.Phase, error) {
 		return core.PhaseImport, nil
 	case "2", "analyze", "tags", "pairs":
 		return core.PhaseAnalyze, nil
-	case "3", "write":
+	case "3", "export", "write":
 		return core.PhaseWrite, nil
 	case "single", "1x1", "tags-single", "one":
 		return core.PhaseTagSingle, nil
 	case "all", "":
 		return core.PhaseAll, nil
 	default:
-		return 0, fmt.Errorf("unknown phase %q (use import, pairs, single, write or all)", s)
+		return 0, fmt.Errorf("unknown phase %q (use import, pairs, single, export or all)", s)
 	}
 }

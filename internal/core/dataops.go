@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -273,7 +274,11 @@ func filepathBase(p string) string {
 // TagSingle asks ollama for tags for a single note and stores them. Returns
 // the number of new tags added.
 func TagSingle(ctx context.Context, db *sql.DB, c Config, id int64) (int, error) {
-	tmpl := LoadPrompt(db, "tag_single")
+	promptName := c.PromptName
+	if promptName == "" {
+		promptName = "tag_single"
+	}
+	tmpl := LoadPrompt(db, promptName)
 	if tmpl == "" {
 		tmpl = "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: {FILE_NAME}) ===\n{CONTENT}"
 	}
@@ -317,6 +322,11 @@ func TagSingle(ctx context.Context, db *sql.DB, c Config, id int64) (int, error)
 		return 0, fmt.Errorf("invalid JSON from model: %w", err)
 	}
 
+	// Save process output for this note
+	if promptName != "" {
+		_ = SaveProcessOutput(db, id, promptName, stripCodeFences(out.Response))
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -352,6 +362,11 @@ func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	}
 	rows.Close()
 
+	promptName := c.PromptName
+	if promptName == "" {
+		promptName = "tag_single"
+	}
+
 	r.SetPhase("tags one-by-one ("+c.Model+")", 0, len(ids))
 	if len(ids) == 0 {
 		r.Logf("all notes already tagged")
@@ -375,4 +390,68 @@ func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	}
 	r.Logf("one-by-one: tagged — %d", len(ids))
 	return nil
+}
+
+// FindFiles searches the filesystem starting from the given directory for files
+// whose path contains the query (case-insensitive). Returns at most 200 matches.
+func FindFiles(dir, query string) ([]string, error) {
+	lower := strings.ToLower(query)
+	var matches []string
+	err := filepathWalk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip inaccessible
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "__pycache__" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if lower == "" || strings.Contains(strings.ToLower(path), lower) {
+			matches = append(matches, path)
+			if len(matches) >= 200 {
+				return fmt.Errorf("limit") // break early
+			}
+		}
+		return nil
+	})
+	if err != nil && err.Error() != "limit" {
+		return nil, err
+	}
+	return matches, nil
+}
+
+func filepathWalk(dir string, fn func(path string, info os.FileInfo, err error) error) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		fullPath := filepathJoin(dir, e.Name())
+		if err := fn(fullPath, info, nil); err != nil {
+			if err.Error() == "limit" {
+				return err
+			}
+			continue
+		}
+		if e.IsDir() {
+			if err := filepathWalk(fullPath, fn); err != nil {
+				if err.Error() == "limit" {
+					return err
+				}
+				continue
+			}
+		}
+	}
+	return nil
+}
+
+func filepathJoin(dir, name string) string {
+	sep := string(os.PathSeparator)
+	return strings.TrimRight(dir, "/\\") + sep + name
 }
