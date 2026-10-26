@@ -148,15 +148,33 @@ func (m *model) importKeys(msg tea.KeyMsg) tea.Cmd {
 
 func (m *model) formatsKeys(msg tea.KeyMsg) tea.Cmd {
 	formats := core.KnownFormats()
+	page := m.listRows(5)
+	if page < 1 {
+		page = 10
+	}
 	switch msg.String() {
-	case "up":
+	case "up", "k":
 		if m.fmtCursor > 0 {
 			m.fmtCursor--
 		}
-	case "down":
+	case "down", "j":
 		if m.fmtCursor < len(formats)-1 {
 			m.fmtCursor++
 		}
+	case "pgup":
+		m.fmtCursor -= page
+		if m.fmtCursor < 0 {
+			m.fmtCursor = 0
+		}
+	case "pgdown":
+		m.fmtCursor += page
+		if m.fmtCursor >= len(formats) {
+			m.fmtCursor = len(formats) - 1
+		}
+	case "home":
+		m.fmtCursor = 0
+	case "end":
+		m.fmtCursor = len(formats) - 1
 	case "enter", " ":
 		if m.fmtCursor < len(formats) {
 			m.toggleFormat(formats[m.fmtCursor].Ext)
@@ -350,7 +368,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.promptList != nil {
+	if m.promptViewing != "" {
 		return m.promptKeys(msg)
 	}
 	max := 8 // 0..8 (added Reset database)
@@ -521,9 +539,8 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
 		m.editingField = "WORKERS — concurrency (1–100)"
-	case 7: // PROMPTS
-		m.editingField = ""
-		m.openPromptList()
+	case 7: // EVAL PROMPT
+		m.openEvalPrompt()
 		return
 	}
 }
@@ -578,66 +595,29 @@ func (m *model) saveField() {
 		if m.workers > 100 {
 			m.workers = 100
 		}
-	case 7: // PROMPTS — save edited prompt
-		name := strings.TrimPrefix(m.editingField, "Prompt: ")
-		_ = core.SavePrompt(m.db, name, val)
-		m.promptViewing = name
-		m.promptText = val
-		m.promptList = []string{name}
 	}
 }
 
-func (m *model) openPromptList() {
-	names, _ := core.ListPrompts(m.db)
-	if len(names) == 0 {
-		names = []string{"phase2", "eval", "tag_single"}
-	}
-	m.promptList = names
+func (m *model) openEvalPrompt() {
+	m.promptViewing = "eval"
+	m.promptText = core.LoadPrompt(m.db, m.promptViewing)
 	m.cursor = 0
-	m.promptViewing = ""
 }
 
 func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "up":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-	case "down":
-		if m.promptViewing == "" {
-			if m.cursor < len(m.promptList)-1 {
-				m.cursor++
-			}
-		}
-	case "enter":
-		if m.promptViewing == "" && m.cursor < len(m.promptList) {
-			m.promptViewing = m.promptList[m.cursor]
-			m.promptText = core.LoadPrompt(m.db, m.promptViewing)
-			m.cursor = 0
-		}
 	case "r", "R":
-		if m.promptViewing != "" {
-			if text, err := core.ReloadPromptFromFile(m.db, m.promptViewing); err == nil {
-				m.promptText = text
-			}
+		if text, err := core.ReloadPromptFromFile(m.db, m.promptViewing); err == nil {
+			m.promptText = text
 		}
 	case "e", "E":
-		if m.promptViewing != "" {
-			m.textInput.SetValue(m.promptText)
-			m.textInput.Focus()
-			m.editingField = "Prompt: " + m.promptViewing
-			m.promptList = nil
-		}
+		m.textInput.SetValue(m.promptText)
+		m.textInput.Focus()
+		m.editingField = "Prompt: " + m.promptViewing
 	case "esc":
-		if m.promptViewing != "" {
-			m.promptViewing = ""
-			m.cursor = 0
-		} else {
-			m.promptList = nil
-			m.promptViewing = ""
-			m.screen = scrSettings
-			m.cursor = 7
-		}
+		m.promptViewing = ""
+		m.promptText = ""
+		m.cursor = 7
 	}
 	return nil
 }
@@ -809,11 +789,7 @@ func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor--
 		}
 	case "down":
-		max := len(m.fsFiles)
-		if max > 30 {
-			max = 30
-		}
-		if m.cursor < max-1 {
+		if m.cursor < len(m.fsFiles)-1 {
 			m.cursor++
 		}
 	case "enter":

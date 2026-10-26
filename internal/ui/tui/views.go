@@ -220,15 +220,21 @@ func (m *model) viewFormats() string {
 	cw := w - 4
 
 	formats := core.KnownFormats()
+	rows := m.listRows(5)
+	start, end := listWindow(len(formats), m.fmtCursor, rows)
+
 	var lines []string
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Select formats to import"))
+	lines = append(lines, lipgloss.NewStyle().Bold(true).MaxWidth(cw).Render("Select formats to import"))
+	scroll := scrollHint(start, end, len(formats))
 	switch {
 	case m.importFormats == nil:
-		lines = append(lines, tuiDim.Width(cw).Render("current: all formats  ·  a — select none"))
+		lines = append(lines, tuiDim.MaxWidth(cw).Render(scroll+"  ·  current: all formats"))
 	case len(m.importFormats) == 0:
-		lines = append(lines, tuiYel.Width(cw).Render("current: none  ·  a — select all"))
+		lines = append(lines, tuiYel.MaxWidth(cw).Render(scroll+"  ·  current: none"))
 	default:
-		lines = append(lines, tuiDim.Width(cw).Render("a — select all / none"))
+		lines = append(lines, tuiDim.MaxWidth(cw).Render(
+			fmt.Sprintf("%s  ·  %d selected", scroll, len(m.importFormats)),
+		))
 	}
 	lines = append(lines, "")
 
@@ -239,7 +245,9 @@ func (m *model) viewFormats() string {
 			selected[f.Ext] = true
 		}
 	}
-	for i, f := range formats {
+
+	for i := start; i < end; i++ {
+		f := formats[i]
 		cursor := "  "
 		mark := "[ ]"
 		if selected[f.Ext] {
@@ -248,12 +256,12 @@ func (m *model) viewFormats() string {
 		if m.fmtCursor == i {
 			cursor = tuiSel.Render("▸ ")
 		}
-		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(
 			fmt.Sprintf("%s%s  %-10s (%s)", cursor, mark, f.Ext, f.Kind),
 		))
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter/space toggle  ·  a toggle all  ·  ESC done"))
+	lines = append(lines, tuiDim.MaxWidth(cw).Render("↑↓ move · Enter toggle · a all/none · ESC done"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -324,16 +332,17 @@ func (m *model) viewPickData() string {
 	} else if len(filtered) == 0 {
 		lines = append(lines, tuiDim.Width(cw).Render("nothing found"))
 	} else {
-		for i, n := range filtered {
+		start, end := listWindow(len(filtered), m.cursor, m.listRows(6))
+		for i := start; i < end; i++ {
 			cursor := "  "
 			if m.cursor == i {
 				cursor = tuiSel.Render("▸ ")
 			}
-			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n.Path))
+			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+filtered[i].Path))
 		}
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter remove  ·  ESC back", len(filtered))))
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter remove  ·  ESC back", len(filtered))))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -365,7 +374,7 @@ func (m *model) viewSettings() string {
 	if m.editingField != "" {
 		return m.viewTextEdit()
 	}
-	if m.promptList != nil {
+	if m.promptViewing != "" {
 		return m.viewPromptSub()
 	}
 	if m.confirmReset {
@@ -374,7 +383,7 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS", "PROMPTS", "Reset database"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS", "EVAL PROMPT", "Reset database"}
 	vals := []string{m.src, m.out, m.dbPath, m.modelName, m.host,
 		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "edit…", ""}
 
@@ -418,30 +427,15 @@ func (m *model) viewPromptSub() string {
 	w := m.width
 	cw := w - 4
 
-	if m.promptViewing != "" {
-		lines := []string{
-			lipgloss.NewStyle().Bold(true).Width(cw).Render("Prompt: " + m.promptViewing),
-			"",
-		}
-		for _, line := range strings.Split(m.promptText, "\n") {
-			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(line))
-		}
-		lines = append(lines, "")
-		lines = append(lines, tuiDim.Width(cw).Render("ESC back  ·  r reload from file"))
-		content := lipgloss.JoinVertical(lipgloss.Left, lines...)
-		return tuiBox.Width(w).Render(content)
+	lines := []string{
+		lipgloss.NewStyle().Bold(true).MaxWidth(cw).Render("Prompt: " + m.promptViewing),
+		"",
 	}
-
-	var lines []string
-	for i, n := range m.promptList {
-		cursor := "  "
-		if m.cursor == i {
-			cursor = tuiSel.Render("▸ ")
-		}
-		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n))
+	for _, line := range strings.Split(m.promptText, "\n") {
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(line))
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter view  ·  ESC back"))
+	lines = append(lines, tuiDim.MaxWidth(cw).Render("ESC back  ·  e edit  ·  r reload from file"))
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
@@ -451,19 +445,24 @@ func (m *model) viewModelPicker() string {
 	cw := w - 4
 
 	var lines []string
+	start, end := listWindow(len(m.ollamaModels), m.cursor, m.listRows(2))
 	if len(m.ollamaModels) == 0 {
 		lines = append(lines, tuiRed.Width(cw).Render("no models available"))
 	} else {
-		for i, mod := range m.ollamaModels {
+		for i := start; i < end; i++ {
 			cursor := "  "
 			if m.cursor == i {
 				cursor = tuiSel.Render("▸ ")
 			}
-			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+mod))
+			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+m.ollamaModels[i]))
 		}
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter pick  ·  ESC back"))
+	hint := "↑↓ select  ·  Enter pick  ·  ESC back"
+	if len(m.ollamaModels) > 0 {
+		hint += "  ·  " + scrollHint(start, end, len(m.ollamaModels))
+	}
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
@@ -515,20 +514,22 @@ func (m *model) viewFilePicker() string {
 	lines = append(lines, "")
 
 	filtered := m.filteredNotes()
+	start, end := listWindow(len(filtered), m.cursor, m.listRows(4))
 	if len(filtered) == 0 {
 		lines = append(lines, tuiDim.Width(cw).Render("nothing found"))
 	} else {
-		for i, n := range filtered {
+		for i := start; i < end; i++ {
 			cursor := "  "
 			if m.cursor == i {
 				cursor = tuiSel.Render("▸ ")
 			}
-			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n.Name))
+			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+filtered[i].Name))
 		}
 	}
 	lines = append(lines, "")
-	footer := fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter evaluate  ·  ESC back", len(filtered))
-	lines = append(lines, tuiDim.Width(cw).Render(footer))
+	footer := fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter evaluate  ·  ESC back  ·  %s",
+		len(filtered), scrollHint(start, end, len(filtered)))
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(footer))
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
 }
@@ -595,24 +596,27 @@ func (m *model) viewProcessList() string {
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render(label))
 	lines = append(lines, "")
 
-	for i, n := range m.processList {
+	start, end := listWindow(len(m.processList), m.cursor, m.listRows(6))
+	for i := start; i < end; i++ {
 		cursor := "  "
 		if m.cursor == i {
 			cursor = tuiSel.Render("▸ ")
 		}
-		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+n))
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+m.processList[i]))
 	}
 
-	// "Add new" row
+	// "Add new" row stays visible below the scrolling process list.
 	addCursor := "  "
 	if m.cursor == len(m.processList) {
 		addCursor = tuiSel.Render("▸ ")
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiGreen.Width(cw).Render(addCursor+"+ Add new "+m.processType+" process"))
+	lines = append(lines, tuiGreen.MaxWidth(cw).Render(addCursor+"+ Add new "+m.processType+" process"))
 
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter open  ·  ESC back"))
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(
+		fmt.Sprintf("↑↓ select  ·  Enter open  ·  ESC back  ·  %s", scrollHint(start, end, len(m.processList))),
+	))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -694,29 +698,28 @@ func (m *model) viewFsSearch() string {
 	lines = append(lines, lipgloss.NewStyle().Width(cw).Render(filterLine))
 	lines = append(lines, "")
 
+	start, end := listWindow(len(m.fsFiles), m.cursor, m.listRows(5))
 	if len(m.fsFiles) == 0 && m.fsFilter != "" {
 		lines = append(lines, tuiDim.Width(cw).Render("no files found"))
 	} else {
-		// Show first 30 results
-		show := m.fsFiles
-		if len(show) > 30 {
-			show = show[:30]
-		}
-		for i, f := range show {
+		for i := start; i < end; i++ {
 			cursor := "  "
 			if m.cursor == i {
 				cursor = tuiSel.Render("▸ ")
 			}
 			// Show relative path
-			display := f
+			display := m.fsFiles[i]
 			if cwd, err := os.Getwd(); err == nil {
-				display = strings.TrimPrefix(f, cwd+string(os.PathSeparator))
+				display = strings.TrimPrefix(display, cwd+string(os.PathSeparator))
 			}
-			lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+display))
+			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+display))
 		}
 	}
 	lines = append(lines, "")
-	lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("found: %d  ·  ↑↓ select  ·  Enter compare  ·  ESC back", len(m.fsFiles))))
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf(
+		"found: %d  ·  ↑↓ select  ·  Enter compare  ·  ESC back  ·  %s",
+		len(m.fsFiles), scrollHint(start, end, len(m.fsFiles)),
+	)))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)

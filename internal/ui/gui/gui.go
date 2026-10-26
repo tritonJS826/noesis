@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"path/filepath"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,13 +16,51 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
 	"noesis/internal/core"
 )
 
 const maxLogLines = 200
+
+type screen int
+
+const (
+	scrMenu screen = iota
+	scrImport
+	scrFormats
+	scrData
+	scrNotes
+	scrFsSearch
+	scrEval
+	scrSettings
+	scrPromptView
+	scrProcessList
+	scrProcessDetail
+	scrRunning
+)
+
+type noteAction int
+
+const (
+	noteRemove noteAction = iota
+	noteRemoveLinks
+	noteEval
+)
+
+// menuItems mirrors the TUI main menu one-to-one.
+var menuItems = []string{
+	"Import",
+	"Data processing — pairs",
+	"Data processing — one by one",
+	"Export for Obsidian",
+	"All phases",
+	"Work with data",
+	"Evaluate note uniqueness",
+	"Settings",
+}
+
+var importSourceNames = []string{"filesystem", "zip archive", "json array"}
 
 type state struct {
 	app fyne.App
@@ -39,12 +77,10 @@ type state struct {
 	runTags, runLinks int
 	logs              []string
 
+	// persistent settings widgets (shared by the settings and import screens)
 	src, out, dbEntry, model, host *widget.Entry
 	maxChars, workers              *widget.Entry
-	sourceSelect                   *widget.Select
-	formatsEntry                   *widget.Entry
-	pairSelect                     *widget.Select
-	singleSelect                   *widget.Select
+	formatsLabel                   *widget.Label
 
 	phaseLabel   *widget.Label
 	currentLabel *widget.Label
@@ -52,9 +88,39 @@ type state struct {
 	statsLabel   *widget.Label
 	logLabel     *widget.Label
 	progress     *widget.ProgressBar
+	statusPanel  fyne.CanvasObject
 
-	runButtons []*widget.Button
-	resetBtn   *widget.Button
+	// navigation
+	screen     screen
+	noteBack   screen
+	fsBack     screen
+	evalBack   screen
+	promptBack screen
+
+	// import
+	importSource  core.ImportSource
+	importFormats core.FormatSet
+
+	// notes (remove / evaluate)
+	noteAction noteAction
+	noteFilter string
+	notes      []core.NoteInfo
+
+	// filesystem search for compare
+	fsFilter string
+	fsFiles  []string
+
+	// processes / prompts
+	processType string
+	processName string
+	promptName  string
+	promptText  string
+	promptEdit  bool
+
+	// novelty result
+	evalResult  string
+	evalErr     string
+	evalLoading bool
 }
 
 // Run opens the database and starts the desktop application. It blocks until
@@ -97,23 +163,13 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.workers = widget.NewEntry()
 	s.workers.SetText(strconv.Itoa(cfg.Workers))
 
-	s.sourceSelect = widget.NewSelect([]string{"filesystem", "zip archive", "json array"}, func(string) {})
-	s.sourceSelect.SetSelected("filesystem")
-	s.formatsEntry = widget.NewEntry()
-	s.formatsEntry.SetText(strings.Join(core.DefaultImportFormats(), ","))
-	s.formatsEntry.SetPlaceHolder("md,txt,csv,png,… (empty = all)")
-
-	form := widget.NewForm(
-		widget.NewFormItem("Source folder", s.folderRow(s.src, "Select source folder")),
-		widget.NewFormItem("Vault folder", s.folderRow(s.out, "Select vault folder")),
-		widget.NewFormItem("Database", s.dbEntry),
-		widget.NewFormItem("Import source", s.sourceSelect),
-		widget.NewFormItem("Formats", s.formatsEntry),
-		widget.NewFormItem("Ollama host", s.host),
-		widget.NewFormItem("Model", s.model),
-		widget.NewFormItem("Max chars", s.maxChars),
-		widget.NewFormItem("Workers", s.workers),
-	)
+	s.importSource = core.SourceFilesystem
+	s.importFormats = make(core.FormatSet)
+	for _, e := range core.DefaultImportFormats() {
+		s.importFormats[e] = true
+	}
+	s.formatsLabel = widget.NewLabel("")
+	s.formatsLabel.Wrapping = fyne.TextWrapWord
 
 	s.phaseLabel = widget.NewLabel("Ready")
 	s.currentLabel = widget.NewLabel("")
@@ -126,57 +182,590 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.logLabel.TextStyle = fyne.TextStyle{Monospace: true}
 	s.logLabel.Selectable = true
 
-	s.runButtons = []*widget.Button{
-		widget.NewButton("Import", func() { s.startImport() }),
-		widget.NewButton("Pairs", func() { s.startPhasePrompt(core.PhaseAnalyze, s.pairSelect.Selected) }),
-		widget.NewButton("Tags one-by-one", func() { s.startPhasePrompt(core.PhaseTagSingle, s.singleSelect.Selected) }),
-		widget.NewButton("Export for Obsidian", func() { s.startPhase(core.PhaseWrite) }),
-		widget.NewButton("All phases", func() { s.startPhase(core.PhaseAll) }),
-		widget.NewButton("Remove file…", func() { s.promptRemove(false) }),
-		widget.NewButton("Compare file…", func() { s.promptCompare() }),
-	}
-	s.resetBtn = widget.NewButton("Reset database", s.confirmReset)
-	s.resetBtn.Importance = widget.DangerImportance
-
-	// Pair and single process selectors
-	s.pairSelect = widget.NewSelect([]string{"phase2"}, func(string) {})
-	s.singleSelect = widget.NewSelect([]string{"tag_single"}, func(string) {})
-
-	// Helper to create a process management row with add/remove buttons
-	processRow := func(sel *widget.Select, ptype string) fyne.CanvasObject {
-		addBtn := widget.NewButton("+", func() { s.promptAddProcess(ptype) })
-		remBtn := widget.NewButton("−", func() { s.promptRemoveProcess(ptype, sel) })
-		return container.NewBorder(nil, nil, remBtn, addBtn, sel)
-	}
-
-	// Add selectors with management buttons to the form
-	form.Append("Pair process", processRow(s.pairSelect, "pair"))
-	form.Append("Single process", processRow(s.singleSelect, "single"))
-
-	var buttons []fyne.CanvasObject
-	for _, b := range s.runButtons {
-		buttons = append(buttons, b)
-	}
-	buttons = append(buttons, s.resetBtn)
-
-	top := container.NewVBox(form, container.NewHBox(buttons...))
-	bottom := container.NewVBox(
+	logs := container.NewVScroll(s.logLabel)
+	logs.SetMinSize(fyne.NewSize(720, 130))
+	s.statusPanel = container.NewVBox(
 		s.phaseLabel,
 		s.progress,
 		s.currentLabel,
 		s.runLabel,
 		s.statsLabel,
+		logs,
 	)
-	logs := container.NewVScroll(s.logLabel)
-	logs.SetMinSize(fyne.NewSize(700, 260))
 
-	s.win.SetContent(container.NewBorder(top, bottom, nil, nil, logs))
-	s.win.Resize(fyne.NewSize(980, 800))
+	s.win.Resize(fyne.NewSize(1024, 860))
 	s.win.CenterOnScreen()
 	s.win.SetCloseIntercept(s.close)
 	s.refreshStats()
+	s.render()
 
 	return s
+}
+
+// ─── navigation ─────────────────────────────────────────────────────────────
+
+func (s *state) render() {
+	if s.win == nil {
+		return
+	}
+	header := container.NewHBox()
+	if s.screen != scrMenu {
+		header.Add(widget.NewButton("← Back", s.goBack))
+	}
+	header.Add(widget.NewLabelWithStyle(s.screenTitle(), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+
+	s.win.SetContent(container.NewBorder(header, s.statusPanel, nil, nil, s.body()))
+}
+
+func (s *state) screenTitle() string {
+	switch s.screen {
+	case scrImport:
+		return "Import — choose source & formats"
+	case scrFormats:
+		return "Select formats to import"
+	case scrData:
+		return "Work with data"
+	case scrNotes:
+		switch s.noteAction {
+		case noteEval:
+			return "Evaluate note uniqueness"
+		case noteRemoveLinks:
+			return "Remove file + Obsidian links — search by path"
+		default:
+			return "Remove file — search by path"
+		}
+	case scrFsSearch:
+		return "Compare file — search filesystem"
+	case scrEval:
+		return "Novelty"
+	case scrSettings:
+		return "Settings"
+	case scrPromptView:
+		if s.promptEdit {
+			return "Edit prompt: " + s.promptName
+		}
+		return "Prompt: " + s.promptName
+	case scrProcessList:
+		if s.processType == "single" {
+			return "One-by-one processes"
+		}
+		return "Pair processes"
+	case scrProcessDetail:
+		return "Process: " + s.processName
+	case scrRunning:
+		return "Processing…"
+	default:
+		return "noesis"
+	}
+}
+
+func (s *state) goBack() {
+	switch s.screen {
+	case scrImport, scrData, scrSettings, scrProcessList:
+		s.noteFilter = ""
+		s.screen = scrMenu
+	case scrFormats:
+		s.screen = scrImport
+	case scrNotes:
+		s.screen = s.noteBack
+	case scrFsSearch:
+		s.screen = s.fsBack
+	case scrEval:
+		s.screen = s.evalBack
+	case scrPromptView:
+		s.screen = s.promptBack
+	case scrProcessDetail:
+		s.openProcessList(s.processType)
+		return
+	case scrRunning:
+		return
+	default:
+		s.screen = scrMenu
+	}
+	s.render()
+}
+
+func (s *state) body() fyne.CanvasObject {
+	switch s.screen {
+	case scrImport:
+		return s.importScreen()
+	case scrFormats:
+		return s.formatsScreen()
+	case scrData:
+		return s.dataScreen()
+	case scrNotes:
+		return s.notesScreen()
+	case scrFsSearch:
+		return s.fsSearchScreen()
+	case scrEval:
+		return s.evalScreen()
+	case scrSettings:
+		return s.settingsScreen()
+	case scrPromptView:
+		return s.promptScreen()
+	case scrProcessList:
+		return s.processListScreen()
+	case scrProcessDetail:
+		return s.processDetailScreen()
+	case scrRunning:
+		return s.runningScreen()
+	default:
+		return s.menuScreen()
+	}
+}
+
+func (s *state) activateMenu(id int) {
+	switch id {
+	case 0:
+		s.screen = scrImport
+	case 1:
+		s.openProcessList("pair")
+		return
+	case 2:
+		s.openProcessList("single")
+		return
+	case 3:
+		s.startPhase(core.PhaseWrite, "")
+		return
+	case 4:
+		s.startPhase(core.PhaseAll, "")
+		return
+	case 5:
+		s.screen = scrData
+	case 6:
+		s.openNotes(noteEval, scrMenu)
+		return
+	case 7:
+		s.screen = scrSettings
+	}
+	s.render()
+}
+
+// ─── actions ────────────────────────────────────────────────────────────────
+
+func (s *state) openNotes(action noteAction, back screen) {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	notes, err := core.ListNotes(db)
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	s.notes = notes
+	s.noteFilter = ""
+	s.noteAction = action
+	s.noteBack = back
+	s.screen = scrNotes
+	s.render()
+}
+
+func (s *state) reloadNotes() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	if notes, err := core.ListNotes(db); err == nil {
+		s.notes = notes
+	}
+}
+
+func (s *state) pickNote(n core.NoteInfo) {
+	if s.noteAction == noteEval {
+		s.startEvalNote(n)
+		return
+	}
+
+	withLinks := s.noteAction == noteRemoveLinks
+	label := "Remove file"
+	if withLinks {
+		label = "Remove file + links"
+	}
+	message := fmt.Sprintf("Remove %q?", n.Path)
+	dialog.ShowConfirm(label, message, func(ok bool) {
+		if !ok {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		var err error
+		var removed, scrubbed int
+		if withLinks {
+			removed, scrubbed, err = core.RemoveNoteAndLinksByID(db, n.ID)
+		} else {
+			removed, err = core.RemoveNoteByID(db, n.ID)
+		}
+		if err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.reloadNotes()
+		s.refreshStats()
+		s.phaseLabel.SetText(fmt.Sprintf("Removed %d note(s), scrubbed links in %d other file(s)", removed, scrubbed))
+		s.render()
+	}, s.win)
+}
+
+func (s *state) startEvalNote(n core.NoteInfo) {
+	cfg, _, _, _, err := s.readConfig()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+
+	s.evalLoading = true
+	s.evalResult = ""
+	s.evalErr = ""
+	s.evalBack = scrNotes
+	s.screen = scrEval
+	s.render()
+
+	go func() {
+		linked, _ := core.LinkedNoteIDs(db, n.ID)
+		result, err := core.EvalNote(context.Background(), db, n.ID, cfg.Host, cfg.Model, cfg.MaxChars, linked)
+		fyne.Do(func() {
+			s.evalLoading = false
+			if err != nil {
+				s.evalErr = err.Error()
+				s.evalResult = ""
+			} else {
+				s.evalResult = result
+				s.evalErr = ""
+			}
+			s.render()
+		})
+	}()
+}
+
+func (s *state) startCompare(path string) {
+	cfg, _, _, _, err := s.readConfig()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+
+	s.evalLoading = true
+	s.evalResult = ""
+	s.evalErr = ""
+	s.evalBack = scrFsSearch
+	s.screen = scrEval
+	s.render()
+
+	go func() {
+		result, err := core.CompareFile(context.Background(), db, path, cfg.Host, cfg.Model, cfg.MaxChars)
+		fyne.Do(func() {
+			s.evalLoading = false
+			if err != nil {
+				s.evalErr = err.Error()
+				s.evalResult = ""
+			} else {
+				s.evalResult = result
+				s.evalErr = ""
+			}
+			s.render()
+		})
+	}()
+}
+
+func (s *state) openFsSearch() {
+	s.fsFilter = ""
+	s.fsFiles = nil
+	s.fsBack = scrData
+	s.screen = scrFsSearch
+	s.render()
+}
+
+func (s *state) searchFiles(filter string, done func([]string)) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	go func() {
+		files, err := core.FindFiles(cwd, filter)
+		fyne.Do(func() {
+			if filter != s.fsFilter {
+				return
+			}
+			if err != nil {
+				dialog.ShowError(err, s.win)
+				return
+			}
+			done(files)
+		})
+	}()
+}
+
+func (s *state) openProcessList(ptype string) {
+	s.processType = ptype
+	s.processName = ""
+	s.screen = scrProcessList
+	s.render()
+}
+
+func (s *state) openPrompt(name string, back screen) {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	s.promptName = name
+	s.promptText = core.LoadPrompt(db, name)
+	s.promptEdit = false
+	s.promptBack = back
+	s.screen = scrPromptView
+	s.render()
+}
+
+func (s *state) addProcess() {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("process name")
+	label := "Add pair process"
+	if s.processType == "single" {
+		label = "Add one-by-one process"
+	}
+	dialog.ShowCustomConfirm(label, "Create", "Cancel", nameEntry, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(nameEntry.Text)
+		if name == "" {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		if err := core.SavePromptWithType(db, name, "", s.processType); err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.render()
+	}, s.win)
+}
+
+func (s *state) deleteProcess() {
+	name := s.processName
+	dialog.ShowConfirm("Remove process", "Delete process "+name+" and all its data?", func(ok bool) {
+		if !ok {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		if err := core.DeletePrompt(db, name); err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.openProcessList(s.processType)
+	}, s.win)
+}
+
+func (s *state) savePrompt() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	if err := core.SavePrompt(db, s.promptName, s.promptText); err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	s.promptEdit = false
+	s.render()
+}
+
+func (s *state) reloadPrompt() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	text, err := core.ReloadPromptFromFile(db, s.promptName)
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	s.promptText = text
+	s.render()
+}
+
+func (s *state) pickModel() {
+	host := strings.TrimSpace(s.host.Text)
+	go func() {
+		models, err := core.FetchModels(host)
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(err, s.win)
+				return
+			}
+			if len(models) == 0 {
+				dialog.ShowInformation("Models", "No models found on "+host, s.win)
+				return
+			}
+			list := widget.NewList(
+				func() int { return len(models) },
+				func() fyne.CanvasObject { return widget.NewLabel("") },
+				func(id widget.ListItemID, o fyne.CanvasObject) { o.(*widget.Label).SetText(models[id]) },
+			)
+			body := container.NewGridWrap(fyne.NewSize(440, 320), list)
+			d := dialog.NewCustom("Choose model", "Cancel", body, s.win)
+			list.OnSelected = func(id widget.ListItemID) {
+				s.model.SetText(models[id])
+				d.Hide()
+			}
+			d.Show()
+		})
+	}()
+}
+
+// startImport runs the import with the chosen source and formats.
+func (s *state) startImport() {
+	if s.isRunning() {
+		return
+	}
+
+	_, src, _, dbPath, err := s.readConfig()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	if src == "" {
+		dialog.ShowError(fmt.Errorf("not set: SRC"), s.win)
+		return
+	}
+	if err := s.useDB(dbPath); err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+
+	opts := core.ImportOptions{Source: s.importSource, Formats: s.importFormats}
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+
+	s.beginRun("Importing…")
+	go func() {
+		ctx, cancel := s.runContext()
+		defer cancel()
+		err := core.Import(ctx, &guiReporter{s: s}, db, src, opts)
+		s.finishRun(err)
+	}()
+}
+
+func (s *state) startPhase(phase core.Phase, promptName string) {
+	if s.isRunning() {
+		return
+	}
+
+	cfg, src, out, dbPath, err := s.readConfig()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	if src == "" && phase == core.PhaseAll {
+		dialog.ShowError(fmt.Errorf("not set: SRC"), s.win)
+		return
+	}
+	if out == "" && (phase == core.PhaseWrite || phase == core.PhaseAll || phase == core.PhaseExportProcess) {
+		dialog.ShowError(fmt.Errorf("not set: OUT"), s.win)
+		return
+	}
+	cfg.PromptName = promptName
+	if err := s.useDB(dbPath); err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+
+	s.beginRun("Starting…")
+	go func() {
+		ctx, cancel := s.runContext()
+		defer cancel()
+		err := core.Run(ctx, &guiReporter{s: s}, db, cfg, phase, src, out)
+		s.finishRun(err)
+	}()
+}
+
+func (s *state) beginRun(label string) {
+	s.mu.Lock()
+	s.running = true
+	s.total, s.done, s.ran = 0, 0, 0
+	s.runTags, s.runLinks = 0, 0
+	s.logs = nil
+	s.mu.Unlock()
+
+	s.phaseLabel.SetText(label)
+	s.currentLabel.SetText("")
+	s.runLabel.SetText("")
+	s.logLabel.SetText("")
+	s.progress.SetValue(0)
+	s.refreshStats()
+
+	s.screen = scrRunning
+	s.render()
+}
+
+func (s *state) runContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.cancel = cancel
+	s.mu.Unlock()
+	return ctx, cancel
+}
+
+func (s *state) finishRun(err error) {
+	s.mu.Lock()
+	s.running = false
+	s.cancel = nil
+	s.mu.Unlock()
+
+	fyne.Do(func() {
+		s.currentLabel.SetText("")
+		s.refreshStats()
+		if err != nil {
+			s.phaseLabel.SetText("Stopped with error")
+			dialog.ShowError(err, s.win)
+		} else {
+			s.phaseLabel.SetText("Done")
+		}
+		s.screen = scrMenu
+		s.render()
+	})
+}
+
+func (s *state) stopRun() {
+	s.mu.Lock()
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		s.phaseLabel.SetText("Stopping…")
+	}
+}
+
+func (s *state) isRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running
+}
+
+func (s *state) currentDB() *sql.DB {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.db
 }
 
 func (s *state) close() {
@@ -189,53 +778,7 @@ func (s *state) close() {
 	s.win.Close()
 }
 
-// folderRow builds an entry with a cross-platform "Browse…" button.
-func (s *state) folderRow(entry *widget.Entry, title string) fyne.CanvasObject {
-	browse := widget.NewButton("Browse…", func() {
-		s.browseFolder(entry, title)
-	})
-	return container.NewBorder(nil, nil, nil, browse, entry)
-}
-
-func (s *state) browseFolder(entry *widget.Entry, title string) {
-	d := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
-		if err != nil {
-			dialog.ShowError(err, s.win)
-			return
-		}
-		if uri != nil {
-			entry.SetText(uri.Path())
-		}
-	}, s.win)
-	d.SetTitleText(title)
-
-	// Start in the currently entered folder when it exists.
-	if path := strings.TrimSpace(entry.Text); path != "" {
-		if abs, err := filepath.Abs(path); err == nil {
-			if uri, err := storage.ListerForURI(storage.NewFileURI(abs)); err == nil {
-				d.SetLocation(uri)
-			}
-		}
-	}
-
-	d.Show()
-}
-
-func (s *state) setRunning(running bool) {
-	for _, b := range s.runButtons {
-		if running {
-			b.Disable()
-		} else {
-			b.Enable()
-		}
-	}
-	if running {
-		s.resetBtn.Disable()
-	} else {
-		s.resetBtn.Enable()
-	}
-}
-
+// readConfig gathers the settings form into a core Config.
 func (s *state) readConfig() (core.Config, string, string, string, error) {
 	maxChars, err := strconv.Atoi(strings.TrimSpace(s.maxChars.Text))
 	if err != nil || maxChars < 1 {
@@ -256,165 +799,6 @@ func (s *state) readConfig() (core.Config, string, string, string, error) {
 		Workers:  workers,
 	}
 	return cfg, strings.TrimSpace(s.src.Text), strings.TrimSpace(s.out.Text), strings.TrimSpace(s.dbEntry.Text), nil
-}
-
-// readImportOptions parses the import source and formats from the form.
-func (s *state) readImportOptions() (core.ImportOptions, error) {
-	src2, err := core.ParseImportSource(s.sourceSelect.Selected)
-	if err != nil {
-		return core.ImportOptions{}, err
-	}
-	return core.ImportOptions{Source: src2, Formats: parseFormats(s.formatsEntry.Text)}, nil
-}
-
-func parseFormats(s string) core.FormatSet {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	fs := make(core.FormatSet)
-	for _, e := range strings.Split(s, ",") {
-		e = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(e)), ".")
-		if e != "" {
-			fs[e] = true
-		}
-	}
-	return fs
-}
-
-// startImport runs the import with the chosen source and formats.
-func (s *state) startImport() {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-
-	_, src, _, dbPath, err := s.readConfig()
-	if err != nil {
-		dialog.ShowError(err, s.win)
-		return
-	}
-	opts, err := s.readImportOptions()
-	if err != nil {
-		dialog.ShowError(err, s.win)
-		return
-	}
-	if err := s.useDB(dbPath); err != nil {
-		dialog.ShowError(err, s.win)
-		return
-	}
-
-	s.mu.Lock()
-	s.running = true
-	s.total, s.done, s.ran = 0, 0, 0
-	s.runTags, s.runLinks = 0, 0
-	s.logs = nil
-	db := s.db
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	s.mu.Unlock()
-
-	s.setRunning(true)
-	s.phaseLabel.SetText("Importing…")
-	s.currentLabel.SetText("")
-	s.runLabel.SetText("")
-	s.logLabel.SetText("")
-	s.progress.SetValue(0)
-	s.refreshStats()
-
-	go func() {
-		defer cancel()
-		err := core.Import(ctx, &guiReporter{s: s}, db, src, opts)
-
-		s.mu.Lock()
-		s.running = false
-		s.cancel = nil
-		s.mu.Unlock()
-
-		fyne.Do(func() {
-			s.setRunning(false)
-			s.currentLabel.SetText("")
-			s.refreshStats()
-			if err != nil {
-				s.phaseLabel.SetText("Stopped with error")
-				dialog.ShowError(err, s.win)
-			} else {
-				s.phaseLabel.SetText("Done")
-			}
-		})
-	}()
-}
-
-// promptRemove asks for a file path and removes the matching note (optionally
-// scrubbing its links from other files).
-func (s *state) promptRemove(withLinks bool) {
-	target := widget.NewEntry()
-	target.SetPlaceHolder("path to search")
-	action := "Remove file"
-	if withLinks {
-		action = "Remove file + links"
-	}
-	dialog.ShowCustomConfirm(action, "Remove", "Cancel", target, func(ok bool) {
-		if !ok {
-			return
-		}
-		s.mu.Lock()
-		db := s.db
-		s.mu.Unlock()
-		if db == nil {
-			return
-		}
-		query := strings.TrimSpace(target.Text)
-		if query == "" {
-			return
-		}
-		if withLinks {
-			removed, scrubbed, err := core.RemoveNoteAndLinks(db, query)
-			if err != nil {
-				dialog.ShowError(err, s.win)
-				return
-			}
-			dialog.ShowInformation(action, fmt.Sprintf("Removed %d note(s), scrubbed links in %d other file(s)", removed, scrubbed), s.win)
-		} else {
-			removed, err := core.RemoveNote(db, query)
-			if err != nil {
-				dialog.ShowError(err, s.win)
-				return
-			}
-			dialog.ShowInformation(action, fmt.Sprintf("Removed %d note(s)", removed), s.win)
-		}
-		s.refreshStats()
-	}, s.win)
-}
-
-// promptCompare opens a file picker and evaluates the selected file's novelty.
-func (s *state) promptCompare() {
-	d := dialog.NewFileOpen(func(uri fyne.URIReadCloser, err error) {
-		if err != nil {
-			dialog.ShowError(err, s.win)
-			return
-		}
-		if uri == nil {
-			return
-		}
-		path := uri.URI().Path()
-		s.mu.Lock()
-		db := s.db
-		s.mu.Unlock()
-		if db == nil {
-			return
-		}
-		cfg, _, _, _, _ := s.readConfig()
-		result, err := core.CompareFile(context.Background(), db, path, cfg.Host, cfg.Model, cfg.MaxChars)
-		if err != nil {
-			dialog.ShowError(err, s.win)
-			return
-		}
-		dialog.ShowInformation("Novelty", result, s.win)
-	}, s.win)
-	d.SetTitleText("Select file to compare")
-	d.Show()
 }
 
 // useDB switches to the database at path if needed.
@@ -439,70 +823,6 @@ func (s *state) useDB(path string) error {
 	return nil
 }
 
-func (s *state) startPhase(phase core.Phase) {
-	s.startPhasePrompt(phase, "")
-}
-
-func (s *state) startPhasePrompt(phase core.Phase, promptName string) {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-
-	cfg, src, out, dbPath, err := s.readConfig()
-	if err != nil {
-		dialog.ShowError(err, s.win)
-		return
-	}
-	cfg.PromptName = promptName
-	if err := s.useDB(dbPath); err != nil {
-		dialog.ShowError(err, s.win)
-		return
-	}
-
-	s.mu.Lock()
-	s.running = true
-	s.total, s.done, s.ran = 0, 0, 0
-	s.runTags, s.runLinks = 0, 0
-	s.logs = nil
-	db := s.db
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	s.mu.Unlock()
-
-	s.setRunning(true)
-	s.phaseLabel.SetText("Starting…")
-	s.currentLabel.SetText("")
-	s.runLabel.SetText("")
-	s.logLabel.SetText("")
-	s.progress.SetValue(0)
-	s.refreshStats()
-
-	go func() {
-		defer cancel()
-		err := core.Run(ctx, &guiReporter{s: s}, db, cfg, phase, src, out)
-
-		s.mu.Lock()
-		s.running = false
-		s.cancel = nil
-		s.mu.Unlock()
-
-		fyne.Do(func() {
-			s.setRunning(false)
-			s.currentLabel.SetText("")
-			s.refreshStats()
-			if err != nil {
-				s.phaseLabel.SetText("Stopped with error")
-				dialog.ShowError(err, s.win)
-			} else {
-				s.phaseLabel.SetText("Done")
-			}
-		})
-	}()
-}
-
 func (s *state) confirmReset() {
 	path := strings.TrimSpace(s.dbEntry.Text)
 	if path == "" {
@@ -513,9 +833,7 @@ func (s *state) confirmReset() {
 		if !ok {
 			return
 		}
-		s.mu.Lock()
-		db := s.db
-		s.mu.Unlock()
+		db := s.currentDB()
 
 		newDB, err := core.ResetDB(db, path)
 		if err != nil {
@@ -534,13 +852,12 @@ func (s *state) confirmReset() {
 		s.runLabel.SetText("")
 		s.progress.SetValue(0)
 		s.refreshStats()
+		s.render()
 	}, s.win)
 }
 
 func (s *state) refreshStats() {
-	s.mu.Lock()
-	db := s.db
-	s.mu.Unlock()
+	db := s.currentDB()
 	if db == nil {
 		return
 	}
@@ -550,76 +867,9 @@ func (s *state) refreshStats() {
 		"Notes: %d  |  With tags: %d  |  Tags: %d  |  Links: %d  |  Pairs: %d/%d  |  Written: %d",
 		st.Notes, st.Tagged, st.UniqTags, st.Links, st.PairsDone, pairs, st.Written,
 	))
-	// Refresh process selectors
-	if pairNames, _ := core.ListPromptsByType(db, "pair"); len(pairNames) > 0 {
-		s.pairSelect.Options = pairNames
-		if s.pairSelect.Selected == "" {
-			s.pairSelect.SetSelected(pairNames[0])
-		}
-	} else {
-		s.pairSelect.Options = []string{"phase2"}
-		s.pairSelect.SetSelected("phase2")
-	}
-	s.pairSelect.Refresh()
-	if singleNames, _ := core.ListPromptsByType(db, "single"); len(singleNames) > 0 {
-		s.singleSelect.Options = singleNames
-		if s.singleSelect.Selected == "" {
-			s.singleSelect.SetSelected(singleNames[0])
-		}
-	} else {
-		s.singleSelect.Options = []string{"tag_single"}
-		s.singleSelect.SetSelected("tag_single")
-	}
-	s.singleSelect.Refresh()
 }
 
-// promptAddProcess opens a dialog to create a new process.
-func (s *state) promptAddProcess(ptype string) {
-	nameEntry := widget.NewEntry()
-	nameEntry.SetPlaceHolder("process name")
-	label := "Add pair process"
-	if ptype == "single" {
-		label = "Add one-by-one process"
-	}
-	dialog.ShowCustomConfirm(label, "Create", "Cancel", nameEntry, func(ok bool) {
-		if !ok {
-			return
-		}
-		name := strings.TrimSpace(nameEntry.Text)
-		if name == "" {
-			return
-		}
-		s.mu.Lock()
-		db := s.db
-		s.mu.Unlock()
-		if db == nil {
-			return
-		}
-		core.SavePromptWithType(db, name, "", ptype)
-		s.refreshStats()
-	}, s.win)
-}
-
-// promptRemoveProcess opens a confirmation to remove the selected process.
-func (s *state) promptRemoveProcess(ptype string, sel *widget.Select) {
-	name := sel.Selected
-	if name == "" {
-		return
-	}
-	dialog.ShowConfirm("Remove process", "Delete process "+name+" and all its data?", func(ok bool) {
-		if !ok {
-			return
-		}
-		s.mu.Lock()
-		db := s.db
-		s.mu.Unlock()
-		if db == nil {
-			return
-		}
-		core.DeletePrompt(db, name)
-		s.refreshStats()
-	}, s.win)
-}
+// ─── reporter ───────────────────────────────────────────────────────────────
 
 // guiReporter translates core progress events into Fyne UI updates.
 type guiReporter struct {

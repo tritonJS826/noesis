@@ -104,7 +104,6 @@ type model struct {
 
 	comparePath string
 
-	promptList    []string
 	promptViewing string
 	promptText    string
 
@@ -118,7 +117,8 @@ type model struct {
 	fsFiles  []string // matching filesystem files
 	fsFilter string   // current search filter
 
-	width int
+	width  int
+	height int
 }
 
 func newModel(db *sql.DB) *model {
@@ -241,6 +241,12 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Track the terminal size even while a text field is being edited.
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width, m.height = size.Width, size.Height
+		return m, nil
+	}
+
 	// if we're editing a field — delegate to textinput
 	if m.editingField != "" {
 		switch msg := msg.(type) {
@@ -261,10 +267,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		return m, nil
-
 	case tea.KeyMsg:
 		return m, m.handleKey(msg)
 
