@@ -18,7 +18,7 @@ Nine assets, published to a GitHub Release:
 The landing page uses `releases/latest/download/<asset>` URLs, so the names
 above must stay in sync with `landings/content.json`.
 
-Release binaries bake in the local model `qwen2.5:7b` through the linker flag
+Release binaries bake in the local model `gemma4:31b-cloud` through the linker flag
 `noesis/internal/core.DefaultModel`. That keeps the default download free and
 local; users can override the model in the TUI/GUI settings or with `-model`.
 
@@ -73,7 +73,7 @@ Requirements:
 Set `MODEL` to bake a different default:
 
 ```bash
-MODEL=qwen2.5:7b bash CICD/build-release.sh linux amd64 linux
+MODEL=gemma4:31b-cloud bash CICD/build-release.sh linux amd64 linux
 ```
 
 ## Notes

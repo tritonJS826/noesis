@@ -116,7 +116,7 @@
         "items": [
           {
             "title": "Открытые модели через Ollama",
-            "body": "В сборках по умолчанию — <code>qwen2.5:7b</code>. Можно поставить <code>llama3.1:8b</code>, <code>mistral:7b</code> или другую модель."
+            "body": "В сборках по умолчанию — <code>gemma4:31b-cloud</code>. Можно поставить <code>llama3.1:8b</code>, <code>mistral:7b</code> или другую модель."
           },
           {
             "title": "Данные не уходят в облако",
@@ -131,7 +131,7 @@
             "body": "Правила разметки и оценки новизны лежат в <code>prompts/phase2.txt</code> и <code>prompts/eval.txt</code> — это обычный текст, который можно адаптировать под свой дневник."
           }
         ],
-        "callout": "<strong>Бесплатно навсегда.</strong> В релизных сборках уже прописана локальная <code>qwen2.5:7b</code>. Модель можно сменить в настройках TUI/GUI или флагом <code>-model</code>."
+        "callout": "<strong>Бесплатно навсегда.</strong> В релизных сборках уже прописана локальная <code>gemma4:31b-cloud</code>. Модель можно сменить в настройках TUI/GUI или флагом <code>-model</code>."
       },
       "price": {
         "aria": "Смета локального запуска",
@@ -242,7 +242,7 @@
           {"key": "gui", "name": "GUI", "note": "Отдельное окно на Fyne."}
         ],
         "get": "Скачать",
-        "requires": "Нужен Ollama и локальная модель. В сборках по умолчанию — <code>qwen2.5:7b</code>: <code>ollama pull qwen2.5:7b</code>.",
+        "requires": "Нужен Ollama и локальная модель. В сборках по умолчанию — <code>gemma4:31b-cloud</code>: <code>ollama pull gemma4:31b-cloud</code>.",
         "after": "После скачивания на Linux/macOS: <code>chmod +x noesis-*</code> и запустите нужный бинарник. Windows: просто откройте .exe.",
         "all": "Все релизы на GitHub →",
         "source": "Исходники: github.com/tritonJS826/noesis"
@@ -253,7 +253,7 @@
         "items": [
           {
             "q": "Это правда бесплатно?",
-            "a": "Да. Скачайте сборку и запускайте: в релизах по умолчанию локальная модель <code>qwen2.5:7b</code>, поэтому нет платежей за API и токены. Нужен только компьютер, который её потянет. Ориентир для 7–8B-моделей — 8–16 ГБ RAM; на GPU крупные модели работают комфортнее."
+            "a": "Да. Скачайте сборку и запускайте: в релизах по умолчанию локальная модель <code>gemma4:31b-cloud</code>, поэтому нет платежей за API и токены. Нужен только компьютер, который её потянет. Ориентир для 7–8B-моделей — 8–16 ГБ RAM; на GPU крупные модели работают комфортнее."
           },
           {
             "q": "Куда уходят мои заметки?",
@@ -450,7 +450,7 @@
         "items": [
           {
             "title": "Open models via Ollama",
-            "body": "Builds default to <code>qwen2.5:7b</code>. You can also use <code>llama3.1:8b</code>, <code>mistral:7b</code> or another model."
+            "body": "Builds default to <code>gemma4:31b-cloud</code>. You can also use <code>llama3.1:8b</code>, <code>mistral:7b</code> or another model."
           },
           {
             "title": "Data never goes to the cloud",
@@ -465,7 +465,7 @@
             "body": "Tagging and novelty rules live in <code>prompts/phase2.txt</code> and <code>prompts/eval.txt</code> — plain text you can adapt to your diary."
           }
         ],
-        "callout": "<strong>Free forever.</strong> Release builds already point to the local <code>qwen2.5:7b</code> model. You can switch it in the TUI/GUI settings or with the <code>-model</code> flag."
+        "callout": "<strong>Free forever.</strong> Release builds already point to the local <code>gemma4:31b-cloud</code> model. You can switch it in the TUI/GUI settings or with the <code>-model</code> flag."
       },
       "price": {
         "aria": "Local run estimate",
@@ -576,7 +576,7 @@
           {"key": "gui", "name": "GUI", "note": "A separate Fyne window."}
         ],
         "get": "Download",
-        "requires": "Requires Ollama and a local model. Builds default to <code>qwen2.5:7b</code>: <code>ollama pull qwen2.5:7b</code>.",
+        "requires": "Requires Ollama and a local model. Builds default to <code>gemma4:31b-cloud</code>: <code>ollama pull gemma4:31b-cloud</code>.",
         "after": "After downloading on Linux/macOS: <code>chmod +x noesis-*</code> and run the binary you need. On Windows: just open the .exe.",
         "all": "All releases on GitHub →",
         "source": "Source: github.com/tritonJS826/noesis"
@@ -587,7 +587,7 @@
         "items": [
           {
             "q": "Is it really free?",
-            "a": "Yes. Download a build and run it: releases default to the local <code>qwen2.5:7b</code> model, so there are no API or token fees. You only need a computer that can run it. A guideline for 7–8B models is 8–16 GB of RAM; larger models are more comfortable on a GPU."
+            "a": "Yes. Download a build and run it: releases default to the local <code>gemma4:31b-cloud</code> model, so there are no API or token fees. You only need a computer that can run it. A guideline for 7–8B models is 8–16 GB of RAM; larger models are more comfortable on a GPU."
           },
           {
             "q": "Where do my notes go?",

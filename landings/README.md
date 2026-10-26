@@ -55,7 +55,7 @@ https://github.com/tritonJS826/noesis/releases/latest/download/<asset>
 
 Имена должны совпадать с тем, что публикует
 `.github/workflows/release.yml` и `CICD/build-release.sh`. Релизные сборки
-собираются с локальной моделью `qwen2.5:7b`; это делает бесплатный запуск
+собираются с локальной моделью `gemma4:31b-cloud`; это делает бесплатный запуск
 модели по умолчанию, без облачных API.
 
 ## Локальный просмотр

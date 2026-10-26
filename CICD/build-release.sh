@@ -28,7 +28,7 @@ if [ -z "$PLATFORM" ]; then
   esac
 fi
 
-MODEL="${MODEL:-qwen2.5:7b}"
+MODEL="${MODEL:-gemma4:31b-cloud}"
 OUT="dist/release"
 EXT=""
 if [ "$GOOS_ARG" = "windows" ]; then
