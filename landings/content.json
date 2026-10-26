@@ -1,0 +1,692 @@
+{
+  "shared": {
+    "github": "https://github.com/tritonJS826/noesis",
+    "issues": "https://github.com/tritonJS826/noesis/issues",
+    "ollama": "https://ollama.com",
+    "downloads": {
+      "linux": {
+        "cli": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-cli-linux-amd64",
+        "tui": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-tui-linux-amd64",
+        "gui": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-gui-linux-amd64"
+      },
+      "windows": {
+        "cli": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-cli-windows-amd64.exe",
+        "tui": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-tui-windows-amd64.exe",
+        "gui": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-gui-windows-amd64.exe"
+      },
+      "macos": {
+        "cli": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-cli-macos-arm64",
+        "tui": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-tui-macos-arm64",
+        "gui": "https://github.com/tritonJS826/noesis/releases/latest/download/noesis-gui-macos-arm64"
+      }
+    }
+  },
+  "ru": {
+    "common": {
+      "skip": "Перейти к содержанию",
+      "brandAria": "noesis — на главную",
+      "brandSub": "второй мозг",
+      "navAria": "Основная навигация",
+      "nav": {
+        "how": "Как работает",
+        "free": "Бесплатно",
+        "download": "Скачать",
+        "examples": "Примеры",
+        "faq": "FAQ",
+        "contact": "Связаться"
+      },
+      "header": {
+        "download": "Скачать",
+        "contactAria": "Обратная связь",
+        "contactTitle": "Обратная связь"
+      },
+      "langAria": "Язык / Language",
+      "footer": {
+        "tagline": "Локальный второй мозг из обычных Markdown-заметок.",
+        "feedback": "Обратная связь",
+        "backTop": "Наверх ↑"
+      }
+    },
+    "index": {
+      "meta": {
+        "title": "noesis — локальный второй мозг из Markdown-заметок",
+        "description": "noesis превращает папку с Markdown-дневником в Obsidian-vault: теги, двусторонние ссылки и оценка новизны. Бесплатно и навсегда, приватно, локально через Ollama. Скачайте сборку для Linux, Windows или macOS."
+      },
+      "hero": {
+        "eyebrow": "<span class=\"pulse\" aria-hidden=\"true\"></span> локально · приватно · бесплатно навсегда",
+        "title": "Ваш дневник заслуживает <em>второго мозга</em>",
+        "lead": "noesis читает обычные Markdown-заметки, находит смысловые связи и собирает из них Obsidian-vault. Всё работает на вашем компьютере через Ollama: без API-ключей, облака и ежемесячных платежей. Бесплатно и навсегда — скачайте сборку и запускайте.",
+        "download": "Скачать бесплатно <span aria-hidden=\"true\">↓</span>",
+        "examples": "Посмотреть примеры",
+        "freeNote": "бесплатно и навсегда · без аккаунта и пробного периода",
+        "points": [
+          "Всё на вашем железе",
+          "Одна кнопка — весь пайплайн",
+          "Оригиналы не меняются",
+          "SQLite + plain text"
+        ],
+        "preview": {
+          "aria": "Пример заметки в Obsidian-vault",
+          "path": "vault / 2024-03-05-dnevnik.md",
+          "tags": ["#дневник", "#sqlite", "#дюна", "#планы-на-март"],
+          "title": "Дневник — 5 марта",
+          "text": "Сегодня весь день шёл дождь. Работал из дома, сварил большой чайник зелёного чая…",
+          "free": "за токены",
+          "related": "## Related notes",
+          "links": [
+            {"title": "[[2024-03-25-den-rozhdeniya-mamy]]", "note": "подарок маме на день рождения"},
+            {"title": "[[2024-03-20-progress-taska]]", "note": "доделать таск-трекер до MVP"},
+            {"title": "[[2024-04-05-reabilitatsiya-posle-bolezni]]", "note": "продолжение истории с «Дюной»"}
+          ]
+        }
+      },
+      "strip": {
+        "label": "Внутри:"
+      },
+      "how": {
+        "eyebrow": "как это работает",
+        "title": "Три шага — и заметки начинают разговаривать",
+        "sub": "Пайплайн простой: модель предлагает теги и связи, всё остальное — локальная обработка. Никакой магии и переписывания ваших текстов.",
+        "steps": [
+          {
+            "num": "01 / IMPORT",
+            "title": "Импорт",
+            "body": "Находит <code>.md</code> в папке и складывает их в SQLite. Текст, имена файлов и структура папок остаются прежними.",
+            "code": "-phase 1"
+          },
+          {
+            "num": "02 / ANALYZE",
+            "title": "Анализ",
+            "body": "Ollama сравнивает заметки попарно: просит 2–8 тегов для каждой заметки в паре и решает, есть ли между ними общие люди, проекты или продолжение истории.",
+            "code": "-phase 2"
+          },
+          {
+            "num": "03 / WRITE",
+            "title": "Vault",
+            "body": "Собирает папку для Obsidian: front matter с тегами, двусторонние <code>[[ссылки]]</code> и блок <code>## Related notes</code>.",
+            "code": "-phase 3"
+          }
+        ],
+        "pairNote": "<strong>Связи двусторонние.</strong> Если заметка A связана с B, то в B появится ссылка на A с той же причиной. В Obsidian из этого сразу собирается граф."
+      },
+      "free": {
+        "eyebrow": "€0 за запросы",
+        "title": "Бесплатно, потому что локально",
+        "body": "Второй мозг не обязан быть подпиской. Модель запускается на вашем железе, заметки лежат в обычных файлах, а база — в одном SQLite-файле. Платить за токены и хранилище не нужно.",
+        "items": [
+          {
+            "title": "Открытые модели через Ollama",
+            "body": "В сборках по умолчанию — <code>qwen2.5:7b</code>. Можно поставить <code>llama3.1:8b</code>, <code>mistral:7b</code> или другую модель."
+          },
+          {
+            "title": "Данные не уходят в облако",
+            "body": "При локальной модели запросы идут только на <code>localhost</code>. Ваш дневник остаётся вашим."
+          },
+          {
+            "title": "Без vendor lock-in",
+            "body": "Результат — папка с Markdown. Obsidian не обязателен: подойдёт любой редактор или Git."
+          },
+          {
+            "title": "Свои промпты",
+            "body": "Правила разметки и оценки новизны лежат в <code>prompts/phase2.txt</code> и <code>prompts/eval.txt</code> — это обычный текст, который можно адаптировать под свой дневник."
+          }
+        ],
+        "callout": "<strong>Бесплатно навсегда.</strong> В релизных сборках уже прописана локальная <code>qwen2.5:7b</code>. Модель можно сменить в настройках TUI/GUI или флагом <code>-model</code>."
+      },
+      "price": {
+        "aria": "Смета локального запуска",
+        "kicker": "смета на месяц",
+        "value": "€0",
+        "sub": "за API, токены и подписки",
+        "lines": [
+          {"label": "Модель", "value": "€0"},
+          {"label": "API-запросы", "value": "€0"},
+          {"label": "База и vault", "value": "€0"},
+          {"label": "Железо", "value": "ваше"}
+        ]
+      },
+      "privacy": {
+        "eyebrow": "приватность и простота",
+        "title": "Полностью на вашем железе. И в одну кнопку.",
+        "sub": "Никаких аккаунтов, облачных баз и очередей на отправку. После загрузки модели интернет не нужен: Ollama, SQLite и vault остаются на вашей машине. А запуск всего пайплайна сводится к одному действию.",
+        "card1": {
+          "kicker": "private by design",
+          "title": "Данные не покидают ваш компьютер",
+          "body": "Ноутбук, домашний сервер или мини-ПК — подойдёт любое собственное железо, на котором живёт выбранная модель. Никаких внешних сервисов для работы не требуется.",
+          "points": [
+            "Ollama отвечает на <code>localhost</code>, а не в облаке.",
+            "SQLite-база и vault лежат рядом на вашем диске.",
+            "Никаких аккаунтов, загрузок заметок и облачных хранилищ."
+          ],
+          "status": "после загрузки модели интернет не нужен"
+        },
+        "card2": {
+          "kicker": "one button",
+          "title": "Импорт → анализ → vault. Одна кнопка.",
+          "body": "В GUI нажмите <strong>All phases</strong>; в TUI выберите тот же пункт. CLI запускает весь путь флагом <code>-phase all</code>.",
+          "code": "./noesis-cli ... -phase all",
+          "done": "и готово"
+        }
+      },
+      "examples": {
+        "eyebrow": "примеры",
+        "title": "Что это даёт на практике",
+        "sub": "Два понятных сценария: превратить текстовый дневник в vault и проверить, действительно ли новая заметка говорит что-то новое.",
+        "one": {
+          "badge": "пример 01",
+          "title": "Текстовый дневник → Obsidian с тегами и связями",
+          "desc": "На входе — обычный текст без разметки. На выходе — та же заметка с front matter, тегами и ссылками на связанные записи.",
+          "beforeLabel": "До: обычный Markdown",
+          "afterLabel": "После: заметка в vault",
+          "preserved": "текст не меняется",
+          "beforeCode": "# Дневник — 5 марта\n\nСегодня весь день шёл дождь.\nРаботал из дома и сварил\nбольшой чайник зелёного чая.\n\nПрочитал статью про\nвнутренности SQLite — её\nархитектура похожа на виртуальную машину.\n\nВечером смотрел «Дюну» с Леной.\n\nПлан на март:\n1. Доделать таск-трекер до MVP\n2. Сходить к стоматологу\n3. Купить подарок маме (25 марта)",
+          "afterCode": "---\ntags:\n  - дневник\n  - дождь\n  - sqlite\n  - виртуальная-машина\n  - дюна\n  - лена\n  - планы-на-март\n  - день-рождения-мамы\n---\n\n# Дневник — 5 марта\n\nСегодня весь день шёл дождь…\n(текст не изменён)\n\n## Related notes\n- [[2024-03-25-den-rozhdeniya-mamy]] — подарок маме на день рождения\n- [[2024-03-20-progress-taska]] — доделать таск-трекер до MVP\n- [[2024-04-05-reabilitatsiya-posle-bolezni]] — продолжение истории с «Дюной»",
+          "note": "Теги и связи добавляются в front matter и в конец заметки. Исходный текст не перезаписывается."
+        },
+        "two": {
+          "badge": "пример 02",
+          "title": "Оценить новизну информации",
+          "desc": "Перед тем как написать новую заметку или статью, можно сравнить её с уже связанными записями и понять: это действительно новая мысль или вы уже проходили этот путь?",
+          "draftLabel": "new.md · черновик",
+          "draft": "«Я строю систему со связями между сущностями — задачи, пользователи, комментарии. Это реляционная модель. Не стоит изобретать велосипед, бери PostgreSQL или SQLite.»",
+          "linked": "Связанные заметки: консультация с Иваном, встреча с Анной.",
+          "resultLabel": "Оценить новизну информации",
+          "rating": "новизна: низкая",
+          "resultTitle": "Черновик мысли о реляционной модели",
+          "summaryLabel": "summary",
+          "summary": "Короткая мысль, что задачам с явными связями нужна реляционная база.",
+          "newLabel": "new information",
+          "new": "Всё уже описано в других заметках: Иван советовал PostgreSQL, а Анна зафиксировала это решение на встрече по архитектуре таск-трекера. Новых деталей нет.",
+          "note": "Оценка идёт относительно связанных заметок. Это помогает не повторяться и видеть, где мысль действительно развивается."
+        },
+        "three": {
+          "aria": "Пример цепочки связанных заметок",
+          "badge": "пример 03",
+          "title": "Цепочка, которую видно в графе",
+          "desc": "Модель ищет не просто похожие слова, а общих людей, проекты и продолжение историй. Вот как может выглядеть одна из цепочек в вашем vault.",
+          "nodes": [
+            {"title": "Консультация с Иваном", "tags": "postgresql · keycloak · gophercon"},
+            {"title": "Изучаю PostgreSQL", "tags": "cte · индексы · таск-трекер"},
+            {"title": "Встреча с Анной", "tags": "архитектура · go · postgresql"},
+            {"title": "Прогресс по таск-трекеру", "tags": "gRPC · docker · Иван"}
+          ],
+          "note": "В Obsidian эти связи превращаются в граф, по которому удобно вспоминать контекст и находить забытые пересечения."
+        }
+      },
+      "scenarios": {
+        "eyebrow": "сценарии",
+        "title": "Не только дневник",
+        "sub": "Любая папка с Markdown подойдёт: заметки с встреч, идеи, книжные выписки, рабочий журнал или архив проектов.",
+        "cards": [
+          {"label": "01 / АРХИВ", "title": "Разобрать дневник за годы", "body": "Импортировать старые записи и получить теги, по которым легко искать людей, места и события."},
+          {"label": "02 / ДУБЛИ", "title": "Найти повторяющиеся идеи", "body": "Оценка новизны показывает, где вы снова пишете то, что уже исследовали."},
+          {"label": "03 / ЛЮДИ", "title": "Вспомнить контекст встреч", "body": "Связи через общие имена и проекты превращают разрозненные заметки в историю отношений."},
+          {"label": "04 / ПРОЕКТЫ", "title": "Собрать таймлайн", "body": "Заметки по проекту, решения, ретро и следующие шаги оказываются связаны между собой."},
+          {"label": "05 / БЛОГ", "title": "Подготовить материал", "body": "Теги быстро выводят на нужную тему, а ссылки показывают, чего не хватает в черновике."},
+          {"label": "06 / ПРИВАТНОСТЬ", "title": "Оставить данные себе", "body": "Локальная модель, локальная база, локальный vault. Без аккаунтов и облачных хранилищ."}
+        ]
+      },
+      "downloads": {
+        "eyebrow": "скачать",
+        "title": "Забирайте сборку. Бесплатно и навсегда.",
+        "sub": "CLI, TUI и GUI для Linux, Windows и macOS. Без аккаунта, подписки и пробного периода. Все сборки лежат в GitHub Releases.",
+        "badge": "бесплатно · навсегда · open source",
+        "groups": [
+          {"key": "linux", "os": "Linux", "arch": "x86_64", "note": "Готовые бинарники. Для GUI нужны обычные X11/OpenGL библиотеки."},
+          {"key": "windows", "os": "Windows", "arch": "x86_64", "note": "Три .exe. GUI запускается без консольного окна."},
+          {"key": "macos", "os": "macOS", "arch": "arm64", "note": "macOS 12+ на Apple Silicon (arm64). Intel Mac в этот релиз пока не входит."}
+        ],
+        "apps": [
+          {"key": "cli", "name": "CLI", "note": "Скрипты, cron и автоматизация."},
+          {"key": "tui", "name": "TUI", "note": "Терминальный интерфейс с настройками и прогрессом."},
+          {"key": "gui", "name": "GUI", "note": "Отдельное окно на Fyne."}
+        ],
+        "get": "Скачать",
+        "requires": "Нужен Ollama и локальная модель. В сборках по умолчанию — <code>qwen2.5:7b</code>: <code>ollama pull qwen2.5:7b</code>.",
+        "after": "После скачивания на Linux/macOS: <code>chmod +x noesis-*</code> и запустите нужный бинарник. Windows: просто откройте .exe.",
+        "all": "Все релизы на GitHub →",
+        "source": "Исходники: github.com/tritonJS826/noesis"
+      },
+      "faq": {
+        "eyebrow": "вопросы",
+        "title": "Коротко о главном",
+        "items": [
+          {
+            "q": "Это правда бесплатно?",
+            "a": "Да. Скачайте сборку и запускайте: в релизах по умолчанию локальная модель <code>qwen2.5:7b</code>, поэтому нет платежей за API и токены. Нужен только компьютер, который её потянет. Ориентир для 7–8B-моделей — 8–16 ГБ RAM; на GPU крупные модели работают комфортнее."
+          },
+          {
+            "q": "Куда уходят мои заметки?",
+            "a": "При локальной модели — никуда: Ollama отвечает на <code>localhost</code>, а SQLite и vault остаются на диске. Если вы настроите облачную модель или удалённый хост, запросы пойдут туда — это отдельный режим и осознанный выбор."
+          },
+          {
+            "q": "Обязательно ли устанавливать Obsidian?",
+            "a": "Нет. Результат — обычная папка с Markdown-файлами. Obsidian просто делает теги, ссылки и граф удобными для просмотра. Vault можно открыть в любом редакторе, положить в Git или читать с телефона."
+          },
+          {
+            "q": "Почему сравнение попарное? Это же долго.",
+            "a": "Каждая пара проверяется отдельно, но именно поэтому связи получаются осмысленными, а не просто совпадением слов. 50 заметок — это 1 225 пар. Начинайте с небольшой папки; обработанные пары сохраняются в SQLite, так что повторный запуск не пересчитывает их заново."
+          },
+          {
+            "q": "Что если модель ошиблась с тегом или связью?",
+            "a": "Оригинальные заметки не перезаписываются: теги и связи живут в базе и в Markdown. Их можно поправить руками и пересобрать vault. Ошибочная ссылка не ломает текст — она просто появляется в блоке <code>## Related notes</code>."
+          },
+          {
+            "q": "Можно использовать свою модель и свои правила?",
+            "a": "Да. Модель выбирается в настройках TUI/GUI или флагом <code>-model</code>. Промпты лежат в <code>prompts/phase2.txt</code> (теги и связи) и <code>prompts/eval.txt</code> (оценка новизны) — это обычный текст, который можно адаптировать под свой дневник."
+          },
+          {
+            "q": "Можно всё сделать в одну кнопку?",
+            "a": "Да. В GUI и TUI есть пункт <strong>All phases</strong>: он запускает импорт, анализ и запись vault подряд. В CLI это флаг <code>-phase all</code>. Отдельные фазы нужны, если вы хотите остановиться, проверить теги или продолжить обработку позже."
+          },
+          {
+            "q": "Это отдельный интерфейс приложения?",
+            "a": "Нет. Это статическая страница в папке <code>landings/</code>. Она не подключена к Go-приложению и живёт как самостоятельный лендинг: открывается в браузере или раздаётся любым статическим сервером."
+          }
+        ]
+      },
+      "feedback": {
+        "eyebrow": "обратная связь",
+        "title": "Что улучшить?",
+        "body": "Нашли ошибку, хотите предложить сценарий или рассказать, как используете noesis? Напишите пару строк — это помогает делать инструмент лучше.",
+        "link": "Открыть полную форму →",
+        "name": "Имя",
+        "email": "Email",
+        "message": "Сообщение",
+        "namePlaceholder": "Как к вам обращаться",
+        "emailPlaceholder": "you@example.com",
+        "messagePlaceholder": "Идея, баг или сценарий использования…",
+        "note": "Форма работает через Netlify Forms. Не вставляйте сюда личные заметки и другие чувствительные данные.",
+        "send": "Отправить"
+      },
+      "footer": {
+        "meta": "Статический лендинг в <code>landings/</code>. Не является отдельным UI приложения. <a href=\"feedback.html\">Обратная связь</a> · <a href=\"#top\">Наверх ↑</a>"
+      }
+    },
+    "feedback": {
+      "meta": {
+        "title": "Обратная связь — noesis",
+        "description": "Оставить отзыв, сообщить об ошибке или предложить сценарий для noesis — локального второго мозга из Markdown-заметок."
+      },
+      "eyebrow": "обратная связь",
+      "title": "Расскажите, что улучшить",
+      "body": "noesis делается для того, чтобы личные заметки становились полезнее. Поэтому особенно ценны реальные сценарии: что получилось, что сломалось и чего не хватает.",
+      "points": [
+        "Ошибка, странный тег или неточная связь между заметками.",
+        "Идея сценария: дневник, встречи, архив проекта, книжные выписки.",
+        "Опыт использования: что заняло больше времени, чем ожидали."
+      ],
+      "privacyNote": "<strong>Приватность.</strong> Форма отправляется через Netlify Forms. Не вставляйте в сообщение личные заметки, имена близких и другие чувствительные данные. Для приватного обсуждения лучше описать проблему в общих чертах.",
+      "github": "Или откройте issue в <a href=\"https://github.com/tritonJS826/noesis/issues\">GitHub →</a>",
+      "cardTitle": "Написать нам",
+      "cardBody": "Пара предложений — уже полезно. Email нужен только для ответа, публиковать его не будем.",
+      "form": {
+        "name": "Имя",
+        "email": "Email",
+        "topic": "Тема",
+        "message": "Сообщение",
+        "namePlaceholder": "Как к вам обращаться",
+        "emailPlaceholder": "you@example.com",
+        "messagePlaceholder": "Что вы делали, что ожидали и что получилось…",
+        "topics": [
+          "Идея или сценарий",
+          "Ошибка",
+          "Приватность и данные",
+          "Другое"
+        ],
+        "note": "Отправляя форму, вы передаёте данные в Netlify Forms. Они нужны только для ответа на сообщение. Не присылайте личные заметки.",
+        "send": "Отправить сообщение"
+      },
+      "footer": {
+        "meta": "<a href=\"index.html\">← На главную</a> · <a href=\"index.html#faq\">FAQ</a>"
+      }
+    },
+    "thanks": {
+      "meta": {
+        "title": "Спасибо — noesis",
+        "description": "Сообщение отправлено. Спасибо за обратную связь по noesis."
+      },
+      "title": "Сообщение улетело",
+      "body": "Спасибо! Мы прочитаем его и ответим, если вы оставили email. А пока можно вернуться к заметкам — или посмотреть, как собрать из них vault.",
+      "primary": "Запустить noesis",
+      "secondary": "На главную",
+      "footer": {
+        "meta": "<a href=\"feedback.html\">Обратная связь</a> · <a href=\"index.html\">На главную</a>"
+      }
+    }
+  },
+  "en": {
+    "common": {
+      "skip": "Skip to content",
+      "brandAria": "noesis — home",
+      "brandSub": "second brain",
+      "navAria": "Main navigation",
+      "nav": {
+        "how": "How it works",
+        "free": "Free",
+        "download": "Download",
+        "examples": "Examples",
+        "faq": "FAQ",
+        "contact": "Contact"
+      },
+      "header": {
+        "download": "Download",
+        "contactAria": "Contact us",
+        "contactTitle": "Contact us"
+      },
+      "langAria": "Language / Язык",
+      "footer": {
+        "tagline": "A local second brain for plain Markdown notes.",
+        "feedback": "Feedback",
+        "backTop": "Back to top ↑"
+      }
+    },
+    "index": {
+      "meta": {
+        "title": "noesis — a local second brain for your Markdown notes",
+        "description": "noesis turns a folder of Markdown diary entries into an Obsidian vault: tags, backlinks and novelty checks. Free forever, private and local with Ollama. Download a build for Linux, Windows or macOS."
+      },
+      "hero": {
+        "eyebrow": "<span class=\"pulse\" aria-hidden=\"true\"></span> local · private · free forever",
+        "title": "Give your diary<br><em>a second brain</em>",
+        "lead": "noesis reads plain Markdown notes, finds meaningful connections and turns them into an Obsidian vault. Everything runs on your computer through Ollama: no API keys, no cloud and no monthly fees. Free forever — download a build and run it.",
+        "download": "Download free <span aria-hidden=\"true\">↓</span>",
+        "examples": "See examples",
+        "freeNote": "free forever · no account, no trial",
+        "points": [
+          "Everything on your hardware",
+          "One button — the whole pipeline",
+          "Originals stay untouched",
+          "SQLite + plain text"
+        ],
+        "preview": {
+          "aria": "Example note in an Obsidian vault",
+          "path": "vault / 2024-03-05-diary.md",
+          "tags": ["#diary", "#sqlite", "#dune", "#march-plans"],
+          "title": "Diary — March 5",
+          "text": "It rained all day. Worked from home and made a big pot of green tea…",
+          "free": "for tokens",
+          "related": "## Related notes",
+          "links": [
+            {"title": "[[2024-03-25-moms-birthday]]", "note": "a gift for mom's birthday"},
+            {"title": "[[2024-03-20-task-tracker-progress]]", "note": "finish the task tracker MVP"},
+            {"title": "[[2024-04-05-recovery-after-illness]]", "note": "the Dune story continues"}
+          ]
+        }
+      },
+      "strip": {
+        "label": "Inside:"
+      },
+      "how": {
+        "eyebrow": "how it works",
+        "title": "Three steps — and your notes start talking",
+        "sub": "The pipeline is simple: the model suggests tags and connections, everything else is local processing. No magic and no rewriting your texts.",
+        "steps": [
+          {
+            "num": "01 / IMPORT",
+            "title": "Import",
+            "body": "Finds <code>.md</code> files in a folder and stores them in SQLite. Text, filenames and folder structure stay the same.",
+            "code": "-phase 1"
+          },
+          {
+            "num": "02 / ANALYZE",
+            "title": "Analyze",
+            "body": "Ollama compares notes pairwise: it asks for 2–8 tags per note and decides whether they share people, projects or a continuing story.",
+            "code": "-phase 2"
+          },
+          {
+            "num": "03 / WRITE",
+            "title": "Vault",
+            "body": "Builds an Obsidian folder: front matter with tags, bidirectional <code>[[links]]</code> and a <code>## Related notes</code> block.",
+            "code": "-phase 3"
+          }
+        ],
+        "pairNote": "<strong>Links go both ways.</strong> If note A is linked to B, B gets a link back to A with the same reason. Obsidian turns that into a graph."
+      },
+      "free": {
+        "eyebrow": "€0 per request",
+        "title": "Free because it's local",
+        "body": "A second brain doesn't have to be a subscription. The model runs on your hardware, notes stay in plain files and the database is a single SQLite file. There is nothing to pay for tokens or storage.",
+        "items": [
+          {
+            "title": "Open models via Ollama",
+            "body": "Builds default to <code>qwen2.5:7b</code>. You can also use <code>llama3.1:8b</code>, <code>mistral:7b</code> or another model."
+          },
+          {
+            "title": "Data never goes to the cloud",
+            "body": "With a local model, requests go only to <code>localhost</code>. Your diary stays yours."
+          },
+          {
+            "title": "No vendor lock-in",
+            "body": "The output is a folder of Markdown. Obsidian is optional: any editor or Git will do."
+          },
+          {
+            "title": "Your own prompts",
+            "body": "Tagging and novelty rules live in <code>prompts/phase2.txt</code> and <code>prompts/eval.txt</code> — plain text you can adapt to your diary."
+          }
+        ],
+        "callout": "<strong>Free forever.</strong> Release builds already point to the local <code>qwen2.5:7b</code> model. You can switch it in the TUI/GUI settings or with the <code>-model</code> flag."
+      },
+      "price": {
+        "aria": "Local run estimate",
+        "kicker": "monthly estimate",
+        "value": "€0",
+        "sub": "for API, tokens and subscriptions",
+        "lines": [
+          {"label": "Model", "value": "€0"},
+          {"label": "API requests", "value": "€0"},
+          {"label": "Database and vault", "value": "€0"},
+          {"label": "Hardware", "value": "yours"}
+        ]
+      },
+      "privacy": {
+        "eyebrow": "privacy & simplicity",
+        "title": "Fully on your hardware. And in one button.",
+        "sub": "No accounts, cloud databases or upload queues. Once the model is downloaded, you don't need the internet: Ollama, SQLite and the vault stay on your machine. And the whole pipeline starts with a single action.",
+        "card1": {
+          "kicker": "private by design",
+          "title": "Your data never leaves your computer",
+          "body": "A laptop, a home server or a mini PC — any hardware that can run the chosen model will do. No external services are required.",
+          "points": [
+            "Ollama answers on <code>localhost</code>, not in the cloud.",
+            "The SQLite database and the vault sit side by side on your disk.",
+            "No accounts, note uploads or cloud storage."
+          ],
+          "status": "after the model download, the internet is optional"
+        },
+        "card2": {
+          "kicker": "one button",
+          "title": "Import → analyze → vault. One click.",
+          "body": "In the GUI, press <strong>All phases</strong>; in the TUI, choose the same item. The CLI runs the whole path with one flag, <code>-phase all</code>.",
+          "code": "./noesis-cli ... -phase all",
+          "done": "and you're done"
+        }
+      },
+      "examples": {
+        "eyebrow": "examples",
+        "title": "What it looks like in practice",
+        "sub": "Two clear scenarios: turn a text diary into a vault, and check whether a new note actually says something new.",
+        "one": {
+          "badge": "example 01",
+          "title": "Text diary → Obsidian with tags and links",
+          "desc": "Input: plain text with no markup. Output: the same note with front matter, tags and links to related entries.",
+          "beforeLabel": "Before: plain Markdown",
+          "afterLabel": "After: a note in the vault",
+          "preserved": "text preserved",
+          "beforeCode": "# Diary — March 5\n\nIt rained all day.\nWorked from home and made\na big pot of green tea.\n\nRead an article about the\ninternals of SQLite — its\narchitecture is a virtual machine.\n\nWatched “Dune” with Lena in the evening.\n\nMarch plan:\n1. Finish the task tracker MVP\n2. Go to the dentist\n3. Buy a gift for mom (March 25)",
+          "afterCode": "---\ntags:\n  - diary\n  - rain\n  - sqlite\n  - virtual-machine\n  - dune\n  - lena\n  - march-plans\n  - moms-birthday\n---\n\n# Diary — March 5\n\nIt rained all day…\n(text unchanged)\n\n## Related notes\n- [[2024-03-25-moms-birthday]] — a gift for mom's birthday\n- [[2024-03-20-task-tracker-progress]] — finish the task tracker MVP\n- [[2024-04-05-recovery-after-illness]] — the Dune story continues",
+          "note": "Tags and links are added to the front matter and the end of the note. The original text is never overwritten."
+        },
+        "two": {
+          "badge": "example 02",
+          "title": "Check how novel the information is",
+          "desc": "Before writing a new note or article, compare it with notes it is already linked to and see whether it is truly new or a path you have already walked.",
+          "draftLabel": "new.md · draft",
+          "draft": "“I'm building a system with relationships between entities — tasks, users, comments. It's a relational model. Don't reinvent the wheel: use PostgreSQL or SQLite.”",
+          "linked": "Linked notes: consultation with Ivan, meeting with Anna.",
+          "resultLabel": "Evaluate note uniqueness",
+          "rating": "novelty: low",
+          "resultTitle": "Draft thought on the relational model",
+          "summaryLabel": "summary",
+          "summary": "A short thought that tasks with explicit relationships need a relational database.",
+          "newLabel": "new information",
+          "new": "Already covered in other notes: Ivan had recommended PostgreSQL, and Anna recorded that decision at the task tracker architecture meeting. No new details.",
+          "note": "The assessment is relative to linked notes. It helps avoid repeats and see where a thought is actually developing."
+        },
+        "three": {
+          "aria": "Example chain of linked notes",
+          "badge": "example 03",
+          "title": "A chain you can see in the graph",
+          "desc": "The model looks beyond similar words: it finds shared people, projects and continuing stories. Here is one chain you might see in your vault.",
+          "nodes": [
+            {"title": "Consultation with Ivan", "tags": "postgresql · keycloak · gophercon"},
+            {"title": "Learning PostgreSQL", "tags": "cte · indexes · task-tracker"},
+            {"title": "Meeting with Anna", "tags": "architecture · go · postgresql"},
+            {"title": "Task tracker progress", "tags": "gRPC · docker · Ivan"}
+          ],
+          "note": "In Obsidian these connections become a graph you can use to recall context and discover forgotten intersections."
+        }
+      },
+      "scenarios": {
+        "eyebrow": "use cases",
+        "title": "Not just a diary",
+        "sub": "Any Markdown folder works: meeting notes, ideas, book highlights, a work log or a project archive.",
+        "cards": [
+          {"label": "01 / ARCHIVE", "title": "Go through years of diary", "body": "Import old entries and get tags that make people, places and events easy to find."},
+          {"label": "02 / DUPLICATES", "title": "Find repeated ideas", "body": "Novelty checks show where you are writing again what you have already explored."},
+          {"label": "03 / PEOPLE", "title": "Recall meeting context", "body": "Links through shared names and projects turn scattered notes into a history of relationships."},
+          {"label": "04 / PROJECTS", "title": "Build a timeline", "body": "Project notes, decisions, retros and next steps end up connected to each other."},
+          {"label": "05 / BLOG", "title": "Prepare material", "body": "Tags surface the right topic quickly, while links show what is missing from a draft."},
+          {"label": "06 / PRIVACY", "title": "Keep your data to yourself", "body": "Local model, local database, local vault. No accounts or cloud storage."}
+        ]
+      },
+      "downloads": {
+        "eyebrow": "download",
+        "title": "Get a build. Free forever.",
+        "sub": "CLI, TUI and GUI for Linux, Windows and macOS. No account, subscription or trial. Every build lives in GitHub Releases.",
+        "badge": "free · forever · open source",
+        "groups": [
+          {"key": "linux", "os": "Linux", "arch": "x86_64", "note": "Ready-to-run binaries. The GUI needs the usual X11/OpenGL libraries."},
+          {"key": "windows", "os": "Windows", "arch": "x86_64", "note": "Three .exe files. The GUI starts without a console window."},
+          {"key": "macos", "os": "macOS", "arch": "arm64", "note": "macOS 12+ on Apple Silicon (arm64). Intel Macs are not covered by this release yet."}
+        ],
+        "apps": [
+          {"key": "cli", "name": "CLI", "note": "Scripts, cron and automation."},
+          {"key": "tui", "name": "TUI", "note": "Terminal interface with settings and progress."},
+          {"key": "gui", "name": "GUI", "note": "A separate Fyne window."}
+        ],
+        "get": "Download",
+        "requires": "Requires Ollama and a local model. Builds default to <code>qwen2.5:7b</code>: <code>ollama pull qwen2.5:7b</code>.",
+        "after": "After downloading on Linux/macOS: <code>chmod +x noesis-*</code> and run the binary you need. On Windows: just open the .exe.",
+        "all": "All releases on GitHub →",
+        "source": "Source: github.com/tritonJS826/noesis"
+      },
+      "faq": {
+        "eyebrow": "questions",
+        "title": "The short version",
+        "items": [
+          {
+            "q": "Is it really free?",
+            "a": "Yes. Download a build and run it: releases default to the local <code>qwen2.5:7b</code> model, so there are no API or token fees. You only need a computer that can run it. A guideline for 7–8B models is 8–16 GB of RAM; larger models are more comfortable on a GPU."
+          },
+          {
+            "q": "Where do my notes go?",
+            "a": "With a local model, nowhere: Ollama answers on <code>localhost</code>, and SQLite and the vault stay on disk. If you configure a cloud model or a remote host, requests will go there — that is a separate mode and should be a conscious choice."
+          },
+          {
+            "q": "Do I have to install Obsidian?",
+            "a": "No. The output is a regular folder of Markdown files. Obsidian simply makes tags, links and the graph pleasant to browse. You can open the vault in any editor, push it to Git or read it on a phone."
+          },
+          {
+            "q": "Why compare every pair? Isn't that slow?",
+            "a": "Each pair is checked separately, but that is what makes the connections meaningful rather than just word matches. 50 notes means 1,225 pairs. Start with a small folder; processed pairs are stored in SQLite, so a rerun does not recalculate them."
+          },
+          {
+            "q": "What if the model gets a tag or link wrong?",
+            "a": "Original notes are never overwritten; tags and links live in the database and in the Markdown. You can fix them by hand and rebuild the vault. A wrong link does not break the text — it simply appears in the <code>## Related notes</code> block."
+          },
+          {
+            "q": "Can I use my own model and prompts?",
+            "a": "Yes. Choose the model in the TUI/GUI settings or with the <code>-model</code> flag. Prompts live in <code>prompts/phase2.txt</code> (tags and links) and <code>prompts/eval.txt</code> (novelty checks) — plain text you can adapt to your diary."
+          },
+          {
+            "q": "Can I do everything with one button?",
+            "a": "Yes. The GUI and TUI have an <strong>All phases</strong> item that runs import, analysis and vault writing in sequence. In the CLI it is the <code>-phase all</code> flag. Separate phases are useful when you want to stop, review tags or continue later."
+          },
+          {
+            "q": "Is this a separate app interface?",
+            "a": "No. This is a static page in the <code>landings/</code> folder. It is not connected to the Go application and lives as a standalone landing page: open it in a browser or serve it with any static server."
+          }
+        ]
+      },
+      "feedback": {
+        "eyebrow": "feedback",
+        "title": "What should we improve?",
+        "body": "Found a bug, have a use case, or want to share how you use noesis? A couple of lines helps make the tool better.",
+        "link": "Open the full form →",
+        "name": "Name",
+        "email": "Email",
+        "message": "Message",
+        "namePlaceholder": "What should we call you?",
+        "emailPlaceholder": "you@example.com",
+        "messagePlaceholder": "An idea, a bug or a use case…",
+        "note": "This form uses Netlify Forms. Please don't paste personal notes or other sensitive data here.",
+        "send": "Send"
+      },
+      "footer": {
+        "meta": "A static landing page in <code>landings/</code>. Not a separate app UI. <a href=\"feedback.html\">Feedback</a> · <a href=\"#top\">Back to top ↑</a>"
+      }
+    },
+    "feedback": {
+      "meta": {
+        "title": "Contact — noesis",
+        "description": "Send feedback, report a bug or suggest a use case for noesis — a local second brain for Markdown notes."
+      },
+      "eyebrow": "feedback",
+      "title": "Tell us what to improve",
+      "body": "noesis exists to make personal notes more useful. Real scenarios are especially valuable: what worked, what broke and what is missing.",
+      "points": [
+        "A bug, a strange tag or an inaccurate link between notes.",
+        "A use case: diary, meetings, a project archive, book highlights.",
+        "Your experience: what took longer than you expected."
+      ],
+      "privacyNote": "<strong>Privacy.</strong> This form is processed by Netlify Forms. Please don't paste personal notes, names of loved ones or other sensitive data. For a private conversation, describe the issue in general terms.",
+      "github": "Or open an issue on <a href=\"https://github.com/tritonJS826/noesis/issues\">GitHub →</a>",
+      "cardTitle": "Write to us",
+      "cardBody": "A couple of sentences is already useful. Email is only for a reply; we won't publish it.",
+      "form": {
+        "name": "Name",
+        "email": "Email",
+        "topic": "Topic",
+        "message": "Message",
+        "namePlaceholder": "What should we call you?",
+        "emailPlaceholder": "you@example.com",
+        "messagePlaceholder": "What you did, what you expected and what happened…",
+        "topics": [
+          "Idea or use case",
+          "Bug",
+          "Privacy and data",
+          "Other"
+        ],
+        "note": "By submitting, you send the data to Netlify Forms. It is used only to reply to your message. Please don't send personal notes.",
+        "send": "Send message"
+      },
+      "footer": {
+        "meta": "<a href=\"index.html\">← Back to home</a> · <a href=\"index.html#faq\">FAQ</a>"
+      }
+    },
+    "thanks": {
+      "meta": {
+        "title": "Thank you — noesis",
+        "description": "Your message has been sent. Thank you for the feedback on noesis."
+      },
+      "title": "Your message is on its way",
+      "body": "Thank you! We'll read it and reply if you left an email. For now, you can get back to your notes — or see how to turn them into a vault.",
+      "primary": "Run noesis",
+      "secondary": "Back to home",
+      "footer": {
+        "meta": "<a href=\"feedback.html\">Feedback</a> · <a href=\"index.html\">Back to home</a>"
+      }
+    }
+  }
+}

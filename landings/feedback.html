@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d10">
+  <title>Обратная связь — noesis</title>
+  <meta name="description" content="Оставить отзыв, сообщить об ошибке или предложить сценарий для noesis.">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body id="top" data-page="feedback">
+  <a class="skip" href="#main" data-i18n="common.skip">Перейти к содержанию</a>
+  <noscript><div class="i18n-error">Для загрузки контента нужен JavaScript. / JavaScript is required to load this page.</div></noscript>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="index.html" aria-label="noesis — на главную" data-i18n-aria-label="common.brandAria">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="12" r="2.4"></circle>
+            <circle cx="18" cy="6" r="2.4"></circle>
+            <circle cx="18" cy="18" r="2.4"></circle>
+            <path d="M8.2 10.9 15.8 7.1M8.2 13.1l7.6 3.8"></path>
+          </svg>
+        </span>
+        <span class="brand-name">noesis</span>
+        <span class="brand-sub" data-i18n="common.brandSub">второй мозг</span>
+      </a>
+
+      <nav class="nav" aria-label="Основная навигация" data-i18n-aria-label="common.navAria">
+        <a href="index.html#how" data-i18n="common.nav.how">Как работает</a>
+        <a href="index.html#free" data-i18n="common.nav.free">Бесплатно</a>
+        <a href="index.html#downloads" data-i18n="common.nav.download">Скачать</a>
+        <a href="index.html#examples" data-i18n="common.nav.examples">Примеры</a>
+        <a href="index.html#faq" data-i18n="common.nav.faq">FAQ</a>
+        <a href="feedback.html" aria-current="page" data-i18n="common.nav.contact">Связаться</a>
+      </nav>
+
+      <div class="header-actions">
+        <div class="lang-switch" role="group" aria-label="Язык / Language" data-i18n-aria-label="common.langAria">
+          <button type="button" data-lang="ru" lang="ru">RU</button>
+          <button type="button" data-lang="en" lang="en">EN</button>
+        </div>
+        <a class="btn btn-small header-cta" href="index.html#downloads" data-i18n="common.header.download">Скачать</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="feedback-page-hero wrap">
+      <div class="feedback-layout">
+        <aside class="feedback-aside">
+          <div class="eyebrow" data-i18n="feedback.eyebrow">обратная связь</div>
+          <h1 data-i18n="feedback.title">Расскажите, что улучшить</h1>
+          <p data-i18n="feedback.body">noesis делается для того, чтобы личные заметки становились полезнее.</p>
+
+          <ul class="feedback-points">
+            <li data-i18n="feedback.points.0">Ошибка, странный тег или неточная связь между заметками.</li>
+            <li data-i18n="feedback.points.1">Идея сценария: дневник, встречи, архив проекта, книжные выписки.</li>
+            <li data-i18n="feedback.points.2">Опыт использования: что заняло больше времени, чем ожидали.</li>
+          </ul>
+
+          <div class="feedback-note" data-i18n="feedback.privacyNote"><strong>Приватность.</strong> Форма отправляется через Netlify Forms.</div>
+
+          <p class="feedback-github" data-i18n="feedback.github">Или откройте issue в GitHub →</p>
+        </aside>
+
+        <div class="feedback-card">
+          <h2 data-i18n="feedback.cardTitle">Написать нам</h2>
+          <p data-i18n="feedback.cardBody">Пара предложений — уже полезно.</p>
+
+          <form class="feedback-form feedback-form--page" name="feedback" method="POST" data-netlify="true" netlify-honeypot="bot-field" action="/thanks.html">
+            <input type="hidden" name="form-name" value="feedback">
+            <input type="hidden" name="language" value="ru">
+            <p hidden><label>Don't fill this out: <input name="bot-field" tabindex="-1" autocomplete="off"></label></p>
+
+            <div class="form-grid">
+              <label class="field"><span class="field-label" data-i18n="feedback.form.name">Имя</span><input type="text" name="name" autocomplete="name" placeholder="Как к вам обращаться" data-i18n-placeholder="feedback.form.namePlaceholder" required></label>
+              <label class="field"><span class="field-label" data-i18n="feedback.form.email">Email</span><input type="email" name="email" autocomplete="email" placeholder="you@example.com" data-i18n-placeholder="feedback.form.emailPlaceholder" required></label>
+            </div>
+
+            <label class="field">
+              <span class="field-label" data-i18n="feedback.form.topic">Тема</span>
+              <select name="topic">
+                <option value="idea" data-i18n="feedback.form.topics.0">Идея или сценарий</option>
+                <option value="bug" data-i18n="feedback.form.topics.1">Ошибка</option>
+                <option value="privacy" data-i18n="feedback.form.topics.2">Приватность и данные</option>
+                <option value="other" data-i18n="feedback.form.topics.3">Другое</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span class="field-label" data-i18n="feedback.form.message">Сообщение</span>
+              <textarea name="message" maxlength="4000" placeholder="Что вы делали, что ожидали и что получилось…" data-i18n-placeholder="feedback.form.messagePlaceholder" required></textarea>
+            </label>
+
+            <div class="form-footer">
+              <p data-i18n="feedback.form.note">Отправляя форму, вы передаёте данные в Netlify Forms.</p>
+              <button class="btn" type="submit" data-i18n="feedback.form.send">Отправить сообщение</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="6" cy="12" r="2.4"></circle>
+              <circle cx="18" cy="6" r="2.4"></circle>
+              <circle cx="18" cy="18" r="2.4"></circle>
+              <path d="M8.2 10.9 15.8 7.1M8.2 13.1l7.6 3.8"></path>
+            </svg>
+          </span>
+          <span class="brand-name">noesis</span>
+        </a>
+        <p data-i18n="common.footer.tagline">Локальный второй мозг из обычных Markdown-заметок.</p>
+      </div>
+      <div class="footer-meta">
+        <p data-i18n="feedback.footer.meta"><a href="index.html">← На главную</a> · <a href="index.html#faq">FAQ</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

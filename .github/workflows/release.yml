@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (for example, v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }} / ${{ matrix.goarch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            platform: linux
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            platform: windows
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            platform: macos
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Linux GUI dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+
+      - name: Check C compiler
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            gcc --version
+          else
+            cc --version
+          fi
+
+      - name: Build release binaries
+        shell: bash
+        env:
+          MODEL: qwen2.5:7b
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: |
+          bash ./CICD/build-release.sh "${{ matrix.goos }}" "${{ matrix.goarch }}" "${{ matrix.platform }}"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: noesis-${{ matrix.platform }}-${{ matrix.goarch }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: noesis ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          files: dist/release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          make_latest: true
