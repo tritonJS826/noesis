@@ -476,7 +476,7 @@ func (s *state) processNames() []string {
 	names, _ := core.ListPromptsByType(db, s.processType)
 	if len(names) == 0 {
 		if s.processType == "pair" {
-			return []string{"phase2"}
+			return []string{core.DefaultPairPrompt}
 		}
 		return []string{"tag_single"}
 	}
@@ -524,18 +524,118 @@ func (s *state) processDetailScreen() fyne.CanvasObject {
 	return container.NewVBox(
 		widget.NewLabelWithStyle("Process: "+s.processName, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewButton(runLabel, func() {
-			s.startPhase(runPhase, s.processName)
+			s.startPhase(runPhase, s.processName, "")
 		}),
 		widget.NewButton("Export for "+s.processName, func() {
-			s.startPhase(core.PhaseExportProcess, s.processName)
+			s.startPhase(core.PhaseExportProcess, s.processName, "")
 		}),
 		widget.NewButton("Edit prompt", func() {
 			s.openPrompt(s.processName, scrProcessDetail)
 		}),
+		widget.NewButton("Rename", s.renameProcess),
 		widget.NewButton("Delete", s.deleteProcess),
 		widget.NewButton("Back", func() {
 			s.openProcessList(s.processType)
 		}),
+	)
+}
+
+// ─── export templates ───────────────────────────────────────────────────────
+
+func (s *state) exportTemplatesScreen() fyne.CanvasObject {
+	items := append(append([]string{}, s.exportTemplates...), "+ Add new export template")
+
+	list := widget.NewList(
+		func() int { return len(items) },
+		func() fyne.CanvasObject { return widget.NewLabel("") },
+		func(id widget.ListItemID, o fyne.CanvasObject) {
+			if int(id) < len(items) {
+				o.(*widget.Label).SetText(items[id])
+			}
+		},
+	)
+	list.OnSelected = func(id widget.ListItemID) {
+		list.UnselectAll()
+		if int(id) < len(s.exportTemplates) {
+			s.openExportTemplateDetail(s.exportTemplates[id])
+			return
+		}
+		s.addExportTemplate()
+	}
+
+	return container.NewBorder(
+		widget.NewLabel("Select a template to export with, or add a new one."),
+		nil, nil, nil, list,
+	)
+}
+
+func (s *state) exportTemplateDetailScreen() fyne.CanvasObject {
+	if s.templateEdit {
+		editor := widget.NewMultiLineEntry()
+		editor.SetText(s.templateText)
+		editor.SetMinRowsVisible(18)
+
+		save := func() {
+			db := s.currentDB()
+			if db == nil {
+				return
+			}
+			if err := core.SaveExportTemplate(db, s.templateName, editor.Text); err != nil {
+				dialog.ShowError(err, s.win)
+				return
+			}
+			s.templateText = editor.Text
+			s.templateEdit = false
+			s.render()
+		}
+
+		hint := widget.NewLabel("Variables: ${frontmatter_block} ${frontmatter} ${body} ${related} " +
+			"${links} ${tags} ${tags_yaml} ${tags_inline} ${name} ${title} ${path} ${db.<column>}")
+		hint.Wrapping = fyne.TextWrapWord
+
+		return container.NewBorder(
+			hint,
+			container.NewHBox(
+				widget.NewButton("Save", save),
+				widget.NewButton("Cancel", func() {
+					s.templateEdit = false
+					s.render()
+				}),
+			),
+			nil, nil, editor,
+		)
+	}
+
+	preview := widget.NewLabel(s.templateText)
+	preview.Wrapping = fyne.TextWrapWord
+	preview.Selectable = true
+	scroll := container.NewVScroll(preview)
+	scroll.SetMinSize(fyne.NewSize(740, 260))
+
+	hint := widget.NewLabel("Variables: ${frontmatter_block} ${frontmatter} ${body} ${related} " +
+		"${links} ${tags} ${tags_yaml} ${tags_inline} ${name} ${title} ${path} ${db.<column>}")
+	hint.Wrapping = fyne.TextWrapWord
+
+	return container.NewBorder(
+		widget.NewLabelWithStyle("Export template: "+s.templateName, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewVBox(
+			widget.NewButton("Export with this template", func() {
+				s.startPhase(core.PhaseWrite, "", s.templateName)
+			}),
+			widget.NewButton("Edit template", func() {
+				s.templateEdit = true
+				s.render()
+			}),
+			widget.NewButton("Rename", s.renameExportTemplate),
+			widget.NewButton("Delete", s.deleteExportTemplate),
+			widget.NewButton("Back", s.openExportTemplates),
+		),
+		nil, nil,
+		container.NewVBox(
+			widget.NewSeparator(),
+			hint,
+			scroll,
+		),
 	)
 }
 

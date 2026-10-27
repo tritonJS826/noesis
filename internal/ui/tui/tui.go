@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -34,6 +35,8 @@ const (
 	scrProcessList
 	scrProcessDetail
 	scrFsSearch
+	scrExportTemplates
+	scrExportTemplateDetail
 )
 
 type ollamaMsg struct {
@@ -68,8 +71,10 @@ type model struct {
 	ollamaErr    string
 	ollamaReady  bool
 
-	textInput    textinput.Model
-	editingField string
+	textInput        textinput.Model
+	textArea         textarea.Model
+	editingField     string
+	editingMultiline bool
 
 	phaseErr error
 
@@ -117,6 +122,12 @@ type model struct {
 	fsFiles  []string // matching filesystem files
 	fsFilter string   // current search filter
 
+	// export templates
+	templateList          []string
+	templateName          string
+	templateText          string
+	templateConfirmDelete bool
+
 	width  int
 	height int
 }
@@ -124,6 +135,10 @@ type model struct {
 func newModel(db *sql.DB) *model {
 	ti := textinput.New()
 	ti.Prompt = ""
+
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.ShowLineNumbers = false
 
 	cfg := core.DefaultConfig()
 	formats := make(core.FormatSet)
@@ -141,6 +156,7 @@ func newModel(db *sql.DB) *model {
 		maxChars:      cfg.MaxChars,
 		workers:       cfg.Workers,
 		textInput:     ti,
+		textArea:      ta,
 		importSource:  core.SourceFilesystem,
 		importFormats: formats,
 	}
@@ -164,13 +180,13 @@ func fetchOllamaCmd(host string) tea.Cmd {
 	}
 }
 
-func runPhaseCmd(m *model, phase core.Phase, promptName string) tea.Cmd {
+func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) tea.Cmd {
 	src, out, modelName, host, maxChars, workers := m.src, m.out, m.modelName, m.host, m.maxChars, m.workers
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
 		defer m.program.RestoreTerminal()
 
-		cfg := core.Config{Host: host, Model: modelName, MaxChars: maxChars, Workers: workers, PromptName: promptName}
+		cfg := core.Config{Host: host, Model: modelName, MaxChars: maxChars, Workers: workers, PromptName: promptName, TemplateName: templateName}
 		progress := consoleshared.New(m.db)
 		progress.Start()
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -247,7 +263,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// if we're editing a field — delegate to textinput
+	// if we're editing a multi-line value (prompt / export template) — delegate
+	// to the textarea. Enter inserts a newline; Ctrl+S saves.
+	if m.editingField != "" && m.editingMultiline {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "ctrl+s":
+				m.saveField()
+				m.editingField = ""
+				m.editingMultiline = false
+				return m, fetchOllamaCmd(m.host)
+			case "esc":
+				m.editingField = ""
+				m.editingMultiline = false
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.textArea, cmd = m.textArea.Update(msg)
+		return m, cmd
+	}
+
+	// if we're editing a single-line field — delegate to textinput
 	if m.editingField != "" {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:

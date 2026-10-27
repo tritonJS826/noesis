@@ -44,6 +44,7 @@ func Run(args []string) error {
 	source := fs.String("source", "", "import source: filesystem, zip or json (default filesystem)")
 	format := fs.String("format", "", "comma-separated extensions to import, e.g. md,txt,csv,png (empty = default set)")
 	promptName := fs.String("prompt", "", "prompt name for pairs/single phases (empty uses default)")
+	templateName := fs.String("template", "", "export template name (empty uses default)")
 
 	removePath := fs.String("remove", "", "remove note matching this path from the db")
 	removeLinksPath := fs.String("remove-links", "", "remove note matching this path and scrub its obsidian links")
@@ -72,7 +73,7 @@ func Run(args []string) error {
 	}
 	defer db.Close()
 
-	cfg := core.Config{Host: *host, Model: *model, MaxChars: *maxChars, Workers: *workers, PromptName: *promptName}
+	cfg := core.Config{Host: *host, Model: *model, MaxChars: *maxChars, Workers: *workers, PromptName: *promptName, TemplateName: *templateName}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

@@ -228,13 +228,20 @@ func CompareFile(ctx context.Context, db *sql.DB, path, host, model string, maxC
 
 	tmpl := LoadPrompt(db, "eval")
 	if tmpl == "" {
-		tmpl = "Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}"
+		tmpl = "Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА (${FILE_NAME}) ===\n${CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n${LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}"
 	}
-	prompt := expandPrompt(tmpl, map[string]string{
+	// The compared file is not in the database, so expose its own fields under
+	// the db.* namespace to keep templates working.
+	vars := map[string]string{
 		"FILE_NAME":    filepathBase(path),
 		"CONTENT":      content,
 		"LINKED_NOTES": strings.Join(linkedTexts, "\n\n"),
-	})
+		"db.file_name": filepathBase(path),
+		"db.file_path": path,
+		"db.content":   content,
+		"db.mime_type": mimeFor(filepathBase(path), data),
+	}
+	prompt := expandPrompt(tmpl, vars)
 
 	body, _ := json.Marshal(map[string]any{
 		"model":   model,
@@ -280,16 +287,18 @@ func TagSingle(ctx context.Context, db *sql.DB, c Config, id int64) (int, error)
 	}
 	tmpl := LoadPrompt(db, promptName)
 	if tmpl == "" {
-		tmpl = "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: {FILE_NAME}) ===\n{CONTENT}"
+		tmpl = "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: ${FILE_NAME}) ===\n${CONTENT}"
 	}
 	n, err := loadNoteContent(db, id, c.MaxChars)
 	if err != nil {
 		return 0, err
 	}
-	prompt := expandPrompt(tmpl, map[string]string{
+	vars := map[string]string{
 		"FILE_NAME": n.Name,
 		"CONTENT":   n.Content,
-	})
+	}
+	vars = mergeVars(vars, noteDBVars(db, "db", id))
+	prompt := expandPrompt(tmpl, vars)
 
 	var res struct {
 		Tags []string `json:"tags"`

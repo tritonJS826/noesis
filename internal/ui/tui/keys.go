@@ -38,6 +38,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.processDetailKeys(msg)
 	case scrFsSearch:
 		return m.fsSearchKeys(msg)
+	case scrExportTemplates:
+		return m.exportTemplatesKeys(msg)
+	case scrExportTemplateDetail:
+		return m.exportTemplateDetailKeys(msg)
 	case scrRunning:
 	}
 	return nil
@@ -73,10 +77,10 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 			m.openProcessList("pair")
 		case 2: // data processing — one by one → open single list
 			m.openProcessList("single")
-		case 3: // export for obsidian
-			return m.startPhase(core.PhaseWrite, false, true, "")
+		case 3: // export for obsidian → choose a template
+			m.openExportTemplates()
 		case 4: // all phases
-			return m.startPhase(core.PhaseAll, true, true, "")
+			return m.startPhase(core.PhaseAll, true, true, "", "")
 		case 5: // work with data
 			m.screen = scrData
 			m.dataCursor = 0
@@ -92,7 +96,7 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // startPhase validates required fields and starts a phase from the menu.
-func (m *model) startPhase(phase core.Phase, needSrc, needOut bool, promptName string) tea.Cmd {
+func (m *model) startPhase(phase core.Phase, needSrc, needOut bool, promptName, templateName string) tea.Cmd {
 	var missing []string
 	if needSrc && m.src == "" {
 		missing = append(missing, "SRC")
@@ -106,7 +110,7 @@ func (m *model) startPhase(phase core.Phase, needSrc, needOut bool, promptName s
 	}
 	m.screen = scrRunning
 	m.phaseErr = nil
-	return runPhaseCmd(m, phase, promptName)
+	return runPhaseCmd(m, phase, promptName, templateName)
 }
 
 // ─── import submenu ─────────────────────────────────────────────────────────
@@ -498,7 +502,27 @@ func (m *model) evalKeys(msg tea.KeyMsg) tea.Cmd {
 
 // ─── field editing ───────────────────────────────────────────────────────────
 
+// startMultilineEdit opens the textarea editor for a multi-line value (a prompt
+// or an export template). Enter inserts a newline and Ctrl+S saves.
+func (m *model) startMultilineEdit(field, value string) {
+	width := m.width - 8
+	if width < 20 {
+		width = 20
+	}
+	height := m.height - 16
+	if height < 4 {
+		height = 4
+	}
+	m.textArea.SetWidth(width)
+	m.textArea.SetHeight(height)
+	m.textArea.SetValue(value)
+	m.textArea.Focus()
+	m.editingField = field
+	m.editingMultiline = true
+}
+
 func (m *model) startEdit() {
+	m.editingMultiline = false
 	switch m.cursor {
 	case 0: // SRC
 		m.textInput.SetValue(m.src)
@@ -547,6 +571,58 @@ func (m *model) startEdit() {
 
 func (m *model) saveField() {
 	val := m.textInput.Value()
+	if m.editingMultiline {
+		val = m.textArea.Value()
+	}
+
+	// Handle new export template creation (before the generic "New " case).
+	if strings.HasPrefix(m.editingField, "New export template: ") {
+		name := strings.TrimSpace(val)
+		if name == "" {
+			m.openExportTemplates()
+			return
+		}
+		if core.ExportTemplateExists(m.db, name) {
+			m.phaseErr = fmt.Errorf("template %q already exists", name)
+			m.openExportTemplates()
+			return
+		}
+		_ = core.SaveExportTemplate(m.db, name, core.DefaultExportTemplateBody)
+		m.openExportTemplateDetail(name)
+		return
+	}
+
+	// Handle process rename.
+	if strings.HasPrefix(m.editingField, "Rename process: ") {
+		oldName := strings.TrimPrefix(m.editingField, "Rename process: ")
+		newName := strings.TrimSpace(val)
+		if newName != "" && newName != oldName {
+			if err := core.RenamePrompt(m.db, oldName, newName); err != nil {
+				m.phaseErr = err
+				return
+			}
+			m.processName = newName
+			if m.promptViewing != "" {
+				m.promptViewing = newName
+			}
+			m.promptText = core.LoadPrompt(m.db, newName)
+		}
+		return
+	}
+
+	// Handle export template rename.
+	if strings.HasPrefix(m.editingField, "Rename template: ") {
+		oldName := strings.TrimPrefix(m.editingField, "Rename template: ")
+		newName := strings.TrimSpace(val)
+		if newName != "" && newName != oldName {
+			if err := core.RenameExportTemplate(m.db, oldName, newName); err != nil {
+				m.phaseErr = err
+				return
+			}
+			m.openExportTemplateDetail(newName)
+		}
+		return
+	}
 
 	// Handle new process creation
 	if strings.HasPrefix(m.editingField, "New ") {
@@ -570,6 +646,15 @@ func (m *model) saveField() {
 		m.promptViewing = name
 		m.promptText = val
 		// stay on the process detail view
+		return
+	}
+
+	// Handle export template body editing
+	if strings.HasPrefix(m.editingField, "Template: ") {
+		name := strings.TrimPrefix(m.editingField, "Template: ")
+		_ = core.SaveExportTemplate(m.db, name, val)
+		m.templateName = name
+		m.templateText = val
 		return
 	}
 
@@ -611,9 +696,7 @@ func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 			m.promptText = text
 		}
 	case "e", "E":
-		m.textInput.SetValue(m.promptText)
-		m.textInput.Focus()
-		m.editingField = "Prompt: " + m.promptViewing
+		m.startMultilineEdit("Prompt: "+m.promptViewing, m.promptText)
 	case "esc":
 		m.promptViewing = ""
 		m.promptText = ""
@@ -629,7 +712,7 @@ func (m *model) openProcessList(ptype string) {
 	if len(names) == 0 {
 		// fallback to defaults
 		if ptype == "pair" {
-			names = []string{"phase2"}
+			names = []string{core.DefaultPairPrompt}
 		} else {
 			names = []string{"tag_single"}
 		}
@@ -684,6 +767,7 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 			// add new process
 			m.textInput.SetValue("")
 			m.textInput.Focus()
+			m.editingMultiline = false
 			m.editingField = "New " + m.processType + " process: "
 		}
 	case "esc":
@@ -720,7 +804,7 @@ func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor--
 		}
 	case "down":
-		if m.cursor < 4 {
+		if m.cursor < 5 {
 			m.cursor++
 		}
 	case "enter":
@@ -732,16 +816,21 @@ func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
 			} else {
 				phase = core.PhaseTagSingle
 			}
-			return m.startPhase(phase, false, false, m.processName)
+			return m.startPhase(phase, false, false, m.processName, "")
 		case 1: // export for this process
-			return m.startPhase(core.PhaseExportProcess, false, true, m.processName)
+			return m.startPhase(core.PhaseExportProcess, false, true, m.processName, "")
 		case 2: // edit prompt
 			m.promptViewing = m.processName
 			m.promptText = core.LoadPrompt(m.db, m.promptViewing)
 			m.cursor = 0
-		case 3: // delete
+		case 3: // rename
+			m.textInput.SetValue(m.processName)
+			m.textInput.Focus()
+			m.editingMultiline = false
+			m.editingField = "Rename process: " + m.processName
+		case 4: // delete
 			m.processConfirmDelete = true
-		case 4: // back
+		case 5: // back
 			m.openProcessList(m.processType)
 		}
 	case "esc":
@@ -753,9 +842,7 @@ func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
 func (m *model) promptDetailKeys(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "e", "E":
-		m.textInput.SetValue(m.promptText)
-		m.textInput.Focus()
-		m.editingField = "Prompt: " + m.promptViewing
+		m.startMultilineEdit("Prompt: "+m.promptViewing, m.promptText)
 		return nil
 	case "r", "R":
 		if text, err := core.ReloadPromptFromFile(m.db, m.promptViewing); err == nil {
@@ -763,6 +850,98 @@ func (m *model) promptDetailKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.promptViewing = ""
+	}
+	return nil
+}
+
+// ─── export templates ───────────────────────────────────────────────────────
+
+func (m *model) openExportTemplates() {
+	names, _ := core.ListExportTemplates(m.db)
+	if len(names) == 0 {
+		names = []string{core.DefaultExportTemplate}
+	}
+	m.templateList = names
+	m.templateName = ""
+	m.cursor = 0
+	m.screen = scrExportTemplates
+}
+
+func (m *model) exportTemplatesKeys(msg tea.KeyMsg) tea.Cmd {
+	max := len(m.templateList) // last item is "add new"
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor < max {
+			m.cursor++
+		}
+	case "enter":
+		if m.cursor < len(m.templateList) {
+			m.openExportTemplateDetail(m.templateList[m.cursor])
+		} else {
+			m.textInput.SetValue("")
+			m.textInput.Focus()
+			m.editingMultiline = false
+			m.editingField = "New export template: "
+		}
+	case "esc":
+		m.screen = scrMenu
+		m.cursor = 3
+		m.templateList = nil
+	}
+	return nil
+}
+
+func (m *model) openExportTemplateDetail(name string) {
+	m.templateName = name
+	m.templateText = core.LoadExportTemplate(m.db, name)
+	m.templateConfirmDelete = false
+	m.cursor = 0
+	m.screen = scrExportTemplateDetail
+}
+
+func (m *model) exportTemplateDetailKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.templateConfirmDelete {
+		switch msg.String() {
+		case "y", "Y":
+			_ = core.DeleteExportTemplate(m.db, m.templateName)
+			m.templateConfirmDelete = false
+			m.openExportTemplates()
+		default:
+			m.templateConfirmDelete = false
+		}
+		return nil
+	}
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor < 4 {
+			m.cursor++
+		}
+	case "enter":
+		switch m.cursor {
+		case 0: // export with this template
+			return m.startPhase(core.PhaseWrite, false, true, "", m.templateName)
+		case 1: // edit template body
+			m.startMultilineEdit("Template: "+m.templateName, m.templateText)
+		case 2: // rename
+			m.textInput.SetValue(m.templateName)
+			m.textInput.Focus()
+			m.editingMultiline = false
+			m.editingField = "Rename template: " + m.templateName
+		case 3: // delete
+			m.templateConfirmDelete = true
+		case 4: // back
+			m.openExportTemplates()
+		}
+	case "esc":
+		m.openExportTemplates()
 	}
 	return nil
 }

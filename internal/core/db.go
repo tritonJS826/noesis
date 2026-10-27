@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS process_output(
 	output       TEXT NOT NULL,
 	PRIMARY KEY(note_id, process_name)
 );
+CREATE TABLE IF NOT EXISTS export_templates(
+	name     TEXT PRIMARY KEY,
+	template TEXT NOT NULL
+);
 `
 
 // OpenDB opens (or creates) the sqlite database and seeds the default prompts.
@@ -71,8 +75,33 @@ func OpenDB(path string) (*sql.DB, error) {
 	if err := ensureColumn(db, "prompts", "type", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
+	migratePromptNames(db)
 	seedPrompts(db)
+	seedExportTemplates(db)
 	return db, nil
+}
+
+// DefaultPairPrompt is the name of the built-in pair process.
+const DefaultPairPrompt = "Tags and bidirectional linking (for obsidian)"
+
+// DefaultExportTemplate is the name of the built-in export template.
+const DefaultExportTemplate = "default"
+
+// migratePromptNames renames the legacy "phase2" pair prompt to the descriptive
+// default name, preserving any user edits and their stored process output.
+func migratePromptNames(db *sql.DB) {
+	var one int
+	if db.QueryRow(`SELECT 1 FROM prompts WHERE name=?`, "phase2").Scan(&one) != nil {
+		return // nothing to migrate
+	}
+	// Do not clobber an existing prompt that already uses the new name.
+	if db.QueryRow(`SELECT 1 FROM prompts WHERE name=?`, DefaultPairPrompt).Scan(&one) == nil {
+		return
+	}
+	if _, err := db.Exec(`UPDATE prompts SET name=? WHERE name=?`, DefaultPairPrompt, "phase2"); err != nil {
+		return
+	}
+	_, _ = db.Exec(`UPDATE process_output SET process_name=? WHERE process_name=?`, DefaultPairPrompt, "phase2")
 }
 
 // ensureColumn adds a column to an existing table if it is missing, so that
@@ -135,18 +164,31 @@ func seedPrompts(db *sql.DB) {
 	tryDir("prompts")
 	// always ensure the built-in prompts exist (INSERT OR IGNORE keeps any
 	// user edits and any file-sourced version intact)
-	pairFallback := "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}"
-	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "phase2", pairFallback, "pair")
+	pairFallback := "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: ${A_NAME}) ===\n${A_CONTENT}\n\n=== Заметка B (файл: ${B_NAME}) ===\n${B_CONTENT}"
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, DefaultPairPrompt, pairFallback, "pair")
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "eval",
-		"Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}", "")
+		"Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА (${FILE_NAME}) ===\n${CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n${LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}", "")
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "tag_single",
-		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: {FILE_NAME}) ===\n{CONTENT}", "single")
+		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: ${FILE_NAME}) ===\n${CONTENT}", "single")
+}
+
+// DefaultExportTemplateBody reproduces the built-in Obsidian export format.
+// It is expanded with the same ${...} syntax as prompts. The block variables
+// already carry their own separators, so this matches the historical output
+// byte-for-byte (including notes without front matter or links).
+const DefaultExportTemplateBody = "${frontmatter_block}${body}${related}"
+
+// seedExportTemplates makes sure a default export template exists.
+func seedExportTemplates(db *sql.DB) {
+	db.Exec(`INSERT OR IGNORE INTO export_templates(name, template) VALUES(?,?)`,
+		DefaultExportTemplate, DefaultExportTemplateBody)
 }
 
 // guessPromptType returns a prompt type based on naming conventions.
 func guessPromptType(name, fallback string) string {
 	lower := strings.ToLower(name)
-	if strings.Contains(lower, "pair") || strings.Contains(lower, "phase2") {
+	if strings.Contains(lower, "pair") || strings.Contains(lower, "phase2") ||
+		strings.Contains(lower, "bidirectional") || strings.Contains(lower, "linking") {
 		return "pair"
 	}
 	if strings.Contains(lower, "single") || strings.Contains(lower, "tag_single") || strings.Contains(lower, "one") {
@@ -164,12 +206,83 @@ func LoadPrompt(db *sql.DB, name string) string {
 	return ""
 }
 
+// expandPrompt replaces ${KEY} placeholders in tmpl with values from vars.
+// Unknown placeholders are left untouched so users can spot typos.
 func expandPrompt(tmpl string, vars map[string]string) string {
 	s := tmpl
 	for k, v := range vars {
-		s = strings.ReplaceAll(s, "{"+k+"}", v)
+		s = strings.ReplaceAll(s, "${"+k+"}", v)
 	}
 	return s
+}
+
+// noteColumns returns the column names of the notes table, in schema order.
+func noteColumns(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`PRAGMA table_info(notes)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols = append(cols, name)
+	}
+	return cols, rows.Err()
+}
+
+// noteDBVars returns the notes-table columns of the given note as template
+// variables with the supplied prefix, e.g. prefix "db" yields "db.file_path".
+// This powers the ${db.<column>} / ${db_b.<column>} syntax in prompts and
+// export templates.
+func noteDBVars(db *sql.DB, prefix string, id int64) map[string]string {
+	cols, err := noteColumns(db)
+	if err != nil || len(cols) == 0 {
+		return nil
+	}
+	quoted := make([]string, len(cols))
+	for i, c := range cols {
+		quoted[i] = `"` + strings.ReplaceAll(c, `"`, `""`) + `"`
+	}
+	vals := make([]sql.NullString, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err := db.QueryRow(`SELECT `+strings.Join(quoted, ",")+` FROM notes WHERE id=?`, id).Scan(ptrs...); err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(cols))
+	for i, c := range cols {
+		out[prefix+"."+c] = vals[i].String
+	}
+	return out
+}
+
+// mergeVars copies all key/value pairs from src into dst.
+func mergeVars(dst, src map[string]string) map[string]string {
+	if dst == nil {
+		dst = make(map[string]string, len(src))
+	}
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// NotesColumns returns the notes-table column names for UI help text.
+func NotesColumns(db *sql.DB) []string {
+	cols, err := noteColumns(db)
+	if err != nil {
+		return nil
+	}
+	return cols
 }
 
 type execer interface {
@@ -306,6 +419,98 @@ func DeletePrompt(db *sql.DB, name string) error {
 		return err
 	}
 	_, err := db.Exec(`DELETE FROM prompts WHERE name=?`, name)
+	return err
+}
+
+// RenamePrompt renames a prompt (process) and moves its stored process output
+// to the new name. It returns an error when the target name already exists.
+func RenamePrompt(db *sql.DB, oldName, newName string) error {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return fmt.Errorf("process name must not be empty")
+	}
+	if newName == oldName {
+		return nil
+	}
+	var one int
+	if db.QueryRow(`SELECT 1 FROM prompts WHERE name=?`, newName).Scan(&one) == nil {
+		return fmt.Errorf("process %q already exists", newName)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE prompts SET name=? WHERE name=?`, newName, oldName); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE process_output SET process_name=? WHERE process_name=?`, newName, oldName); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ─── export templates ───────────────────────────────────────────────────────
+
+// ListExportTemplates returns template names ordered alphabetically.
+func ListExportTemplates(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`SELECT name FROM export_templates ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		names = append(names, n)
+	}
+	return names, rows.Err()
+}
+
+// LoadExportTemplate returns the template body, or an empty string if missing.
+func LoadExportTemplate(db *sql.DB, name string) string {
+	var t string
+	if db.QueryRow(`SELECT template FROM export_templates WHERE name=?`, name).Scan(&t) == nil {
+		return t
+	}
+	return ""
+}
+
+// ExportTemplateExists reports whether a template with this name exists.
+func ExportTemplateExists(db *sql.DB, name string) bool {
+	var one int
+	return db.QueryRow(`SELECT 1 FROM export_templates WHERE name=?`, name).Scan(&one) == nil
+}
+
+// SaveExportTemplate creates or replaces an export template.
+func SaveExportTemplate(db *sql.DB, name, text string) error {
+	_, err := db.Exec(`INSERT OR REPLACE INTO export_templates(name, template) VALUES(?,?)`, name, text)
+	return err
+}
+
+// DeleteExportTemplate removes an export template by name.
+func DeleteExportTemplate(db *sql.DB, name string) error {
+	_, err := db.Exec(`DELETE FROM export_templates WHERE name=?`, name)
+	return err
+}
+
+// RenameExportTemplate renames a template, rejecting collisions.
+func RenameExportTemplate(db *sql.DB, oldName, newName string) error {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return fmt.Errorf("template name must not be empty")
+	}
+	if newName == oldName {
+		return nil
+	}
+	var one int
+	if db.QueryRow(`SELECT 1 FROM export_templates WHERE name=?`, newName).Scan(&one) == nil {
+		return fmt.Errorf("template %q already exists", newName)
+	}
+	_, err := db.Exec(`UPDATE export_templates SET name=? WHERE name=?`, newName, oldName)
 	return err
 }
 

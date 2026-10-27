@@ -46,6 +46,10 @@ func (m *model) View() string {
 		return m.viewProcessDetail()
 	case scrFsSearch:
 		return m.viewFsSearch()
+	case scrExportTemplates:
+		return m.viewExportTemplates()
+	case scrExportTemplateDetail:
+		return m.viewExportTemplateDetail()
 	default:
 		return m.viewMenu()
 	}
@@ -430,7 +434,12 @@ func (m *model) viewPromptSub() string {
 	lines := []string{
 		lipgloss.NewStyle().Bold(true).MaxWidth(cw).Render("Prompt: " + m.promptViewing),
 		"",
+		tuiDim.MaxWidth(cw).Render("Variables:"),
 	}
+	for _, l := range wrapText(m.promptVarsHint(m.promptViewing), cw) {
+		lines = append(lines, tuiDim.MaxWidth(cw).Render(l))
+	}
+	lines = append(lines, "")
 	for _, line := range strings.Split(m.promptText, "\n") {
 		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(line))
 	}
@@ -471,10 +480,33 @@ func (m *model) viewTextEdit() string {
 	w := m.width
 	cw := w - 4
 
-	lines := []string{
-		lipgloss.NewStyle().Width(cw).Render(m.textInput.View()),
-		"",
-		tuiDim.Width(cw).Render("Enter save  ·  ESC cancel"),
+	var lines []string
+	if m.editingMultiline {
+		var hint string
+		switch {
+		case strings.HasPrefix(m.editingField, "Prompt: "):
+			hint = m.promptVarsHint(strings.TrimPrefix(m.editingField, "Prompt: "))
+		case strings.HasPrefix(m.editingField, "Template: "):
+			hint = m.exportVarsHint()
+		}
+		if hint != "" {
+			lines = append(lines, tuiDim.Width(cw).Render("Variables:"))
+			for _, l := range wrapText(hint, cw) {
+				lines = append(lines, tuiDim.Width(cw).Render(l))
+			}
+			lines = append(lines, "")
+		}
+		lines = append(lines,
+			m.textArea.View(),
+			"",
+			tuiDim.Width(cw).Render("Ctrl+S save  ·  Enter new line  ·  ESC cancel"),
+		)
+	} else {
+		lines = []string{
+			lipgloss.NewStyle().Width(cw).Render(m.textInput.View()),
+			"",
+			tuiDim.Width(cw).Render("Enter save  ·  ESC cancel"),
+		}
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -641,6 +673,7 @@ func (m *model) viewProcessDetail() string {
 		"Run",
 		"Export for " + m.processName,
 		"Edit prompt",
+		"Rename",
 		"Delete",
 		"Back",
 	}
@@ -651,7 +684,7 @@ func (m *model) viewProcessDetail() string {
 			cursor = tuiSel.Render("▸ ")
 		}
 		style := lipgloss.NewStyle().Width(cw)
-		if m.processConfirmDelete && i == 3 {
+		if m.processConfirmDelete && i == 4 {
 			style = style.Foreground(lipgloss.Color("#ff0000"))
 			item = "Delete — are you sure? (y/N)"
 		}
@@ -672,7 +705,12 @@ func (m *model) viewProcessPrompt() string {
 	lines := []string{
 		lipgloss.NewStyle().Bold(true).Width(cw).Render("Prompt: " + m.promptViewing),
 		"",
+		tuiDim.Width(cw).Render("Variables:"),
 	}
+	for _, l := range wrapText(m.promptVarsHint(m.promptViewing), cw) {
+		lines = append(lines, tuiDim.Width(cw).Render(l))
+	}
+	lines = append(lines, "")
 	for _, line := range strings.Split(m.promptText, "\n") {
 		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(line))
 	}
@@ -720,6 +758,150 @@ func (m *model) viewFsSearch() string {
 		"found: %d  ·  ↑↓ select  ·  Enter compare  ·  ESC back  ·  %s",
 		len(m.fsFiles), scrollHint(start, end, len(m.fsFiles)),
 	)))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+// promptVarsHint lists the ${...} variables available for a prompt.
+func (m *model) promptVarsHint(name string) string {
+	ptype := core.LoadPromptType(m.db, name)
+	var named []string
+	switch {
+	case ptype == "pair":
+		named = []string{"${A_NAME}", "${A_CONTENT}", "${B_NAME}", "${B_CONTENT}"}
+	case name == "eval":
+		named = []string{"${FILE_NAME}", "${CONTENT}", "${LINKED_NOTES}"}
+	default:
+		named = []string{"${FILE_NAME}", "${CONTENT}"}
+	}
+	parts := append([]string{}, named...)
+	cols := core.NotesColumns(m.db)
+	for _, c := range cols {
+		parts = append(parts, "${db."+c+"}")
+	}
+	if ptype == "pair" {
+		for _, c := range cols {
+			parts = append(parts, "${db_b."+c+"}")
+		}
+	}
+	return strings.Join(parts, "  ")
+}
+
+// exportVarsHint lists the ${...} variables available for export templates.
+func (m *model) exportVarsHint() string {
+	named := []string{
+		"${frontmatter_block}", "${frontmatter}", "${body}", "${related}",
+		"${links}", "${tags}", "${tags_yaml}", "${tags_inline}",
+		"${name}", "${title}", "${path}",
+	}
+	parts := append([]string{}, named...)
+	for _, c := range core.NotesColumns(m.db) {
+		parts = append(parts, "${db."+c+"}")
+	}
+	return strings.Join(parts, "  ")
+}
+
+// wrapText splits s into lines no wider than width runes.
+func wrapText(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	var out []string
+	for _, paragraph := range strings.Split(s, "\n") {
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			out = append(out, "")
+			continue
+		}
+		line := words[0]
+		for _, w := range words[1:] {
+			if len([]rune(line))+1+len([]rune(w)) > width {
+				out = append(out, line)
+				line = w
+			} else {
+				line += " " + w
+			}
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func (m *model) viewExportTemplates() string {
+	if m.editingField != "" {
+		return m.viewTextEdit()
+	}
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Export for Obsidian — choose a template"))
+	lines = append(lines, "")
+
+	start, end := listWindow(len(m.templateList), m.cursor, m.listRows(6))
+	for i := start; i < end; i++ {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+m.templateList[i]))
+	}
+
+	addCursor := "  "
+	if m.cursor == len(m.templateList) {
+		addCursor = tuiSel.Render("▸ ")
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiGreen.MaxWidth(cw).Render(addCursor+"+ Add new export template"))
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf(
+		"↑↓ select  ·  Enter open  ·  ESC back  ·  %s",
+		scrollHint(start, end, len(m.templateList)),
+	)))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewExportTemplateDetail() string {
+	if m.editingField != "" {
+		return m.viewTextEdit()
+	}
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Export template: "+m.templateName))
+	lines = append(lines, "")
+
+	items := []string{
+		"Export with this template",
+		"Edit template",
+		"Rename",
+		"Delete",
+		"Back",
+	}
+	for i, item := range items {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		style := lipgloss.NewStyle().Width(cw)
+		if m.templateConfirmDelete && i == 3 {
+			style = style.Foreground(lipgloss.Color("#ff0000"))
+			item = "Delete — are you sure? (y/N)"
+		}
+		lines = append(lines, style.Render(cursor+item))
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("Variables:"))
+	for _, l := range wrapText(m.exportVarsHint(), cw) {
+		lines = append(lines, tuiDim.Width(cw).Render(l))
+	}
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter  ·  ESC back"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)

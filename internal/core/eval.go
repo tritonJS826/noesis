@@ -77,13 +77,15 @@ func EvalNote(ctx context.Context, db *sql.DB, noteID int64, host, model string,
 
 	tmpl := LoadPrompt(db, "eval")
 	if tmpl == "" {
-		tmpl = "Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА ({FILE_NAME}) ===\n{CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n{LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}"
+		tmpl = "Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА (${FILE_NAME}) ===\n${CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n${LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}"
 	}
-	prompt := expandPrompt(tmpl, map[string]string{
+	vars := map[string]string{
 		"FILE_NAME":    fileName,
 		"CONTENT":      content,
 		"LINKED_NOTES": strings.Join(linkedTexts, "\n\n"),
-	})
+	}
+	vars = mergeVars(vars, noteDBVars(db, "db", noteID))
+	prompt := expandPrompt(tmpl, vars)
 
 	body, _ := json.Marshal(map[string]any{
 		"model":   model,

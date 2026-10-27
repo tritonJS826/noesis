@@ -75,7 +75,11 @@ func extractTags(fm []string) (rest []string, tags []string) {
 	return
 }
 
-func compose(content string, tags []string, linksMD string) string {
+// exportVars builds the template variables available to export templates for
+// one note. The ${frontmatter_block}, ${body} and ${related} variables already
+// contain their own separators, so the default template reproduces the
+// historical Obsidian output exactly.
+func exportVars(content string, tags []string, linksMD string) map[string]string {
 	fm, body, has := splitFrontMatter(content)
 	var existing []string
 	if has {
@@ -89,30 +93,69 @@ func compose(content string, tags []string, linksMD string) string {
 			all = append(all, t)
 		}
 	}
-	var b strings.Builder
+
+	var fmRaw strings.Builder
+	for _, l := range fm {
+		fmRaw.WriteString(l + "\n")
+	}
+	var tagsYAML strings.Builder
+	if len(all) > 0 {
+		tagsYAML.WriteString("tags:\n")
+		for _, t := range all {
+			tagsYAML.WriteString("  - " + t + "\n")
+		}
+	}
+	var frontmatterBlock strings.Builder
 	if has || len(all) > 0 {
-		b.WriteString("---\n")
-		for _, l := range fm {
-			b.WriteString(l + "\n")
-		}
-		if len(all) > 0 {
-			b.WriteString("tags:\n")
-			for _, t := range all {
-				b.WriteString("  - " + t + "\n")
-			}
-		}
-		b.WriteString("---\n\n")
+		frontmatterBlock.WriteString("---\n")
+		frontmatterBlock.WriteString(fmRaw.String())
+		frontmatterBlock.WriteString(tagsYAML.String())
+		frontmatterBlock.WriteString("---\n\n")
 	}
-	b.WriteString(strings.TrimRight(body, "\n"))
-	b.WriteString("\n")
+
+	inline := make([]string, 0, len(all))
+	for _, t := range all {
+		inline = append(inline, "#"+t)
+	}
+
+	related := ""
 	if strings.TrimSpace(linksMD) != "" {
-		b.WriteString("\n## Related notes\n" + linksMD + "\n")
+		related = "\n## Related notes\n" + linksMD + "\n"
 	}
-	return b.String()
+
+	return map[string]string{
+		"frontmatter_block": frontmatterBlock.String(),
+		"frontmatter":       fmRaw.String(),
+		"tags_yaml":         tagsYAML.String(),
+		"tags":              tagsYAML.String(),
+		"tags_inline":       strings.Join(inline, " "),
+		"body":              strings.TrimRight(body, "\n") + "\n",
+		"related":           related,
+		"links":             linksMD,
+	}
 }
 
-// Phase3 writes the vault: front matter with tags and [[wikilinks]].
-func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src string) error {
+// renderExport expands the selected export template for one note. When the
+// template is missing or empty the built-in default is used.
+func renderExport(db *sql.DB, templateName string, id int64, path, content, linksMD string, tags []string) string {
+	tmpl := ""
+	if templateName != "" {
+		tmpl = LoadExportTemplate(db, templateName)
+	}
+	if tmpl == "" {
+		tmpl = DefaultExportTemplateBody
+	}
+	vars := exportVars(content, tags, linksMD)
+	name := filepath.Base(path)
+	vars["name"] = name
+	vars["title"] = noteLinkName(name)
+	vars["path"] = path
+	vars = mergeVars(vars, noteDBVars(db, "db", id))
+	return expandPrompt(tmpl, vars)
+}
+
+// Phase3 writes the vault using the selected export template.
+func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName string) error {
 	if out == "" {
 		return errors.New("specify output folder: -out FOLDER")
 	}
@@ -164,7 +207,7 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src string) error 
 		}
 		trows.Close()
 
-		text := compose(rec.content, tags, rec.links)
+		text := renderExport(db, templateName, rec.id, rec.path, rec.content, rec.links, tags)
 		sum := sha256.Sum256([]byte(text))
 		h := hex.EncodeToString(sum[:])
 		dst := filepath.Join(absOut, filepath.FromSlash(rec.path))
@@ -193,7 +236,7 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src string) error 
 }
 
 // ExportForProcess writes process-specific output to a subfolder.
-func ExportForProcess(ctx context.Context, r Reporter, db *sql.DB, out, processName string, src string) error {
+func ExportForProcess(ctx context.Context, r Reporter, db *sql.DB, out, processName string, src string, templateName string) error {
 	absOut, err := filepath.Abs(out)
 	if err != nil {
 		return err
@@ -234,8 +277,8 @@ func ExportForProcess(ctx context.Context, r Reporter, db *sql.DB, out, processN
 			tags = cleanTags(res.Tags)
 		}
 
-		// Compose with process-specific tags
-		text := compose(content, tags, "")
+		// Compose with process-specific tags (no related links).
+		text := renderExport(db, templateName, id, path, content, "", tags)
 		dst := filepath.Join(absOut, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			r.Fail("%s: %v", path, err)

@@ -101,18 +101,21 @@ func stripCodeFences(s string) string {
 func buildPrompt(db *sql.DB, c Config, a, b note) string {
 	promptName := c.PromptName
 	if promptName == "" {
-		promptName = "phase2"
+		promptName = DefaultPairPrompt
 	}
 	tmpl := LoadPrompt(db, promptName)
 	if tmpl == "" {
-		tmpl = "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: {A_NAME}) ===\n{A_CONTENT}\n\n=== Заметка B (файл: {B_NAME}) ===\n{B_CONTENT}"
+		tmpl = "Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДаны две заметки: A и B.\n\n1. Для КАЖДОЙ заметки выдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\n   люди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\n   одно-два слова (вместо пробела используй дефис), без символа #.\n2. Реши, есть ли между A и B реальная смысловая связь: общие люди, места, события,\n   продолжение истории, одна и та же тема. Если связи нет — related=false.\n   Если есть — related=true и в reason одна короткая фраза, почему они связаны.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags_a\":[\"...\"],\"tags_b\":[\"...\"],\"related\":true,\"reason\":\"...\"}\n\n=== Заметка A (файл: ${A_NAME}) ===\n${A_CONTENT}\n\n=== Заметка B (файл: ${B_NAME}) ===\n${B_CONTENT}"
 	}
-	return expandPrompt(tmpl, map[string]string{
+	vars := map[string]string{
 		"A_NAME":    a.Name,
 		"A_CONTENT": a.Content,
 		"B_NAME":    b.Name,
 		"B_CONTENT": b.Content,
-	})
+	}
+	vars = mergeVars(vars, noteDBVars(db, "db", a.ID))
+	vars = mergeVars(vars, noteDBVars(db, "db_b", b.ID))
+	return expandPrompt(tmpl, vars)
 }
 
 func askOllama(ctx context.Context, c Config, prompt string) (pairResult, error) {

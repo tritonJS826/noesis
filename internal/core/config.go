@@ -6,11 +6,12 @@ var DefaultModel = "gemma4:31b-cloud"
 
 // Config holds everything the processing phases need.
 type Config struct {
-	Host       string
-	Model      string
-	MaxChars   int
-	Workers    int
-	PromptName string // prompt to use (empty = default)
+	Host         string
+	Model        string
+	MaxChars     int
+	Workers      int
+	PromptName   string // prompt to use (empty = default)
+	TemplateName string // export template to use (empty = default)
 }
 
 // DefaultConfig returns the configuration used by the UIs on startup.

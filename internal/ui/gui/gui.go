@@ -38,6 +38,8 @@ const (
 	scrProcessList
 	scrProcessDetail
 	scrRunning
+	scrExportTemplates
+	scrExportTemplateDetail
 )
 
 type noteAction int
@@ -116,6 +118,12 @@ type state struct {
 	promptName  string
 	promptText  string
 	promptEdit  bool
+
+	// export templates
+	exportTemplates []string
+	templateName    string
+	templateText    string
+	templateEdit    bool
 
 	// novelty result
 	evalResult  string
@@ -252,6 +260,13 @@ func (s *state) screenTitle() string {
 		return "Pair processes"
 	case scrProcessDetail:
 		return "Process: " + s.processName
+	case scrExportTemplates:
+		return "Export for Obsidian — choose a template"
+	case scrExportTemplateDetail:
+		if s.templateEdit {
+			return "Edit export template: " + s.templateName
+		}
+		return "Export template: " + s.templateName
 	case scrRunning:
 		return "Processing…"
 	default:
@@ -276,6 +291,11 @@ func (s *state) goBack() {
 		s.screen = s.promptBack
 	case scrProcessDetail:
 		s.openProcessList(s.processType)
+		return
+	case scrExportTemplates:
+		s.screen = scrMenu
+	case scrExportTemplateDetail:
+		s.openExportTemplates()
 		return
 	case scrRunning:
 		return
@@ -307,6 +327,10 @@ func (s *state) body() fyne.CanvasObject {
 		return s.processListScreen()
 	case scrProcessDetail:
 		return s.processDetailScreen()
+	case scrExportTemplates:
+		return s.exportTemplatesScreen()
+	case scrExportTemplateDetail:
+		return s.exportTemplateDetailScreen()
 	case scrRunning:
 		return s.runningScreen()
 	default:
@@ -325,10 +349,10 @@ func (s *state) activateMenu(id int) {
 		s.openProcessList("single")
 		return
 	case 3:
-		s.startPhase(core.PhaseWrite, "")
+		s.openExportTemplates()
 		return
 	case 4:
-		s.startPhase(core.PhaseAll, "")
+		s.startPhase(core.PhaseAll, "", "")
 		return
 	case 5:
 		s.screen = scrData
@@ -598,6 +622,134 @@ func (s *state) reloadPrompt() {
 	s.render()
 }
 
+// ─── export templates ───────────────────────────────────────────────────────
+
+func (s *state) openExportTemplates() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	names, err := core.ListExportTemplates(db)
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	if len(names) == 0 {
+		names = []string{core.DefaultExportTemplate}
+	}
+	s.exportTemplates = names
+	s.screen = scrExportTemplates
+	s.render()
+}
+
+func (s *state) openExportTemplateDetail(name string) {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	s.templateName = name
+	s.templateText = core.LoadExportTemplate(db, name)
+	s.templateEdit = false
+	s.screen = scrExportTemplateDetail
+	s.render()
+}
+
+func (s *state) addExportTemplate() {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("template name")
+	dialog.ShowCustomConfirm("Add export template", "Create", "Cancel", nameEntry, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(nameEntry.Text)
+		if name == "" {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		if core.ExportTemplateExists(db, name) {
+			dialog.ShowError(fmt.Errorf("template %q already exists", name), s.win)
+			return
+		}
+		if err := core.SaveExportTemplate(db, name, core.DefaultExportTemplateBody); err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.openExportTemplateDetail(name)
+	}, s.win)
+}
+
+func (s *state) renameExportTemplate() {
+	old := s.templateName
+	entry := widget.NewEntry()
+	entry.SetText(old)
+	dialog.ShowCustomConfirm("Rename export template", "Rename", "Cancel", entry, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(entry.Text)
+		if name == "" || name == old {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		if err := core.RenameExportTemplate(db, old, name); err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.openExportTemplateDetail(name)
+	}, s.win)
+}
+
+func (s *state) deleteExportTemplate() {
+	name := s.templateName
+	dialog.ShowConfirm("Remove export template", "Delete template "+name+"?", func(ok bool) {
+		if !ok {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		if err := core.DeleteExportTemplate(db, name); err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.openExportTemplates()
+	}, s.win)
+}
+
+// ─── process rename ─────────────────────────────────────────────────────────
+
+func (s *state) renameProcess() {
+	old := s.processName
+	entry := widget.NewEntry()
+	entry.SetText(old)
+	dialog.ShowCustomConfirm("Rename process", "Rename", "Cancel", entry, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(entry.Text)
+		if name == "" || name == old {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		if err := core.RenamePrompt(db, old, name); err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.processName = name
+		s.render()
+	}, s.win)
+}
+
 func (s *state) pickModel() {
 	host := strings.TrimSpace(s.host.Text)
 	go func() {
@@ -662,7 +814,7 @@ func (s *state) startImport() {
 	}()
 }
 
-func (s *state) startPhase(phase core.Phase, promptName string) {
+func (s *state) startPhase(phase core.Phase, promptName, templateName string) {
 	if s.isRunning() {
 		return
 	}
@@ -681,6 +833,7 @@ func (s *state) startPhase(phase core.Phase, promptName string) {
 		return
 	}
 	cfg.PromptName = promptName
+	cfg.TemplateName = templateName
 	if err := s.useDB(dbPath); err != nil {
 		dialog.ShowError(err, s.win)
 		return

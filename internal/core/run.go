@@ -26,11 +26,11 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 	case PhaseAnalyze:
 		return Phase2(ctx, r, db, c)
 	case PhaseWrite:
-		return Phase3(ctx, r, db, out, src)
+		return Phase3(ctx, r, db, out, src, c.TemplateName)
 	case PhaseTagSingle:
 		return TagAllSingle(ctx, r, db, c)
 	case PhaseExportProcess:
-		return ExportForProcess(ctx, r, db, out, c.PromptName, src)
+		return ExportForProcess(ctx, r, db, out, c.PromptName, src, c.TemplateName)
 	case PhaseAll:
 		if err := Phase1(ctx, r, db, src); err != nil {
 			return err
@@ -44,7 +44,7 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 		if ctx.Err() != nil {
 			return nil
 		}
-		return Phase3(ctx, r, db, out, src)
+		return Phase3(ctx, r, db, out, src, c.TemplateName)
 	}
 	return nil
 }
