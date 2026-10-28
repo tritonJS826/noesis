@@ -17,11 +17,14 @@ CREATE TABLE IF NOT EXISTS notes(
 	file_path   TEXT NOT NULL UNIQUE,   -- path relative to source folder
 	abs_path    TEXT NOT NULL,          -- absolute path at import time
 	file_name   TEXT NOT NULL,          -- filename only
-	content     TEXT NOT NULL,          -- original text, or base64 for binary formats
-	mime_type   TEXT NOT NULL DEFAULT '', -- MIME type (text/markdown, image/png, audio/mpeg…)
-	links_md    TEXT NOT NULL DEFAULT '', -- obsidian links ([[...]]) as a separate column
-	out_hash    TEXT NOT NULL DEFAULT '', -- hash of the file written in phase 3
-	imported_at TEXT NOT NULL
+	content        TEXT NOT NULL,          -- original text, or base64 for binary formats
+	mime_type      TEXT NOT NULL DEFAULT '', -- MIME type (text/markdown, image/png, audio/mpeg…)
+	extracted_text TEXT NOT NULL DEFAULT '', -- text extracted from documents/audio
+	extract_error  TEXT NOT NULL DEFAULT '', -- why extraction failed (empty = no error)
+	extract_tool   TEXT NOT NULL DEFAULT '', -- extractor/transcriber used, e.g. go:docx / ollama:whisper
+	links_md       TEXT NOT NULL DEFAULT '', -- obsidian links ([[...]]) as a separate column
+	out_hash       TEXT NOT NULL DEFAULT '', -- hash of the file written in phase 3
+	imported_at    TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tags(
 	note_id INTEGER NOT NULL REFERENCES notes(id),
@@ -72,6 +75,11 @@ func OpenDB(path string) (*sql.DB, error) {
 	}
 	if err := ensureColumn(db, "notes", "mime_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
+	}
+	for _, col := range []string{"extracted_text", "extract_error", "extract_tool"} {
+		if err := ensureColumn(db, "notes", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return nil, err
+		}
 	}
 	if err := ensureColumn(db, "prompts", "type", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err

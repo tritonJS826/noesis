@@ -9,9 +9,12 @@ import (
 // the filesystem source. It is kept for CLI/GUI backward compatibility; the
 // TUI uses Import directly to offer source and format selection.
 func Phase1(ctx context.Context, r Reporter, db *sql.DB, src string) error {
+	cfg := DefaultConfig()
 	return Import(ctx, r, db, src, ImportOptions{
-		Source:  SourceFilesystem,
-		Formats: defaultFormatSet(),
+		Source:          SourceFilesystem,
+		Formats:         defaultFormatSet(),
+		Host:            cfg.Host,
+		TranscribeModel: cfg.TranscribeModel,
 	})
 }
 

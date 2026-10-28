@@ -38,9 +38,10 @@ func Run(args []string) error {
 	dbPath := fs.String("db", "notes.db", "sqlite database file")
 	host := fs.String("host", def.Host, "ollama host")
 	model := fs.String("model", def.Model, "ollama model")
+	transcribeModel := fs.String("transcribe-model", def.TranscribeModel, "ollama audio transcription model")
 	maxChars := fs.Int("maxchars", def.MaxChars, "max characters per note sent to ollama")
 	workers := fs.Int("workers", def.Workers, "concurrent ollama requests (1-100)")
-	phaseName := fs.String("phase", "all", "phase to run: import, pairs, single, export, all")
+	phaseName := fs.String("phase", "all", "phase to run: import, extract, pairs, single, export, all")
 	source := fs.String("source", "", "import source: filesystem, zip or json (default filesystem)")
 	format := fs.String("format", "", "comma-separated extensions to import, e.g. md,txt,csv,png (empty = default set)")
 	promptName := fs.String("prompt", "", "prompt name for pairs/single phases (empty uses default)")
@@ -73,7 +74,15 @@ func Run(args []string) error {
 	}
 	defer db.Close()
 
-	cfg := core.Config{Host: *host, Model: *model, MaxChars: *maxChars, Workers: *workers, PromptName: *promptName, TemplateName: *templateName}
+	cfg := core.Config{
+		Host:            *host,
+		Model:           *model,
+		TranscribeModel: *transcribeModel,
+		MaxChars:        *maxChars,
+		Workers:         *workers,
+		PromptName:      *promptName,
+		TemplateName:    *templateName,
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -96,7 +105,7 @@ func Run(args []string) error {
 		return nil
 
 	case *comparePath != "":
-		result, err := core.CompareFile(ctx, db, *comparePath, *host, *model, *maxChars)
+		result, err := core.CompareFile(ctx, db, *comparePath, *host, *model, *transcribeModel, *maxChars)
 		if err != nil {
 			return err
 		}
@@ -132,7 +141,12 @@ func Run(args []string) error {
 		if err != nil {
 			return err
 		}
-		opts := core.ImportOptions{Source: src2, Formats: parseFormats(*format)}
+		opts := core.ImportOptions{
+			Source:          src2,
+			Formats:         parseFormats(*format),
+			Host:            *host,
+			TranscribeModel: *transcribeModel,
+		}
 		return core.Import(ctx, progress, db, *src, opts)
 	}
 
@@ -163,6 +177,8 @@ func parsePhase(s string) (core.Phase, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "1", "import":
 		return core.PhaseImport, nil
+	case "extract", "extraction", "transcribe":
+		return core.PhaseExtract, nil
 	case "2", "analyze", "tags", "pairs":
 		return core.PhaseAnalyze, nil
 	case "3", "export", "write":
@@ -170,6 +186,6 @@ func parsePhase(s string) (core.Phase, error) {
 	case "single", "1x1", "tags-single", "one":
 		return core.PhaseTagSingle, nil
 	default:
-		return 0, fmt.Errorf("unknown phase %q (use import, pairs, single, export or all)", s)
+		return 0, fmt.Errorf("unknown phase %q (use import, extract, pairs, single, export or all)", s)
 	}
 }

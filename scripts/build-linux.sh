@@ -8,9 +8,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 MODEL="${MODEL:-gemma4:31b-cloud}"
+TRANSCRIBE_MODEL="${TRANSCRIBE_MODEL:-whisper}"
 ARCH="${GOARCH:-$(go env GOARCH)}"
 OUT="dist/linux-$ARCH"
-LDFLAGS="-s -w -X noesis/internal/core.DefaultModel=$MODEL"
+LDFLAGS="-s -w -X noesis/internal/core.DefaultModel=$MODEL -X noesis/internal/core.DefaultTranscribeModel=$TRANSCRIBE_MODEL"
 
 mkdir -p "$OUT"
 

@@ -1,16 +1,17 @@
 .DEFAULT_GOAL := help
 
 # Default values — override on command line
-MODEL    ?= gemma4:31b-cloud
-HOST     ?= http://localhost:11434
-ARGS     ?=
+MODEL            ?= gemma4:31b-cloud
+TRANSCRIBE_MODEL ?= whisper
+HOST             ?= http://localhost:11434
+ARGS             ?=
 
 BIN_TUI  := noesis-tui
 BIN_CLI  := noesis-cli
 BIN_GUI  := noesis-gui
 MODEL_STAMP := .model-stamp
 GO_SOURCES := $(shell find . -name '*.go' -not -path './.git/*')
-LDFLAGS  := -ldflags "-X noesis/internal/core.DefaultModel=$(MODEL)"
+LDFLAGS  := -ldflags "-X noesis/internal/core.DefaultModel=$(MODEL) -X noesis/internal/core.DefaultTranscribeModel=$(TRANSCRIBE_MODEL)"
 
 .PHONY: help build build-tui build-cli build-gui run run-cli run-gui dist clean
 
@@ -27,7 +28,7 @@ help: ## Show this help
 	@echo "  make dist                           build release binaries for this OS"
 	@echo "  make clean                          remove binaries, dist and database"
 	@echo ""
-	@echo "  Variables:  MODEL=$(MODEL)  HOST=$(HOST)  ARGS=$(ARGS)"
+	@echo "  Variables:  MODEL=$(MODEL)  TRANSCRIBE_MODEL=$(TRANSCRIBE_MODEL)  HOST=$(HOST)  ARGS=$(ARGS)"
 	@echo "  Distribution builds:  ./scripts/build-linux.sh"
 	@echo "                        ./scripts/build-macos.sh"
 	@echo "                        ./scripts/build-windows.sh (or .ps1)"
@@ -50,7 +51,7 @@ $(BIN_GUI): $(GO_SOURCES) go.mod go.sum $(MODEL_STAMP)
 	go build $(LDFLAGS) -o $(BIN_GUI) ./cmd/noesis-gui
 
 $(MODEL_STAMP): FORCE
-	@echo "$(MODEL)" | cmp -s $@ - 2>/dev/null || echo "$(MODEL)" > $@
+	@echo "$(MODEL)|$(TRANSCRIBE_MODEL)" | cmp -s $@ - 2>/dev/null || echo "$(MODEL)|$(TRANSCRIBE_MODEL)" > $@
 
 FORCE:
 

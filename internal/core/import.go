@@ -108,6 +108,15 @@ var formatCatalog = []FormatInfo{
 	// documents
 	{"pdf", "application/pdf", "document"},
 	{"docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "document"},
+	{"pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "document"},
+	{"xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "document"},
+	{"odt", "application/vnd.oasis.opendocument.text", "document"},
+	{"odp", "application/vnd.oasis.opendocument.presentation", "document"},
+	{"ods", "application/vnd.oasis.opendocument.spreadsheet", "document"},
+	{"doc", "application/msword", "document"},
+	{"ppt", "application/vnd.ms-powerpoint", "document"},
+	{"xls", "application/vnd.ms-excel", "document"},
+	{"rtf", "application/rtf", "document"},
 	{"epub", "application/epub+zip", "document"},
 }
 
@@ -120,10 +129,16 @@ var extMime = func() map[string]string {
 	return m
 }()
 
-// DefaultImportFormats returns the every-day text formats used when no
-// explicit choice is made.
+// DefaultImportFormats returns the formats used when no explicit choice is
+// made. It covers everyday text files, all supported office/document formats
+// and audio files (which are transcribed locally through Ollama).
 func DefaultImportFormats() []string {
-	return []string{"md", "txt", "csv", "json", "yaml", "xml", "html", "log", "mdx"}
+	return []string{
+		"md", "txt", "csv", "json", "yaml", "xml", "html", "log", "mdx",
+		"pdf", "docx", "pptx", "xlsx", "odt", "odp", "ods",
+		"doc", "ppt", "xls", "rtf", "epub",
+		"mp3", "wav", "ogg", "m4a", "flac",
+	}
 }
 
 // KnownFormats returns a copy of the format catalog, ordered as defined.
@@ -202,8 +217,10 @@ type importFile struct {
 
 // ImportOptions configures one import run.
 type ImportOptions struct {
-	Source  ImportSource
-	Formats FormatSet
+	Source          ImportSource
+	Formats         FormatSet
+	Host            string // Ollama host for audio transcription
+	TranscribeModel string // Ollama transcription model (empty = default)
 }
 
 // Import reads files from src into the notes table according to opt. The
@@ -268,14 +285,28 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 			continue
 		}
 
-		mimeType := mimeFor(filepath.Base(rel), data)
+		name := filepath.Base(rel)
+		mimeType := mimeFor(name, data)
 		content := string(data)
 		if !IsText(mimeType) {
 			content = base64.StdEncoding.EncodeToString(data)
 		}
 
-		_, err = tx.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, imported_at) VALUES(?,?,?,?,?,?)`,
-			rel, f.Abs, filepath.Base(rel), content, mimeType, time.Now().Format(time.RFC3339))
+		var extracted, extractErr, extractTool string
+		if IsExtractable(name, mimeType) {
+			text, tool, err := ExtractFileText(ctx, name, mimeType, data, opt.Host, opt.TranscribeModel)
+			extractTool = tool
+			if err != nil {
+				extractErr = err.Error()
+				r.Logf("%s: extraction failed: %v", rel, err)
+			} else {
+				extracted = text
+			}
+		}
+
+		_, err = tx.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type,
+			extracted_text, extract_error, extract_tool, imported_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			rel, f.Abs, name, content, mimeType, extracted, extractErr, extractTool, time.Now().Format(time.RFC3339))
 		if err != nil {
 			r.Fail("%s: %v", rel, err)
 			r.Advance(true)

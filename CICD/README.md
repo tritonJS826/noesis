@@ -70,10 +70,11 @@ Requirements:
   (arm64) and uses a macOS 12+ deployment target. Intel Mac builds are not
   produced yet; add an Intel runner and a matching asset if they are needed.
 
-Set `MODEL` to bake a different default:
+Set `MODEL` or `TRANSCRIBE_MODEL` to bake different defaults:
 
 ```bash
-MODEL=gemma4:31b-cloud bash CICD/build-release.sh linux amd64 linux
+MODEL=gemma4:31b-cloud TRANSCRIBE_MODEL=whisper \
+  bash CICD/build-release.sh linux amd64 linux
 ```
 
 ## Notes

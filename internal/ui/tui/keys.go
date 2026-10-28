@@ -226,7 +226,7 @@ func (m *model) toggleFormat(ext string) {
 
 // ─── work with data submenu ────────────────────────────────────────────────
 
-const dataItems = 1 // 0..1
+const dataItems = 2 // 0..2
 
 func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 	switch vimNav(msg.String()) {
@@ -248,6 +248,8 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 			m.fsFiles = nil
 			m.cursor = 0
 			m.filterTyping = false
+		case 2: // re-extract documents & transcribe audio
+			return m.startPhase(core.PhaseExtract, false, false, "", "")
 		}
 	case "esc", "q":
 		m.screen = scrMenu
@@ -536,11 +538,11 @@ func (m *model) comparePathKeys(msg tea.KeyMsg) tea.Cmd {
 			m.evalReturn = scrComparePath
 			m.evalReturnCursor = 0
 			m.screen = scrEval
-			return compareFileCmd(m.db, m.comparePath, m.host, m.modelName, m.maxChars)
+			return compareFileCmd(m.db, m.comparePath, m.host, m.modelName, m.transcribeModel, m.maxChars)
 		}
 	case "esc", "q":
 		m.screen = scrData
-		m.dataCursor = 3
+		m.dataCursor = 2
 	case "backspace":
 		r := []rune(m.comparePath)
 		if len(r) > 0 {
@@ -572,7 +574,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.promptViewing != "" {
 		return m.promptKeys(msg)
 	}
-	max := 8 // 0..8 (added Reset database)
+	max := 9 // 0..9 (TRANSCRIBE + Reset database)
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
@@ -586,7 +588,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		m.screen = scrMenu
 		m.cursor = 6
 	case "enter":
-		if m.cursor == 8 {
+		if m.cursor == 9 {
 			// Reset database
 			m.confirmReset = true
 		} else {
@@ -791,19 +793,23 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(m.modelName)
 		m.textInput.Focus()
 		m.editingField = "MODEL — ollama model"
-	case 4: // HOST
+	case 4: // TRANSCRIBE
+		m.textInput.SetValue(m.transcribeModel)
+		m.textInput.Focus()
+		m.editingField = "TRANSCRIBE — ollama audio model"
+	case 5: // HOST
 		m.textInput.SetValue(m.host)
 		m.textInput.Focus()
 		m.editingField = "HOST — ollama host"
-	case 5: // MAXCHARS
+	case 6: // MAXCHARS
 		m.textInput.SetValue(fmt.Sprintf("%d", m.maxChars))
 		m.textInput.Focus()
 		m.editingField = "MAXCHARS — max chars"
-	case 6: // WORKERS
+	case 7: // WORKERS
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
 		m.editingField = "WORKERS — concurrency (1–100)"
-	case 7: // EVAL PROMPT
+	case 8: // EVAL PROMPT
 		m.openEvalPrompt()
 		return
 	}
@@ -908,12 +914,14 @@ func (m *model) saveField() {
 	case 3:
 		m.modelName = val
 	case 4:
-		m.host = val
+		m.transcribeModel = val
 	case 5:
+		m.host = val
+	case 6:
 		if n, _ := fmt.Sscanf(val, "%d", &m.maxChars); n != 1 {
 			m.maxChars = 4000
 		}
-	case 6:
+	case 7:
 		if n, _ := fmt.Sscanf(val, "%d", &m.workers); n != 1 || m.workers < 1 {
 			m.workers = 1
 		}
@@ -940,7 +948,7 @@ func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.promptViewing = ""
 		m.promptText = ""
-		m.cursor = 6
+		m.cursor = 8
 	}
 	return nil
 }
@@ -1283,7 +1291,7 @@ func (m *model) compareSelectedFile() tea.Cmd {
 	m.evalReturnCursor = m.cursor
 	m.filterTyping = false
 	m.screen = scrEval
-	return compareFileCmd(m.db, path, m.host, m.modelName, m.maxChars)
+	return compareFileCmd(m.db, path, m.host, m.modelName, m.transcribeModel, m.maxChars)
 }
 
 func fsSearchCmd(filter string) tea.Cmd {

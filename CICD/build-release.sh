@@ -29,6 +29,7 @@ if [ -z "$PLATFORM" ]; then
 fi
 
 MODEL="${MODEL:-gemma4:31b-cloud}"
+TRANSCRIBE_MODEL="${TRANSCRIBE_MODEL:-whisper}"
 OUT="dist/release"
 EXT=""
 if [ "$GOOS_ARG" = "windows" ]; then
@@ -39,7 +40,7 @@ if [ "$GOOS_ARG" = "darwin" ] && [ -z "${MACOSX_DEPLOYMENT_TARGET:-}" ]; then
   export MACOSX_DEPLOYMENT_TARGET=12.0
 fi
 
-LDFLAGS="-s -w -X noesis/internal/core.DefaultModel=$MODEL"
+LDFLAGS="-s -w -X noesis/internal/core.DefaultModel=$MODEL -X noesis/internal/core.DefaultTranscribeModel=$TRANSCRIBE_MODEL"
 GUI_LDFLAGS="$LDFLAGS"
 if [ "$GOOS_ARG" = "windows" ]; then
   GUI_LDFLAGS="$GUI_LDFLAGS -H windowsgui"
@@ -61,6 +62,7 @@ build() {
 echo "noesis release build"
 echo "  platform: ${PLATFORM}-${GOARCH_ARG} (GOOS=${GOOS_ARG}, GOARCH=${GOARCH_ARG})"
 echo "  model:    ${MODEL}"
+echo "  transcribe: ${TRANSCRIBE_MODEL}"
 echo "  output:   ${OUT}/"
 echo
 

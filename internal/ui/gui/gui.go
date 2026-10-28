@@ -81,9 +81,9 @@ type state struct {
 	logs              []string
 
 	// persistent settings widgets (shared by the settings and import screens)
-	src, out, dbEntry, model, host *widget.Entry
-	maxChars, workers              *widget.Entry
-	formatsLabel                   *widget.Label
+	src, out, dbEntry, model, host, transcribe *widget.Entry
+	maxChars, workers                          *widget.Entry
+	formatsLabel                               *widget.Label
 
 	phaseLabel   *widget.Label
 	currentLabel *widget.Label
@@ -178,6 +178,8 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.host.SetText(cfg.Host)
 	s.model = widget.NewEntry()
 	s.model.SetText(cfg.Model)
+	s.transcribe = widget.NewEntry()
+	s.transcribe.SetText(cfg.TranscribeModel)
 	s.maxChars = widget.NewEntry()
 	s.maxChars.SetText(strconv.Itoa(cfg.MaxChars))
 	s.workers = widget.NewEntry()
@@ -596,7 +598,7 @@ func (s *state) startCompare(path string) {
 	s.render()
 
 	go func() {
-		result, err := core.CompareFile(context.Background(), db, path, cfg.Host, cfg.Model, cfg.MaxChars)
+		result, err := core.CompareFile(context.Background(), db, path, cfg.Host, cfg.Model, cfg.TranscribeModel, cfg.MaxChars)
 		fyne.Do(func() {
 			s.evalLoading = false
 			if err != nil {
@@ -897,7 +899,7 @@ func (s *state) startImport() {
 		return
 	}
 
-	_, src, _, dbPath, err := s.readConfig()
+	cfg, src, _, dbPath, err := s.readConfig()
 	if err != nil {
 		dialog.ShowError(err, s.win)
 		return
@@ -911,7 +913,12 @@ func (s *state) startImport() {
 		return
 	}
 
-	opts := core.ImportOptions{Source: s.importSource, Formats: s.importFormats}
+	opts := core.ImportOptions{
+		Source:          s.importSource,
+		Formats:         s.importFormats,
+		Host:            cfg.Host,
+		TranscribeModel: cfg.TranscribeModel,
+	}
 	db := s.currentDB()
 	if db == nil {
 		return
@@ -1058,10 +1065,11 @@ func (s *state) readConfig() (core.Config, string, string, string, error) {
 	}
 
 	cfg := core.Config{
-		Host:     strings.TrimSpace(s.host.Text),
-		Model:    strings.TrimSpace(s.model.Text),
-		MaxChars: maxChars,
-		Workers:  workers,
+		Host:            strings.TrimSpace(s.host.Text),
+		Model:           strings.TrimSpace(s.model.Text),
+		TranscribeModel: strings.TrimSpace(s.transcribe.Text),
+		MaxChars:        maxChars,
+		Workers:         workers,
 	}
 	return cfg, strings.TrimSpace(s.src.Text), strings.TrimSpace(s.out.Text), strings.TrimSpace(s.dbEntry.Text), nil
 }

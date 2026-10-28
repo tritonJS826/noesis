@@ -30,12 +30,13 @@ type pairResult struct {
 
 func loadNote(db *sql.DB, id int64, maxChars int) (note, error) {
 	n := note{ID: id}
-	var mime string
-	err := db.QueryRow(`SELECT file_name, content, mime_type FROM notes WHERE id=?`, id).Scan(&n.Name, &n.Content, &mime)
+	var mime, extracted string
+	err := db.QueryRow(`SELECT file_name, content, extracted_text, mime_type FROM notes WHERE id=?`, id).
+		Scan(&n.Name, &n.Content, &extracted, &mime)
 	if err != nil {
 		return n, err
 	}
-	n.Content = textForModel(n.Content, mime)
+	n.Content = textForModel(n.Content, extracted, mime)
 	if r := []rune(n.Content); len(r) > maxChars {
 		n.Content = string(r[:maxChars]) + "\n[…truncated…]"
 	}

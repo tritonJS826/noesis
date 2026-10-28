@@ -53,16 +53,18 @@ func FetchModels(host string) ([]string, error) {
 // notes it is linked to.
 func EvalNote(ctx context.Context, db *sql.DB, noteID int64, host, model string, maxChars int, linkedIDs []int64) (string, error) {
 	// load the note itself
-	var content, fileName, mime string
-	db.QueryRow(`SELECT file_name, content, mime_type FROM notes WHERE id=?`, noteID).Scan(&fileName, &content, &mime)
-	content = textForModel(content, mime)
+	var content, extracted, fileName, mime string
+	db.QueryRow(`SELECT file_name, content, extracted_text, mime_type FROM notes WHERE id=?`, noteID).
+		Scan(&fileName, &content, &extracted, &mime)
+	content = textForModel(content, extracted, mime)
 
 	// load linked notes
 	var linkedTexts []string
 	for _, lid := range linkedIDs {
-		var lc, ln, lm string
-		if db.QueryRow(`SELECT file_name, content, mime_type FROM notes WHERE id=?`, lid).Scan(&ln, &lc, &lm) == nil {
-			lc = textForModel(lc, lm)
+		var lc, le, ln, lm string
+		if db.QueryRow(`SELECT file_name, content, extracted_text, mime_type FROM notes WHERE id=?`, lid).
+			Scan(&ln, &lc, &le, &lm) == nil {
+			lc = textForModel(lc, le, lm)
 			if r := []rune(lc); len(r) > maxChars {
 				lc = string(r[:maxChars]) + "\n[…truncated…]"
 			}

@@ -32,8 +32,8 @@ func (s *state) menuScreen() fyne.CanvasObject {
 	}
 
 	summary := widget.NewLabel(fmt.Sprintf(
-		"SRC: %s   ·   OUT: %s   ·   DB: %s   ·   MODEL: %s   ·   HOST: %s   ·   MAXCHARS: %s   ·   WORKERS: %s",
-		s.src.Text, s.out.Text, s.dbEntry.Text, s.model.Text, s.host.Text, s.maxChars.Text, s.workers.Text,
+		"SRC: %s   ·   OUT: %s   ·   DB: %s   ·   MODEL: %s   ·   TRANSCRIBE: %s   ·   HOST: %s   ·   MAXCHARS: %s   ·   WORKERS: %s",
+		s.src.Text, s.out.Text, s.dbEntry.Text, s.model.Text, s.transcribe.Text, s.host.Text, s.maxChars.Text, s.workers.Text,
 	))
 	summary.Wrapping = fyne.TextWrapWord
 
@@ -195,6 +195,7 @@ func (s *state) dataScreen() fyne.CanvasObject {
 	items := []string{
 		"Browse database",
 		"Compare file (filesystem search)",
+		"Re-extract documents & transcribe audio",
 	}
 	list := widget.NewList(
 		func() int { return len(items) },
@@ -207,6 +208,8 @@ func (s *state) dataScreen() fyne.CanvasObject {
 			s.openBrowse()
 		case 1:
 			s.openFsSearch()
+		case 2:
+			s.startPhase(core.PhaseExtract, "", "")
 		}
 	}
 
@@ -576,6 +579,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewFormItem("OUT", s.out),
 		widget.NewFormItem("DB", s.dbEntry),
 		widget.NewFormItem("MODEL", modelRow),
+		widget.NewFormItem("TRANSCRIBE", s.transcribe),
 		widget.NewFormItem("HOST", s.host),
 		widget.NewFormItem("MAXCHARS", s.maxChars),
 		widget.NewFormItem("WORKERS", s.workers),

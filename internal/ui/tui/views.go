@@ -101,6 +101,7 @@ func (m *model) viewMenu() string {
 		tuiLabel("OUT", tuiEmpty(m.out)),
 		tuiLabel("DB", m.dbPath),
 		tuiLabel("MODEL", m.modelName),
+		tuiLabel("TRANSCRIBE", m.transcribeModel),
 		tuiLabel("HOST", m.host),
 		fmt.Sprintf("MAXCHARS: %d", m.maxChars),
 		fmt.Sprintf("WORKERS: %d", m.workers),
@@ -281,6 +282,7 @@ func (m *model) viewData() string {
 	items := []string{
 		"Browse database",
 		"Compare file (filesystem search)",
+		"Re-extract documents & transcribe audio",
 	}
 
 	var lines []string
@@ -527,8 +529,8 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "HOST", "MAXCHARS", "WORKERS", "EVAL PROMPT", "Reset database"}
-	vals := []string{m.src, m.out, m.dbPath, m.modelName, m.host,
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "TRANSCRIBE", "HOST", "MAXCHARS", "WORKERS", "EVAL PROMPT", "Reset database"}
+	vals := []string{m.src, m.out, m.dbPath, m.modelName, m.transcribeModel, m.host,
 		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "edit…", ""}
 
 	var lines []string
@@ -539,7 +541,7 @@ func (m *model) viewSettings() string {
 		}
 		style := lipgloss.NewStyle().Width(cw)
 		line := fmt.Sprintf("%s%-9s: %s", cursor, k, vals[i])
-		if i == 8 {
+		if i == 9 {
 			if m.cursor == i {
 				line = cursor + tuiRed.Render(k)
 			} else {

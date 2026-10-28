@@ -6,9 +6,10 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 $model = if ($env:MODEL) { $env:MODEL } else { "gemma4:31b-cloud" }
+$transcribeModel = if ($env:TRANSCRIBE_MODEL) { $env:TRANSCRIBE_MODEL } else { "whisper" }
 $arch = if ($env:GOARCH) { $env:GOARCH } else { (go env GOARCH) }
 $out = "dist/windows-$arch"
-$ldflags = "-s -w -X noesis/internal/core.DefaultModel=$model"
+$ldflags = "-s -w -X noesis/internal/core.DefaultModel=$model -X noesis/internal/core.DefaultTranscribeModel=$transcribeModel"
 
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 

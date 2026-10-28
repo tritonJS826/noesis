@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -172,57 +173,78 @@ type NoteContent struct {
 
 func loadNoteContent(db *sql.DB, id int64, maxChars int) (NoteContent, error) {
 	var n NoteContent
-	err := db.QueryRow(`SELECT id, file_name, file_path, content, mime_type FROM notes WHERE id=?`, id).
-		Scan(&n.ID, &n.Name, &n.Path, &n.Content, &n.Mime)
+	var extracted string
+	err := db.QueryRow(`SELECT id, file_name, file_path, content, extracted_text, mime_type FROM notes WHERE id=?`, id).
+		Scan(&n.ID, &n.Name, &n.Path, &n.Content, &extracted, &n.Mime)
 	if err != nil {
 		return n, err
 	}
-	n.Content = textForModel(n.Content, n.Mime)
+	n.Content = textForModel(n.Content, extracted, n.Mime)
 	if r := []rune(n.Content); len(r) > maxChars {
 		n.Content = string(r[:maxChars]) + "\n[…truncated…]"
 	}
 	return n, nil
 }
 
-// textForModel returns the content as-is for text notes and a short note for
-// binary media, which cannot be sent to a text-only model prompt.
-func textForModel(content, mime string) string {
+// textForModel returns the content as-is for text notes. For binary documents
+// and audio it returns the extracted text/transcript; when extraction has not
+// produced anything yet it returns a short placeholder so the prompt remains
+// understandable.
+func textForModel(content, extracted, mime string) string {
 	if mime == "" || IsText(mime) {
 		return content
 	}
-	return fmt.Sprintf("[binary file: %s — content is not sent to the model]", mime)
+	if strings.TrimSpace(extracted) != "" {
+		return extracted
+	}
+	return fmt.Sprintf("[binary file: %s — no extracted text available]", mime)
 }
 
 // CompareFile evaluates a file's novelty the same way EvalNote does, but
 // without adding it to the database. The file is compared against ALL notes
 // already in the db treated as "related notes".
-func CompareFile(ctx context.Context, db *sql.DB, path, host, model string, maxChars int) (string, error) {
+func CompareFile(ctx context.Context, db *sql.DB, path, host, model, transcribeModel string, maxChars int) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	content := string(data)
+	name := filepathBase(path)
+	mimeType := mimeFor(name, data)
+	rawContent := string(data)
+	if !IsText(mimeType) {
+		rawContent = base64.StdEncoding.EncodeToString(data)
+	}
+
+	var extracted, extractTool, extractErrText string
+	if IsExtractable(name, mimeType) {
+		extracted, extractTool, err = ExtractFileText(ctx, name, mimeType, data, host, transcribeModel)
+		if err != nil {
+			extractErrText = err.Error()
+			return "", fmt.Errorf("%s: %w", name, err)
+		}
+	}
+
+	content := textForModel(rawContent, extracted, mimeType)
 	if r := []rune(content); len(r) > maxChars {
 		content = string(r[:maxChars]) + "\n[…truncated…]"
 	}
 
 	var linkedTexts []string
-	rows, err := db.Query(`SELECT id, file_name, content, mime_type FROM notes ORDER BY file_name`)
+	rows, err := db.Query(`SELECT file_name, content, extracted_text, mime_type FROM notes ORDER BY file_name`)
 	if err != nil {
 		return "", err
 	}
 	for rows.Next() {
-		var id int64
-		var name, c, mime string
-		if err := rows.Scan(&id, &name, &c, &mime); err != nil {
+		var noteName, c, extractedText, mime string
+		if err := rows.Scan(&noteName, &c, &extractedText, &mime); err != nil {
 			rows.Close()
 			return "", err
 		}
-		text := textForModel(c, mime)
+		text := textForModel(c, extractedText, mime)
 		if r := []rune(text); len(r) > maxChars {
 			text = string(r[:maxChars]) + "\n[…truncated…]"
 		}
-		linkedTexts = append(linkedTexts, "=== "+name+" ===\n"+text)
+		linkedTexts = append(linkedTexts, "=== "+noteName+" ===\n"+text)
 	}
 	rows.Close()
 
@@ -233,13 +255,16 @@ func CompareFile(ctx context.Context, db *sql.DB, path, host, model string, maxC
 	// The compared file is not in the database, so expose its own fields under
 	// the db.* namespace to keep templates working.
 	vars := map[string]string{
-		"FILE_NAME":    filepathBase(path),
-		"CONTENT":      content,
-		"LINKED_NOTES": strings.Join(linkedTexts, "\n\n"),
-		"db.file_name": filepathBase(path),
-		"db.file_path": path,
-		"db.content":   content,
-		"db.mime_type": mimeFor(filepathBase(path), data),
+		"FILE_NAME":         name,
+		"CONTENT":           content,
+		"LINKED_NOTES":      strings.Join(linkedTexts, "\n\n"),
+		"db.file_name":      name,
+		"db.file_path":      path,
+		"db.content":        rawContent,
+		"db.extracted_text": extracted,
+		"db.extract_error":  extractErrText,
+		"db.extract_tool":   extractTool,
+		"db.mime_type":      mimeType,
 	}
 	prompt := expandPrompt(tmpl, vars)
 

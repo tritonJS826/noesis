@@ -65,8 +65,8 @@ type model struct {
 	screen  screen
 	cursor  int
 
-	src, out, dbPath, modelName, host string
-	maxChars, workers                 int
+	src, out, dbPath, modelName, host, transcribeModel string
+	maxChars, workers                                  int
 
 	ollamaModels []string
 	ollamaOK     bool
@@ -168,20 +168,21 @@ func newModel(db *sql.DB) *model {
 		formats[e] = true
 	}
 	return &model{
-		db:            db,
-		screen:        scrMenu,
-		src:           ".",
-		out:           "out",
-		dbPath:        "notes.db",
-		modelName:     cfg.Model,
-		host:          cfg.Host,
-		maxChars:      cfg.MaxChars,
-		workers:       cfg.Workers,
-		textInput:     ti,
-		textArea:      ta,
-		importSource:  core.SourceFilesystem,
-		importFormats: formats,
-		browseCols:    [5]bool{true, true, false, true, true},
+		db:              db,
+		screen:          scrMenu,
+		src:             ".",
+		out:             "out",
+		dbPath:          "notes.db",
+		modelName:       cfg.Model,
+		host:            cfg.Host,
+		transcribeModel: cfg.TranscribeModel,
+		maxChars:        cfg.MaxChars,
+		workers:         cfg.Workers,
+		textInput:       ti,
+		textArea:        ta,
+		importSource:    core.SourceFilesystem,
+		importFormats:   formats,
+		browseCols:      [5]bool{true, true, false, true, true},
 	}
 }
 
@@ -204,12 +205,20 @@ func fetchOllamaCmd(host string) tea.Cmd {
 }
 
 func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) tea.Cmd {
-	src, out, modelName, host, maxChars, workers := m.src, m.out, m.modelName, m.host, m.maxChars, m.workers
+	src, out, modelName, host, transcribeModel, maxChars, workers := m.src, m.out, m.modelName, m.host, m.transcribeModel, m.maxChars, m.workers
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
 		defer m.program.RestoreTerminal()
 
-		cfg := core.Config{Host: host, Model: modelName, MaxChars: maxChars, Workers: workers, PromptName: promptName, TemplateName: templateName}
+		cfg := core.Config{
+			Host:            host,
+			Model:           modelName,
+			TranscribeModel: transcribeModel,
+			MaxChars:        maxChars,
+			Workers:         workers,
+			PromptName:      promptName,
+			TemplateName:    templateName,
+		}
 		progress := consoleshared.New(m.db)
 		progress.Start()
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -223,7 +232,12 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 
 func runImportCmd(m *model) tea.Cmd {
 	src := m.src
-	opts := core.ImportOptions{Source: m.importSource, Formats: m.importFormats}
+	opts := core.ImportOptions{
+		Source:          m.importSource,
+		Formats:         m.importFormats,
+		Host:            m.host,
+		TranscribeModel: m.transcribeModel,
+	}
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
 		defer m.program.RestoreTerminal()
@@ -253,9 +267,9 @@ func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, lin
 	}
 }
 
-func compareFileCmd(db *sql.DB, path, host, model string, maxChars int) tea.Cmd {
+func compareFileCmd(db *sql.DB, path, host, model, transcribeModel string, maxChars int) tea.Cmd {
 	return func() tea.Msg {
-		result, err := core.CompareFile(context.Background(), db, path, host, model, maxChars)
+		result, err := core.CompareFile(context.Background(), db, path, host, model, transcribeModel, maxChars)
 		return evalMsg{result: result, err: err}
 	}
 }
