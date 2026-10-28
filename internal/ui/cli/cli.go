@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -38,6 +39,7 @@ func Run(args []string) error {
 	dbPath := fs.String("db", "notes.db", "sqlite database file")
 	host := fs.String("host", def.Host, "ollama host")
 	model := fs.String("model", def.Model, "ollama model")
+	visionModel := fs.String("vision-model", def.VisionModel, "ollama vision model for images (empty uses -model)")
 	transcribeModel := fs.String("transcribe-model", def.TranscribeModel, "legacy ollama audio transcription model")
 	audioEngine := fs.String("audio", def.AudioEngine, "audio backend: whisper, google or ollama (legacy)")
 	whisperModel := fs.String("whisper-model", def.WhisperModel, "whisper.cpp model; download it first in the TUI/GUI settings")
@@ -49,12 +51,15 @@ func Run(args []string) error {
 	phaseName := fs.String("phase", "all", "phase to run: import, extract, pairs, single, export, all")
 	source := fs.String("source", "", "import source: filesystem, zip or json (default filesystem)")
 	format := fs.String("format", "", "comma-separated extensions to import, e.g. md,txt,csv,png (empty = default set)")
+	extractName := fs.String("extract-name", "", "extract phase: only re-extract notes whose path/name contains this text")
+	extractFormat := fs.String("extract-format", "", "extract phase: comma-separated extensions to re-extract, e.g. pdf,png,mp3 (empty = all)")
 	promptName := fs.String("prompt", "", "prompt name for pairs/single phases (empty uses default)")
 	templateName := fs.String("template", "", "export template name (empty uses default)")
 
 	removePath := fs.String("remove", "", "remove note matching this path from the db")
 	removeLinksPath := fs.String("remove-links", "", "remove note matching this path and scrub its obsidian links")
 	comparePath := fs.String("compare", "", "evaluate novelty of a file without adding it to the db")
+	statsOnly := fs.Bool("stats", false, "print per-format import/extraction counts and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -96,6 +101,9 @@ func Run(args []string) error {
 	if !seen["model"] && strings.TrimSpace(saved.Model) != "" {
 		*model = saved.Model
 	}
+	if !seen["vision-model"] && strings.TrimSpace(saved.VisionModel) != "" {
+		*visionModel = saved.VisionModel
+	}
 	if !seen["transcribe-model"] && strings.TrimSpace(saved.TranscribeModel) != "" {
 		*transcribeModel = saved.TranscribeModel
 	}
@@ -124,6 +132,7 @@ func Run(args []string) error {
 	cfg := core.Config{
 		Host:            *host,
 		Model:           *model,
+		VisionModel:     *visionModel,
 		TranscribeModel: *transcribeModel,
 		AudioEngine:     core.NormalizeAudioEngine(*audioEngine),
 		WhisperModel:    core.NormalizeWhisperModel(*whisperModel),
@@ -134,12 +143,18 @@ func Run(args []string) error {
 		Workers:         *workers,
 		PromptName:      *promptName,
 		TemplateName:    *templateName,
+		ExtractName:     *extractName,
+		ExtractFormats:  core.ExtractFormatSet(strings.Split(*extractFormat, ",")),
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// data operations, when requested, take precedence over phases
 	switch {
+	case *statsOnly:
+		printFormatStats(db)
+		return nil
+
 	case *removePath != "":
 		n, err := core.RemoveNote(db, *removePath)
 		if err != nil {
@@ -201,16 +216,14 @@ func Run(args []string) error {
 		if err != nil {
 			return err
 		}
+		formats := core.SavedImportFormats(db)
+		if strings.TrimSpace(*format) != "" {
+			formats = parseFormats(*format)
+		}
 		opts := core.ImportOptions{
-			Source:          src2,
-			Formats:         parseFormats(*format),
-			Host:            cfg.Host,
-			TranscribeModel: cfg.TranscribeModel,
-			AudioEngine:     cfg.AudioEngine,
-			WhisperModel:    cfg.WhisperModel,
-			BinaryStorage:   cfg.BinaryStorage,
-			GoogleAPIKey:    cfg.GoogleAPIKey,
-			SpeechLanguage:  cfg.SpeechLanguage,
+			Source:        src2,
+			Formats:       formats,
+			BinaryStorage: cfg.BinaryStorage,
 		}
 		return core.Import(ctx, progress, db, *src, opts)
 	}
@@ -253,4 +266,20 @@ func parsePhase(s string) (core.Phase, error) {
 	default:
 		return 0, fmt.Errorf("unknown phase %q (use import, extract, pairs, single, export or all)", s)
 	}
+}
+
+// printFormatStats prints per-extension import/extraction counters.
+func printFormatStats(db *sql.DB) {
+	stats := core.LoadFormatStats(db)
+	if len(stats) == 0 {
+		fmt.Println("no files imported yet")
+		return
+	}
+	total, extracted := 0, 0
+	for _, st := range stats {
+		fmt.Printf("%6d/%-6d .%-10s extracted\n", st.Extracted, st.Total, st.Ext)
+		total += st.Total
+		extracted += st.Extracted
+	}
+	fmt.Printf("total: %d/%d extracted over %d format(s)\n", extracted, total, len(stats))
 }

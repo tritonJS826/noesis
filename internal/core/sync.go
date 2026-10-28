@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
@@ -195,27 +194,12 @@ func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opt
 				blobPath, _ = writeBlobFile(db, rel, name, data)
 			}
 
-			var extracted, extractErr, extractTool string
-			if IsExtractable(name, mimeType) {
-				text, tool, exErr := ExtractFileTextWithAudio(
-					context.Background(), name, mimeType, data, opts.audioOptions(),
-				)
-				extractTool = tool
-				if exErr != nil {
-					extractErr = exErr.Error()
-				} else if strings.TrimSpace(text) != "" {
-					extracted = text
-				}
-			}
-
-			// Build the markdown field: original content for text files,
-			// extracted text for binary files.
+			// Importing only stores files: documents, images and audio are
+			// turned into markdown later by the "Data extraction" process.
+			// markdown is the original content for text files.
 			markdown := ""
-			switch {
-			case IsText(mimeType):
+			if IsText(mimeType) {
 				markdown = content
-			case extracted != "":
-				markdown = extracted
 			}
 
 			now := time.Now().Format(time.RFC3339)
@@ -224,7 +208,7 @@ func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opt
 				VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 				rel, f.Abs, name, content, mimeType,
 				markdown, "", "", blobPath,
-				extractErr, extractTool, now,
+				"", "", now,
 			); exErr == nil {
 				imported++
 			}

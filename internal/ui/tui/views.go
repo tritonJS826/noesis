@@ -62,6 +62,8 @@ func (m *model) View() string {
 		return m.viewBrowse()
 	case scrBrowseDetail:
 		return m.viewBrowseDetail()
+	case scrExtract:
+		return m.viewExtract()
 	default:
 		return m.viewMenu()
 	}
@@ -87,7 +89,6 @@ func (m *model) viewMenu() string {
 		"Data processing — one by one",
 		"Export for Obsidian",
 		"Work with data",
-		"Evaluate note uniqueness",
 		"Settings",
 	}
 
@@ -131,6 +132,7 @@ func (m *model) viewMenu() string {
 		fmt.Sprintf("Notes: %d │ With tags: %d │ Tags: %d │ Links: %d", s.Notes, s.Tagged, s.UniqTags, s.Links),
 		fmt.Sprintf("Pairs: %d/%d │ Written: %d", s.PairsDone, pairsTotal, s.Written),
 	}
+	formatLines := formatStatsLines(core.LoadFormatStats(m.db), cw)
 
 	// ── ollama ──
 	var ollamaLine string
@@ -175,6 +177,13 @@ func (m *model) viewMenu() string {
 	parts = append(parts, sep("Status"))
 	for _, sl := range statsLines {
 		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(sl))
+	}
+	parts = append(parts, sep("Formats (extracted/total)"))
+	if len(formatLines) == 0 {
+		parts = append(parts, tuiDim.Width(cw).Render("no files imported yet"))
+	}
+	for _, fl := range formatLines {
+		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(fl))
 	}
 	parts = append(parts, sep(""))
 	parts = append(parts, ollamaLine)
@@ -407,7 +416,7 @@ func (m *model) viewData() string {
 	items := []string{
 		"Browse database",
 		"Compare file (filesystem search)",
-		"Re-extract documents & transcribe audio",
+		"Re-extract documents, images & transcribe audio",
 	}
 
 	var lines []string
@@ -425,6 +434,75 @@ func (m *model) viewData() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewExtract() string {
+	w := m.width
+	cw := w - 4
+
+	formats := core.ExtractableFormats()
+	rows := m.listRows(9)
+	if rows < 1 {
+		rows = 10
+	}
+	start, end := listWindow(len(formats), m.extractCursor, rows)
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Re-extract documents, images & transcribe audio"))
+	lines = append(lines, tuiDim.Width(cw).Render("Markdown is regenerated for every matched file. Documents and audio use the local extractors; images are described by the vision model."))
+	lines = append(lines, "")
+
+	// Name filter.
+	filterVal := m.extractFilter
+	if filterVal == "" {
+		if m.extractTyping {
+			filterVal = "█"
+		} else {
+			filterVal = tuiDim.Render("(all files)")
+		}
+	} else if m.extractTyping {
+		filterVal += "█"
+	}
+	lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Name filter: "+filterVal))
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(
+		scrollHint(start, end, len(formats))+"  ·  selected: "+m.extractFormatSummary()))
+	lines = append(lines, "")
+
+	selected := m.extractFormats
+	if len(formats) == 0 {
+		lines = append(lines, tuiDim.Width(cw).Render("no extractable formats"))
+	}
+	for i := start; i < end; i++ {
+		f := formats[i]
+		cursor := "  "
+		if m.extractCursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		mark := "[ ]"
+		if selected == nil || selected[f.Ext] {
+			mark = "[x]"
+		}
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(
+			fmt.Sprintf("%s%s  %-10s (%s)", cursor, mark, f.Ext, f.Kind)))
+	}
+
+	lines = append(lines, "")
+	if m.extractTyping {
+		lines = append(lines, tuiDim.Width(cw).Render("typing name filter  ·  Enter done  ·  ESC stop"))
+	} else {
+		lines = append(lines, tuiDim.Width(cw).Render("↑↓/jk move  ·  space/Enter toggle  ·  e or / name filter  ·  a all/none  ·  r run  ·  h/ESC back"))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+// extractFormatSummary describes the current format selection.
+func (m *model) extractFormatSummary() string {
+	if m.extractFormats == nil {
+		return "all formats"
+	}
+	return fmt.Sprintf("%d of %d formats", len(m.extractFormats), len(core.ExtractableFormats()))
 }
 
 func (m *model) browseHeader() string {
@@ -673,12 +751,16 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "AUDIO", "WHISPER", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "AUDIO", "WHISPER", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
 	googleKey := "(not set)"
 	if strings.TrimSpace(m.googleAPIKey) != "" {
 		googleKey = "(set)"
 	}
-	vals := []string{m.src, m.out, m.dbPath, m.modelName,
+	vision := m.visionModel
+	if strings.TrimSpace(vision) == "" {
+		vision = "(= MODEL)"
+	}
+	vals := []string{m.src, m.out, m.dbPath, m.modelName, vision,
 		core.AudioEngineLabel(m.audioEngine), m.whisperSummary(), googleKey,
 		core.SpeechLanguageLabel(m.speechLanguage), m.host,
 		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers),
@@ -692,7 +774,7 @@ func (m *model) viewSettings() string {
 		}
 		style := lipgloss.NewStyle().Width(cw)
 		line := fmt.Sprintf("%s%-12s: %s", cursor, k, vals[i])
-		if i == 13 {
+		if i == setReset {
 			if m.cursor == i {
 				line = cursor + tuiRed.Render(k)
 			} else {
@@ -924,15 +1006,29 @@ func (m *model) viewProcessList() string {
 	if m.processType == "single" {
 		label = "One-by-one processes"
 	}
+	evalOffset := 0
+	if m.processHasEval() {
+		evalOffset = 1
+	}
 
 	var lines []string
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render(label))
 	lines = append(lines, "")
 
-	start, end := listWindow(len(m.processList), m.cursor, m.listRows(6))
+	// The single-note menu leads with the built-in uniqueness evaluation.
+	if m.processHasEval() {
+		cursor := "  "
+		if m.cursor == 0 {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, tuiGreen.MaxWidth(cw).Render(cursor+"★ Evaluate note uniqueness"))
+		lines = append(lines, "")
+	}
+
+	start, end := listWindow(len(m.processList), m.cursor-evalOffset, m.listRows(9))
 	for i := start; i < end; i++ {
 		cursor := "  "
-		if m.cursor == i {
+		if m.cursor-evalOffset == i {
 			cursor = tuiSel.Render("▸ ")
 		}
 		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+m.processList[i]))
@@ -940,7 +1036,7 @@ func (m *model) viewProcessList() string {
 
 	// "Add new" row stays visible below the scrolling process list.
 	addCursor := "  "
-	if m.cursor == len(m.processList) {
+	if m.cursor == len(m.processList)+evalOffset {
 		addCursor = tuiSel.Render("▸ ")
 	}
 	lines = append(lines, "")
@@ -1078,10 +1174,8 @@ func (m *model) promptVarsHint(name string) string {
 	switch {
 	case ptype == "pair":
 		named = []string{"${A_NAME}", "${A_CONTENT}", "${B_NAME}", "${B_CONTENT}"}
-	case name == "eval":
-		named = []string{"${FILE_NAME}", "${CONTENT}", "${LINKED_NOTES}"}
 	default:
-		named = []string{"${FILE_NAME}", "${CONTENT}"}
+		named = []string{"${FILE_NAME}", "${CONTENT}", "${LINKED_NOTES}"}
 	}
 	parts := append([]string{}, named...)
 	cols := core.NotesColumns(m.db)
@@ -1108,6 +1202,36 @@ func (m *model) exportVarsHint() string {
 		parts = append(parts, "${db."+c+"}")
 	}
 	return strings.Join(parts, "  ")
+}
+
+// formatStatsLines packs the per-format extraction counters into lines no wider
+// than width, e.g. "3/20 .mp3 extracted  ·  89/89 .md extracted".
+func formatStatsLines(stats []core.FormatStat, width int) []string {
+	if len(stats) == 0 {
+		return nil
+	}
+	entries := make([]string, len(stats))
+	for i, st := range stats {
+		entries[i] = fmt.Sprintf("%d/%d .%s extracted", st.Extracted, st.Total, st.Ext)
+	}
+	var lines []string
+	line := ""
+	for _, e := range entries {
+		const sep = "  ·  "
+		switch {
+		case line == "":
+			line = e
+		case len([]rune(line))+len([]rune(sep))+len([]rune(e)) > width:
+			lines = append(lines, line)
+			line = e
+		default:
+			line += sep + e
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 // wrapText splits s into lines no wider than width runes.

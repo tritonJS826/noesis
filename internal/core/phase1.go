@@ -11,15 +11,9 @@ import (
 func Phase1(ctx context.Context, r Reporter, db *sql.DB, src string) error {
 	cfg := DefaultConfig()
 	return Import(ctx, r, db, src, ImportOptions{
-		Source:          SourceFilesystem,
-		Formats:         defaultFormatSet(),
-		Host:            cfg.Host,
-		TranscribeModel: cfg.TranscribeModel,
-		AudioEngine:     cfg.AudioEngine,
-		WhisperModel:    cfg.WhisperModel,
-		BinaryStorage:   cfg.BinaryStorage,
-		GoogleAPIKey:    cfg.GoogleAPIKey,
-		SpeechLanguage:  cfg.SpeechLanguage,
+		Source:        SourceFilesystem,
+		Formats:       defaultFormatSet(),
+		BinaryStorage: cfg.BinaryStorage,
 	})
 }
 

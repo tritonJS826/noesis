@@ -352,8 +352,9 @@ func TagSingle(ctx context.Context, db *sql.DB, c Config, id int64) (int, error)
 		return 0, err
 	}
 	vars := map[string]string{
-		"FILE_NAME": n.Name,
-		"CONTENT":   n.Content,
+		"FILE_NAME":    n.Name,
+		"CONTENT":      n.Content,
+		"LINKED_NOTES": linkedNotesText(db, id, c.MaxChars),
 	}
 	vars = mergeVars(vars, noteDBVars(db, "db", id))
 	prompt := expandPrompt(tmpl, vars)

@@ -49,6 +49,29 @@ func FetchModels(host string) ([]string, error) {
 	return names, nil
 }
 
+// linkedNotesText renders the notes linked from id as "=== name ===\ncontent"
+// blocks, each truncated to maxChars. Used by the eval prompt and by every
+// single-note process so prompts can reference related links.
+func linkedNotesText(db *sql.DB, id int64, maxChars int) string {
+	linkedIDs, err := LinkedNoteIDs(db, id)
+	if err != nil {
+		return ""
+	}
+	var linkedTexts []string
+	for _, lid := range linkedIDs {
+		var lmd, ln, lm string
+		if db.QueryRow(`SELECT file_name, markdown, mime_type FROM notes WHERE id=?`, lid).
+			Scan(&ln, &lmd, &lm) == nil {
+			lc := textForModel(lmd, lm)
+			if r := []rune(lc); len(r) > maxChars {
+				lc = string(r[:maxChars]) + "\n[…truncated…]"
+			}
+			linkedTexts = append(linkedTexts, "=== "+ln+" ===\n"+lc)
+		}
+	}
+	return strings.Join(linkedTexts, "\n\n")
+}
+
 // EvalNote asks ollama how unique a note's information is compared to the
 // notes it is linked to.
 func EvalNote(ctx context.Context, db *sql.DB, noteID int64, host, model string, maxChars int, linkedIDs []int64) (string, error) {

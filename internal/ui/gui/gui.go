@@ -44,6 +44,7 @@ const (
 	scrExportTemplateDetail
 	scrBrowse
 	scrBrowseDetail
+	scrExtract
 )
 
 type noteAction int
@@ -61,7 +62,6 @@ var menuItems = []string{
 	"Data processing — one by one",
 	"Export for Obsidian",
 	"Work with data",
-	"Evaluate note uniqueness",
 	"Settings",
 }
 
@@ -84,6 +84,7 @@ type state struct {
 
 	// persistent settings widgets (shared by the settings and import screens)
 	src, out, dbEntry, model, host, transcribe *widget.Entry
+	vision                                     *widget.Entry
 	maxChars, workers                          *widget.Entry
 	audioEngine                                *widget.Select
 	whisperModel                               *widget.Select
@@ -121,6 +122,10 @@ type state struct {
 	// sync
 	syncItems   []core.SyncItem
 	syncChecked map[string]bool
+
+	// re-extract picker
+	extractFilter  string
+	extractFormats core.FormatSet
 
 	// notes (remove / evaluate)
 	noteAction noteAction
@@ -191,6 +196,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.dbEntry.SetText(dbPath)
 	s.host = widget.NewEntry()
 	s.model = widget.NewEntry()
+	s.vision = widget.NewEntry()
 	s.transcribe = widget.NewEntry()
 	s.maxChars = widget.NewEntry()
 	s.workers = widget.NewEntry()
@@ -204,6 +210,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.out.SetText(st.Out)
 	s.host.SetText(st.Host)
 	s.model.SetText(st.Model)
+	s.vision.SetText(st.VisionModel)
 	s.transcribe.SetText(st.TranscribeModel)
 	s.maxChars.SetText(strconv.Itoa(st.MaxChars))
 	s.workers.SetText(strconv.Itoa(st.Workers))
@@ -214,7 +221,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.audioEngine.OnChanged = func(string) { s.persistSettings() }
 	s.whisperModel.OnChanged = func(string) { s.persistSettings() }
 	s.speechLanguage.OnChanged = func(string) { s.persistSettings() }
-	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.transcribe, s.maxChars, s.workers, s.googleKey} {
+	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.transcribe, s.maxChars, s.workers, s.googleKey} {
 		e.OnSubmitted = func(string) { s.persistSettings() }
 	}
 	s.browseCols = defaultBrowseCols()
@@ -224,6 +231,9 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.importFormats = make(core.FormatSet)
 	for _, e := range core.DefaultImportFormats() {
 		s.importFormats[e] = true
+	}
+	if saved, ok := core.DecodeFormatSelection(st.Formats); ok {
+		s.importFormats = saved
 	}
 	s.formatsLabel = widget.NewLabel("")
 	s.formatsLabel.Wrapping = fyne.TextWrapWord
@@ -339,6 +349,8 @@ func (s *state) screenTitle() string {
 		return "Browse database"
 	case scrBrowseDetail:
 		return "Note record: " + s.browsePath
+	case scrExtract:
+		return "Re-extract documents, images & transcribe audio"
 	case scrRunning:
 		return "Processing…"
 	default:
@@ -375,6 +387,8 @@ func (s *state) goBack() {
 		s.screen = scrData
 	case scrBrowseDetail:
 		s.screen = scrBrowse
+	case scrExtract:
+		s.screen = scrData
 	case scrRunning:
 		return
 	default:
@@ -417,6 +431,8 @@ func (s *state) body() fyne.CanvasObject {
 		return s.browseScreen()
 	case scrBrowseDetail:
 		return s.browseDetailScreen()
+	case scrExtract:
+		return s.extractScreen()
 	case scrRunning:
 		return s.runningScreen()
 	default:
@@ -440,9 +456,6 @@ func (s *state) activateMenu(id int) {
 	case 4:
 		s.screen = scrData
 	case 5:
-		s.openNotes(noteEval, scrMenu)
-		return
-	case 6:
 		s.screen = scrSettings
 	}
 	s.render()
@@ -966,15 +979,9 @@ func (s *state) startImport() {
 	s.persistSettings()
 
 	opts := core.ImportOptions{
-		Source:          s.importSource,
-		Formats:         s.importFormats,
-		Host:            cfg.Host,
-		TranscribeModel: cfg.TranscribeModel,
-		AudioEngine:     cfg.AudioEngine,
-		WhisperModel:    cfg.WhisperModel,
-		BinaryStorage:   cfg.BinaryStorage,
-		GoogleAPIKey:    cfg.GoogleAPIKey,
-		SpeechLanguage:  cfg.SpeechLanguage,
+		Source:        s.importSource,
+		Formats:       s.importFormats,
+		BinaryStorage: cfg.BinaryStorage,
 	}
 	db := s.currentDB()
 	if db == nil {
@@ -1046,15 +1053,9 @@ func (s *state) applySync() {
 		return
 	}
 	opts := core.ImportOptions{
-		Source:          core.SourceFilesystem,
-		Formats:         s.importFormats,
-		Host:            cfg.Host,
-		TranscribeModel: cfg.TranscribeModel,
-		AudioEngine:     cfg.AudioEngine,
-		WhisperModel:    cfg.WhisperModel,
-		BinaryStorage:   cfg.BinaryStorage,
-		GoogleAPIKey:    cfg.GoogleAPIKey,
-		SpeechLanguage:  cfg.SpeechLanguage,
+		Source:        core.SourceFilesystem,
+		Formats:       s.importFormats,
+		BinaryStorage: cfg.BinaryStorage,
 	}
 	s.beginRun("Syncing…")
 	go func() {
@@ -1095,6 +1096,10 @@ func (s *state) startPhase(phase core.Phase, promptName, templateName string) {
 	}
 	cfg.PromptName = promptName
 	cfg.TemplateName = templateName
+	if phase == core.PhaseExtract {
+		cfg.ExtractName = s.extractFilter
+		cfg.ExtractFormats = s.extractFormats
+	}
 	if err := s.useDB(dbPath); err != nil {
 		dialog.ShowError(err, s.win)
 		return
@@ -1221,6 +1226,7 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 	cfg := core.Config{
 		Host:            strings.TrimSpace(s.host.Text),
 		Model:           strings.TrimSpace(s.model.Text),
+		VisionModel:     strings.TrimSpace(s.vision.Text),
 		TranscribeModel: strings.TrimSpace(s.transcribe.Text),
 		AudioEngine:     core.NormalizeAudioEngine(s.audioEngine.Selected),
 		WhisperModel:    core.NormalizeWhisperModel(s.whisperModel.Selected),
@@ -1243,6 +1249,7 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		Out:             out,
 		Host:            cfg.Host,
 		Model:           cfg.Model,
+		VisionModel:     cfg.VisionModel,
 		TranscribeModel: cfg.TranscribeModel,
 		AudioEngine:     cfg.AudioEngine,
 		WhisperModel:    cfg.WhisperModel,
@@ -1250,6 +1257,7 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		SpeechLanguage:  cfg.SpeechLanguage,
 		MaxChars:        cfg.MaxChars,
 		Workers:         cfg.Workers,
+		Formats:         core.EncodeFormatSelection(s.importFormats),
 	}.Save(db)
 }
 

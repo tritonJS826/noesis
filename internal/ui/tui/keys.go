@@ -69,6 +69,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.browseKeys(msg)
 	case scrBrowseDetail:
 		return m.browseDetailKeys(msg)
+	case scrExtract:
+		return m.extractKeys(msg)
 	case scrRunning:
 	}
 	return nil
@@ -76,7 +78,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // ─── main menu ───────────────────────────────────────────────────────────────
 
-const menuItems = 6 // 0..6
+const menuItems = 5 // 0..5
 
 func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 	switch vimNav(msg.String()) {
@@ -111,9 +113,7 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 			m.screen = scrData
 			m.dataCursor = 0
 			m.cursor = 0
-		case 5: // evaluate note uniqueness
-			m.openFilePicker()
-		case 6: // settings
+		case 5: // settings
 			m.screen = scrSettings
 			m.cursor = 0
 		}
@@ -311,15 +311,9 @@ func (m *model) applySync() tea.Cmd {
 		defer m.program.RestoreTerminal()
 
 		opts := core.ImportOptions{
-			Source:          core.SourceFilesystem,
-			Formats:         m.importFormats,
-			Host:            m.host,
-			TranscribeModel: m.transcribeModel,
-			AudioEngine:     m.audioEngine,
-			WhisperModel:    m.whisperModel,
-			BinaryStorage:   m.binaryStorage,
-			GoogleAPIKey:    m.googleAPIKey,
-			SpeechLanguage:  m.speechLanguage,
+			Source:        core.SourceFilesystem,
+			Formats:       m.importFormats,
+			BinaryStorage: m.binaryStorage,
 		}
 		removed, imported, err := core.SyncApply(m.db, m.src, removeIDs, newPaths, opts)
 		return syncApplyMsg{removed, imported, err}
@@ -368,6 +362,7 @@ func (m *model) formatsKeys(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			m.importFormats = nil
 		}
+		m.persistSettings()
 	case "esc", "q":
 		m.screen = scrSync
 		m.syncCursor = 1
@@ -384,6 +379,7 @@ func (m *model) toggleFormat(ext string) {
 	} else {
 		m.importFormats[ext] = true
 	}
+	m.persistSettings()
 }
 
 // ─── work with data submenu ────────────────────────────────────────────────
@@ -410,14 +406,117 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 			m.fsFiles = nil
 			m.cursor = 0
 			m.filterTyping = false
-		case 2: // re-extract documents & transcribe audio
-			return m.startPhase(core.PhaseExtract, false, false, "", "")
+		case 2: // re-extract documents, images & transcribe audio
+			m.openExtract()
 		}
 	case "esc", "q":
 		m.screen = scrMenu
 		m.cursor = 4
 	}
 	return nil
+}
+
+// ─── re-extract picker ──────────────────────────────────────────────────────
+
+// openExtract opens the re-extraction picker seeded with "all formats".
+func (m *model) openExtract() {
+	m.extractFilter = ""
+	m.extractFormats = nil
+	m.extractCursor = 0
+	m.extractTyping = false
+	m.screen = scrExtract
+}
+
+func (m *model) extractKeys(msg tea.KeyMsg) tea.Cmd {
+	formats := core.ExtractableFormats()
+	page := m.listRows(9)
+	if page < 1 {
+		page = 10
+	}
+
+	if m.extractTyping {
+		switch msg.String() {
+		case "esc":
+			m.extractTyping = false
+		case "enter":
+			m.extractTyping = false
+		case "backspace":
+			r := []rune(m.extractFilter)
+			if len(r) > 0 {
+				m.extractFilter = string(r[:len(r)-1])
+			}
+		default:
+			if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+				m.extractFilter += string(msg.Runes[0])
+			}
+		}
+		return nil
+	}
+
+	switch vimNav(msg.String()) {
+	case "up":
+		if m.extractCursor > 0 {
+			m.extractCursor--
+		}
+	case "down":
+		if m.extractCursor < len(formats)-1 {
+			m.extractCursor++
+		}
+	case "pgup":
+		m.extractCursor -= page
+		if m.extractCursor < 0 {
+			m.extractCursor = 0
+		}
+	case "pgdown":
+		m.extractCursor += page
+		if m.extractCursor >= len(formats) {
+			m.extractCursor = len(formats) - 1
+		}
+	case "home", "g":
+		m.extractCursor = 0
+	case "end", "G":
+		if len(formats) > 0 {
+			m.extractCursor = len(formats) - 1
+		}
+	case "enter", " ":
+		if len(formats) > 0 {
+			m.toggleExtractFormat(formats[m.extractCursor].Ext)
+		}
+	case "/", "e":
+		m.extractTyping = true
+	case "a", "A":
+		if m.extractFormats == nil {
+			m.extractFormats = core.FormatSet{}
+		} else {
+			m.extractFormats = nil
+		}
+	case "r", "R":
+		return m.runExtract()
+	case "esc", "h", "q":
+		m.screen = scrData
+		m.dataCursor = 2
+	}
+	return nil
+}
+
+func (m *model) toggleExtractFormat(ext string) {
+	if m.extractFormats == nil {
+		m.extractFormats = core.FormatSet{}
+		for _, f := range core.ExtractableFormats() {
+			m.extractFormats[f.Ext] = true
+		}
+	}
+	if m.extractFormats[ext] {
+		delete(m.extractFormats, ext)
+	} else {
+		m.extractFormats[ext] = true
+	}
+}
+
+func (m *model) runExtract() tea.Cmd {
+	m.screen = scrRunning
+	m.phaseErr = nil
+	return runPhaseCmd(m, core.PhaseExtract, "", "")
 }
 
 func (m *model) openPickData(mode int) {
@@ -765,6 +864,25 @@ func (m *model) comparePathKeys(msg tea.KeyMsg) tea.Cmd {
 
 // ─── settings ──────────────────────────────────────────────────────────────
 
+// Settings row indices (see viewSettings for the matching order).
+const (
+	setSrc = iota
+	setOut
+	setDB
+	setModel
+	setVision
+	setAudio
+	setWhisper
+	setGoogle
+	setLang
+	setHost
+	setMaxChars
+	setWorkers
+	setBinary
+	setEvalPrompt
+	setReset
+)
+
 func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.confirmReset {
 		switch msg.String() {
@@ -781,7 +899,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.promptViewing != "" {
 		return m.promptKeys(msg)
 	}
-	max := 13 // 0..13 (SRC … Reset database)
+	max := setReset
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
@@ -793,11 +911,11 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.screen = scrMenu
-		m.cursor = 6
+		m.cursor = 5
 	case "?":
 		m.screen = scrAudioHelp
 	case "enter":
-		if m.cursor == 13 {
+		if m.cursor == setReset {
 			// Reset database
 			m.confirmReset = true
 		} else {
@@ -823,10 +941,10 @@ func (m *model) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
 			m.persistSettings()
 		}
 		m.screen = scrSettings
-		m.cursor = 3
+		m.cursor = setModel
 	case "esc":
 		m.screen = scrSettings
-		m.cursor = 3
+		m.cursor = setModel
 	}
 	return nil
 }
@@ -870,20 +988,20 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.screen = scrSettings
 		if m.pickerKind == "audio" {
-			m.cursor = 4
+			m.cursor = setAudio
 		} else if m.pickerKind == "binary" {
-			m.cursor = 11
+			m.cursor = setBinary
 		} else {
-			m.cursor = 7
+			m.cursor = setLang
 		}
 	case "esc":
 		m.screen = scrSettings
 		if m.pickerKind == "audio" {
-			m.cursor = 4
+			m.cursor = setAudio
 		} else if m.pickerKind == "binary" {
-			m.cursor = 11
+			m.cursor = setBinary
 		} else {
-			m.cursor = 7
+			m.cursor = setLang
 		}
 	case "?":
 		if m.pickerKind == "audio" {
@@ -893,7 +1011,7 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *model) openFilePicker() {
+func (m *model) openFilePickerFrom(back screen, cursor int) {
 	notes, err := core.ListNotes(m.db)
 	if err != nil {
 		return
@@ -902,8 +1020,8 @@ func (m *model) openFilePicker() {
 	m.cursor = 0
 	m.fileFilter = ""
 	m.filterTyping = false
-	m.evalReturn = scrMenu
-	m.evalReturnCursor = 5
+	m.evalReturn = back
+	m.evalReturnCursor = cursor
 	m.screen = scrFilePicker
 }
 
@@ -952,8 +1070,8 @@ func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		return m.evalSelectedFile()
 	case "esc", "q":
-		m.screen = scrMenu
-		m.cursor = 5
+		m.screen = m.evalReturn
+		m.cursor = m.evalReturnCursor
 	case "backspace":
 		r := []rune(m.fileFilter)
 		if len(r) > 0 {
@@ -1039,19 +1157,19 @@ func (m *model) startEdit() {
 	m.editingMultiline = false
 	m.textInput.EchoMode = textinput.EchoNormal
 	switch m.cursor {
-	case 0: // SRC
+	case setSrc:
 		m.textInput.SetValue(m.src)
 		m.textInput.Focus()
 		m.editingField = "SRC — path to notes / archive / json"
-	case 1: // OUT
+	case setOut:
 		m.textInput.SetValue(m.out)
 		m.textInput.Focus()
 		m.editingField = "OUT — vault folder"
-	case 2: // DB
+	case setDB:
 		m.textInput.SetValue(m.dbPath)
 		m.textInput.Focus()
 		m.editingField = "DB — database file"
-	case 3: // MODEL
+	case setModel:
 		if m.ollamaOK && len(m.ollamaModels) > 0 {
 			m.screen = scrModelPicker
 			m.cursor = 0
@@ -1066,36 +1184,40 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(m.modelName)
 		m.textInput.Focus()
 		m.editingField = "MODEL — ollama model"
-	case 4: // AUDIO
+	case setVision:
+		m.textInput.SetValue(m.visionModel)
+		m.textInput.Focus()
+		m.editingField = "VISION MODEL — describes images (empty = MODEL)"
+	case setAudio:
 		m.openOptionPicker("audio", core.AudioEngineIDs(), core.AudioEngineLabels(), m.audioEngine)
 		return
-	case 5: // WHISPER
+	case setWhisper:
 		m.openWhisperScreen()
 		return
-	case 6: // GOOGLE KEY
+	case setGoogle:
 		m.textInput.SetValue(m.googleAPIKey)
 		m.textInput.EchoMode = textinput.EchoPassword
 		m.textInput.Focus()
 		m.editingField = "GOOGLE API KEY — stored in the database"
-	case 7: // LANG
+	case setLang:
 		m.openOptionPicker("language", core.SpeechLanguageCodes(), core.SpeechLanguageLabels(), m.speechLanguage)
 		return
-	case 8: // HOST
+	case setHost:
 		m.textInput.SetValue(m.host)
 		m.textInput.Focus()
 		m.editingField = "HOST — ollama host"
-	case 9: // MAXCHARS
+	case setMaxChars:
 		m.textInput.SetValue(fmt.Sprintf("%d", m.maxChars))
 		m.textInput.Focus()
 		m.editingField = "MAXCHARS — max chars"
-	case 10: // WORKERS
+	case setWorkers:
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
 		m.editingField = "WORKERS — concurrency (1–100)"
-	case 11: // BINARY STORAGE
+	case setBinary:
 		m.openOptionPicker("binary", core.BinaryStorageIDs(), core.BinaryStorageLabels(), m.binaryStorage)
 		return
-	case 12: // EVAL PROMPT
+	case setEvalPrompt:
 		m.openEvalPrompt()
 		return
 	}
@@ -1192,23 +1314,25 @@ func (m *model) saveField() {
 	}
 
 	switch m.cursor {
-	case 0:
+	case setSrc:
 		m.src = val
-	case 1:
+	case setOut:
 		m.out = val
-	case 2:
+	case setDB:
 		m.dbPath = val
-	case 3:
+	case setModel:
 		m.modelName = val
-	case 6:
+	case setVision:
+		m.visionModel = val
+	case setGoogle:
 		m.googleAPIKey = val
-	case 8:
+	case setHost:
 		m.host = val
-	case 9:
+	case setMaxChars:
 		if n, _ := fmt.Sscanf(val, "%d", &m.maxChars); n != 1 || m.maxChars < 1 {
 			m.maxChars = core.DefaultAppSettings().MaxChars
 		}
-	case 10:
+	case setWorkers:
 		if n, _ := fmt.Sscanf(val, "%d", &m.workers); n != 1 || m.workers < 1 {
 			m.workers = core.DefaultAppSettings().Workers
 		}
@@ -1236,7 +1360,7 @@ func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.promptViewing = ""
 		m.promptText = ""
-		m.cursor = 8
+		m.cursor = setEvalPrompt
 	}
 	return nil
 }
@@ -1282,7 +1406,13 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 
-	max := len(m.processList) // last item is "add new"
+	// The single-note menu starts with "Evaluate note uniqueness"; both menus
+	// end with an "Add new" row.
+	evalOffset := 0
+	if m.processHasEval() {
+		evalOffset = 1
+	}
+	max := len(m.processList) + evalOffset // last item is "add new"
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
@@ -1293,13 +1423,17 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor++
 		}
 	case "enter":
-		if m.cursor < len(m.processList) {
+		switch {
+		case evalOffset == 1 && m.cursor == 0:
+			// Evaluate note uniqueness — choose a note.
+			m.openFilePickerFrom(scrProcessList, 0)
+		case m.cursor-evalOffset < len(m.processList):
 			// open process detail
-			m.processName = m.processList[m.cursor]
+			m.processName = m.processList[m.cursor-evalOffset]
 			m.cursor = 0
 			m.processConfirmDelete = false
 			m.screen = scrProcessDetail
-		} else {
+		default:
 			// add new process
 			m.textInput.SetValue("")
 			m.textInput.Focus()
@@ -1316,6 +1450,12 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 		m.processList = nil
 	}
 	return nil
+}
+
+// processHasEval reports whether the current process menu exposes the
+// "Evaluate note uniqueness" action (single-note processes only).
+func (m *model) processHasEval() bool {
+	return m.processType == "single"
 }
 
 func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {

@@ -180,7 +180,7 @@ func TestTranscribeAudio(t *testing.T) {
 	}
 }
 
-func TestImportExtractsDocumentsAndAudio(t *testing.T) {
+func TestImportStoresFilesWithoutExtracting(t *testing.T) {
 	src := t.TempDir()
 	docx := makeZip(t, map[string]string{
 		"word/document.xml": `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Imported document</w:t></w:r></w:p></w:body></w:document>`,
@@ -191,29 +191,21 @@ func TestImportExtractsDocumentsAndAudio(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "voice.wav"), []byte("RIFFfake"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(src, "broken.pdf"), []byte("not a pdf"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "plain.txt"), []byte("hello text"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"text":"spoken words"}`)
-	}))
-	defer srv.Close()
-
 	db := openTestDB(t)
 	err := Import(context.Background(), NoopReporter{}, db, src, ImportOptions{
-		Source:          SourceFilesystem,
-		Formats:         FormatSet{"docx": true, "wav": true, "pdf": true},
-		Host:            srv.URL,
-		TranscribeModel: "whisper",
+		Source:  SourceFilesystem,
+		Formats: FormatSet{"docx": true, "wav": true, "txt": true},
 	})
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
 
 	type row struct {
-		name, extracted, extractErr, tool string
+		name, markdown, extractErr, tool string
 	}
 	rows, err := db.Query(`SELECT file_name, markdown, extract_error, extract_tool FROM notes ORDER BY file_name`)
 	if err != nil {
@@ -223,19 +215,21 @@ func TestImportExtractsDocumentsAndAudio(t *testing.T) {
 	got := map[string]row{}
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.name, &r.extracted, &r.extractErr, &r.tool); err != nil {
+		if err := rows.Scan(&r.name, &r.markdown, &r.extractErr, &r.tool); err != nil {
 			t.Fatal(err)
 		}
 		got[r.name] = r
 	}
-	if r := got["note.docx"]; r.extracted != "Imported document" || r.extractErr != "" || r.tool != "go:docx" {
-		t.Fatalf("docx row = %#v", r)
+	// Text keeps its content in markdown; documents and audio stay empty until
+	// the "Data extraction" process runs.
+	if r := got["plain.txt"]; r.markdown != "hello text" {
+		t.Fatalf("txt row = %#v", r)
 	}
-	if r := got["voice.wav"]; r.extracted != "spoken words" || r.extractErr != "" || r.tool != "ollama:whisper" {
-		t.Fatalf("audio row = %#v", r)
+	if r := got["note.docx"]; r.markdown != "" || r.extractErr != "" || r.tool != "" {
+		t.Fatalf("docx row should not be extracted yet: %#v", r)
 	}
-	if r := got["broken.pdf"]; r.extracted != "" || r.extractErr == "" {
-		t.Fatalf("pdf row = %#v", r)
+	if r := got["voice.wav"]; r.markdown != "" || r.extractErr != "" || r.tool != "" {
+		t.Fatalf("audio row should not be extracted yet: %#v", r)
 	}
 }
 
@@ -282,7 +276,7 @@ func TestOpenDBAddsExtractionColumns(t *testing.T) {
 	}
 }
 
-func TestTranscribeAudioErrorIsStoredByImport(t *testing.T) {
+func TestDataExtractionStoresAudioError(t *testing.T) {
 	src := t.TempDir()
 	if err := os.WriteFile(filepath.Join(src, "voice.wav"), []byte("RIFFfake"), 0o600); err != nil {
 		t.Fatal(err)
@@ -294,19 +288,26 @@ func TestTranscribeAudioErrorIsStoredByImport(t *testing.T) {
 
 	db := openTestDB(t)
 	if err := Import(context.Background(), NoopReporter{}, db, src, ImportOptions{
-		Source:          SourceFilesystem,
-		Formats:         FormatSet{"wav": true},
-		Host:            srv.URL,
-		TranscribeModel: "missing",
+		Source:  SourceFilesystem,
+		Formats: FormatSet{"wav": true},
 	}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	var extracted, extractErr, tool string
+
+	cfg := DefaultConfig()
+	cfg.Host = srv.URL
+	cfg.TranscribeModel = "missing"
+	cfg.AudioEngine = AudioEngineOllama
+	if err := ExtractAll(context.Background(), NoopReporter{}, db, cfg, ExtractFilter{}, true); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+
+	var markdown, extractErr, tool string
 	if err := db.QueryRow(`SELECT markdown, extract_error, extract_tool FROM notes WHERE file_name='voice.wav'`).
-		Scan(&extracted, &extractErr, &tool); err != nil {
+		Scan(&markdown, &extractErr, &tool); err != nil {
 		t.Fatal(err)
 	}
-	if extracted != "" || !strings.Contains(extractErr, "404") || tool != "ollama:missing" {
-		t.Fatalf("extracted=%q error=%q tool=%q", extracted, extractErr, tool)
+	if markdown != "" || !strings.Contains(extractErr, "404") || tool != "ollama:missing" {
+		t.Fatalf("markdown=%q error=%q tool=%q", markdown, extractErr, tool)
 	}
 }

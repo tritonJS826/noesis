@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,8 +25,17 @@ func noteMimeType(name, mime string) string {
 // askOllamaText sends a plain-text prompt and returns the model's answer. When
 // images are supplied they are sent as base64 attachments for vision models.
 func askOllamaText(ctx context.Context, c Config, prompt string, images []string) (string, error) {
+	return askOllamaTextModel(ctx, c, c.Model, prompt, images)
+}
+
+// askOllamaTextModel is like askOllamaText but uses an explicit model name, so
+// images can be described by a dedicated vision model.
+func askOllamaTextModel(ctx context.Context, c Config, model, prompt string, images []string) (string, error) {
+	if strings.TrimSpace(model) == "" {
+		model = c.Model
+	}
 	payload := map[string]any{
-		"model":   c.Model,
+		"model":   model,
 		"prompt":  prompt,
 		"stream":  false,
 		"options": map[string]any{"temperature": 0},
@@ -147,8 +155,9 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 			continue
 		}
 		vars := map[string]string{
-			"FILE_NAME": n.Name,
-			"CONTENT":   n.Content,
+			"FILE_NAME":    n.Name,
+			"CONTENT":      n.Content,
+			"LINKED_NOTES": linkedNotesText(db, id, c.MaxChars),
 		}
 		vars = mergeVars(vars, noteDBVars(db, "db", id))
 		prompt := expandPrompt(tmpl, vars)
@@ -215,7 +224,7 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 			return err
 		}
 		n.mime = noteMimeType(n.name, n.mime)
-		if !IsExtractable(n.name, n.mime) && !strings.HasPrefix(n.mime, "image/") {
+		if !CanExtract(n.name, n.mime) {
 			continue
 		}
 		candidates = append(candidates, n)
@@ -249,22 +258,7 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 				continue
 			}
 
-			if strings.HasPrefix(n.mime, "image/") && n.mime != "image/svg+xml" {
-				prompt := LoadPrompt(db, DataExtractionProcess)
-				if strings.TrimSpace(prompt) == "" {
-					prompt = dataExtractionFallback
-				}
-				vars := map[string]string{"FILE_NAME": n.name}
-				vars = mergeVars(vars, noteDBVars(db, "db", n.id))
-				text, err = askOllamaText(ctx, c, expandPrompt(prompt, vars),
-					[]string{base64.StdEncoding.EncodeToString(data)})
-				tool = "ollama:vision"
-			} else if strings.HasPrefix(n.mime, "image/") {
-				// SVG is XML text, so no vision model is needed.
-				text, tool = string(data), "raw"
-			} else {
-				text, tool, err = ExtractFileTextWithAudio(ctx, n.name, n.mime, data, c.audioOptions())
-			}
+			text, tool, err = ExtractNoteText(ctx, c, db, n.name, n.mime, data, n.id)
 			if err != nil {
 				_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool=? WHERE id=?`, err.Error(), tool, n.id)
 				r.Fail("%s: %v", n.name, err)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -429,6 +430,52 @@ type execer interface {
 
 type Stats struct {
 	Notes, Tagged, TagAssign, UniqTags, Links, PairsDone, Written int
+}
+
+// FormatStat summarises how many notes of one file extension are stored and how
+// many of them have extracted text (a non-empty markdown column).
+type FormatStat struct {
+	Ext       string
+	Total     int
+	Extracted int
+}
+
+// LoadFormatStats groups the notes table by file extension and counts how many
+// notes have markdown (extracted text). Results are ordered by extension.
+func LoadFormatStats(db *sql.DB) []FormatStat {
+	if db == nil {
+		return nil
+	}
+	rows, err := db.Query(`SELECT file_name, markdown FROM notes`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	byExt := map[string]int{}
+	var out []FormatStat
+	for rows.Next() {
+		var name, markdown string
+		if err := rows.Scan(&name, &markdown); err != nil {
+			return out
+		}
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+		if ext == "" {
+			ext = "(none)"
+		}
+		i, ok := byExt[ext]
+		if !ok {
+			i = len(out)
+			byExt[ext] = i
+			out = append(out, FormatStat{Ext: ext})
+		}
+		out[i].Total++
+		if strings.TrimSpace(markdown) != "" {
+			out[i].Extracted++
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ext < out[j].Ext })
+	return out
 }
 
 // LoadStats returns aggregate counters used by the UI.

@@ -42,10 +42,13 @@ func (s *state) menuScreen() fyne.CanvasObject {
 	ollama := widget.NewLabel(s.ollamaStatus)
 	ollama.Wrapping = fyne.TextWrapWord
 
+	formatStats := wrappedLabel(s.formatStatsSummary())
+
 	return container.NewBorder(
 		widget.NewLabel("Choose an action:"),
 		container.NewVBox(
 			summary,
+			formatStats,
 			ollama,
 			widget.NewLabelWithStyle(
 				"Select an item to open it. The status and log panel stays at the bottom.",
@@ -54,6 +57,24 @@ func (s *state) menuScreen() fyne.CanvasObject {
 		),
 		nil, nil, list,
 	)
+}
+
+// formatStatsSummary renders the per-extension extraction counters shown on the
+// start screen, e.g. "3/20 .mp3 extracted · 89/89 .md extracted".
+func (s *state) formatStatsSummary() string {
+	db := s.currentDB()
+	if db == nil {
+		return ""
+	}
+	stats := core.LoadFormatStats(db)
+	if len(stats) == 0 {
+		return "Formats: no files imported yet."
+	}
+	parts := make([]string, len(stats))
+	for i, st := range stats {
+		parts[i] = fmt.Sprintf("%d/%d .%s extracted", st.Extracted, st.Total, st.Ext)
+	}
+	return "Formats (extracted/total): " + strings.Join(parts, "  ·  ")
 }
 
 // ─── import ─────────────────────────────────────────────────────────────────
@@ -179,7 +200,7 @@ func (s *state) syncScreen() fyne.CanvasObject {
 		return container.NewVBox(
 			widget.NewLabel("Synchronize — choose a source and the formats to read."),
 			form,
-			widget.NewLabel("Comparing database with folder: " + s.src.Text + " …"),
+			widget.NewLabel("Comparing database with folder: "+s.src.Text+" …"),
 			widget.NewButton("Run comparison", func() {
 				go s.runSyncDiff()
 			}),
@@ -191,7 +212,7 @@ func (s *state) syncScreen() fyne.CanvasObject {
 			widget.NewLabel("Synchronize — choose a source and the formats to read."),
 			form,
 			widget.NewLabel("Everything is in sync — no differences found."),
-			widget.NewLabel("Source: " + s.src.Text),
+			widget.NewLabel("Source: "+s.src.Text),
 			container.NewHBox(
 				widget.NewButton("Refresh", func() {
 					go s.runSyncDiff()
@@ -345,6 +366,7 @@ func (s *state) formatsScreen() fyne.CanvasObject {
 			widget.NewLabel("Everything checked = import every known format."),
 			status,
 			container.NewHBox(toggleAll, widget.NewButton("Done", func() {
+				s.persistSettings()
 				s.screen = scrImport
 				s.render()
 			})),
@@ -360,7 +382,7 @@ func (s *state) dataScreen() fyne.CanvasObject {
 	items := []string{
 		"Browse database",
 		"Compare file (filesystem search)",
-		"Re-extract documents & transcribe audio",
+		"Re-extract documents, images & transcribe audio",
 	}
 	list := widget.NewList(
 		func() int { return len(items) },
@@ -374,11 +396,93 @@ func (s *state) dataScreen() fyne.CanvasObject {
 		case 1:
 			s.openFsSearch()
 		case 2:
-			s.startPhase(core.PhaseExtract, "", "")
+			s.openExtract()
 		}
 	}
 
 	return container.NewBorder(widget.NewLabel("Choose a data operation:"), nil, nil, nil, list)
+}
+
+// openExtract opens the re-extraction picker seeded with "all formats".
+func (s *state) openExtract() {
+	s.extractFilter = ""
+	s.extractFormats = nil
+	s.screen = scrExtract
+	s.render()
+}
+
+// extractScreen lets the user choose which files to re-extract: by name and by
+// format. Markdown is regenerated for every matched note.
+func (s *state) extractScreen() fyne.CanvasObject {
+	formats := core.ExtractableFormats()
+
+	name := widget.NewEntry()
+	name.SetPlaceHolder("filter by file name (empty = all files)")
+	name.SetText(s.extractFilter)
+	name.OnChanged = func(v string) { s.extractFilter = v }
+
+	if s.extractFormats == nil {
+		s.extractFormats = make(core.FormatSet)
+		for _, f := range formats {
+			s.extractFormats[f.Ext] = true
+		}
+	}
+
+	status := widget.NewLabel("")
+	checks := make([]*widget.Check, len(formats))
+	updateStatus := func() {
+		status.SetText(fmt.Sprintf("selected %d of %d formats", len(s.extractFormats), len(formats)))
+	}
+	for i, f := range formats {
+		f := f
+		check := widget.NewCheck(fmt.Sprintf(".%-10s (%s)", f.Ext, f.Kind), func(on bool) {
+			if on {
+				s.extractFormats[f.Ext] = true
+			} else {
+				delete(s.extractFormats, f.Ext)
+			}
+			updateStatus()
+		})
+		check.SetChecked(s.extractFormats[f.Ext])
+		checks[i] = check
+	}
+	updateStatus()
+
+	toggleAll := widget.NewButton("Select all / none", func() {
+		selectAll := len(s.extractFormats) < len(formats)
+		for i, f := range formats {
+			checks[i].SetChecked(selectAll)
+			if selectAll {
+				s.extractFormats[f.Ext] = true
+			} else {
+				delete(s.extractFormats, f.Ext)
+			}
+		}
+		updateStatus()
+	})
+
+	list := container.NewVBox()
+	for _, c := range checks {
+		list.Add(c)
+	}
+	scroll := container.NewVScroll(list)
+	scroll.SetMinSize(fyne.NewSize(620, 360))
+
+	run := widget.NewButton("Re-extract now", func() {
+		s.startPhase(core.PhaseExtract, "", "")
+	})
+	run.Importance = widget.HighImportance
+
+	return container.NewBorder(
+		container.NewVBox(
+			wrappedLabel("Markdown is regenerated for every matched file. Documents and audio use the local extractors; images are described by the vision model."),
+			name,
+			status,
+			container.NewHBox(toggleAll, run),
+		),
+		nil, nil, nil,
+		scroll,
+	)
 }
 
 func (s *state) filteredNotes() []core.NoteInfo {
@@ -746,6 +850,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewFormItem("OUT", s.out),
 		widget.NewFormItem("DB", s.dbEntry),
 		widget.NewFormItem("MODEL", modelRow),
+		widget.NewFormItem("VISION MODEL", s.vision),
 		widget.NewFormItem("AUDIO", s.audioEngine),
 		widget.NewFormItem("WHISPER MODEL", whisperRow),
 		widget.NewFormItem("GOOGLE API KEY", s.googleKey),
@@ -786,6 +891,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 
 	scroll := container.NewVScroll(container.NewVBox(
 		form,
+		wrappedLabel("VISION MODEL describes images during import, sync and re-extraction. Leave it empty to reuse MODEL."),
 		audioHint,
 		audioHelp,
 		widget.NewSeparator(),
@@ -1024,10 +1130,8 @@ func (s *state) promptVarsHint(name string) string {
 	switch {
 	case ptype == "pair":
 		named = []string{"${A_NAME}", "${A_CONTENT}", "${B_NAME}", "${B_CONTENT}"}
-	case name == "eval":
-		named = []string{"${FILE_NAME}", "${CONTENT}", "${LINKED_NOTES}"}
 	default:
-		named = []string{"${FILE_NAME}", "${CONTENT}"}
+		named = []string{"${FILE_NAME}", "${CONTENT}", "${LINKED_NOTES}"}
 	}
 	parts := append([]string{}, named...)
 	cols := core.NotesColumns(db)
@@ -1111,7 +1215,14 @@ func (s *state) processNames() []string {
 
 func (s *state) processListScreen() fyne.CanvasObject {
 	names := s.processNames()
-	items := append(append([]string{}, names...), "+ Add new "+s.processType+" process")
+	evalRow := s.processType == "single"
+
+	items := make([]string, 0, len(names)+2)
+	if evalRow {
+		items = append(items, "★ Evaluate note uniqueness")
+	}
+	items = append(items, names...)
+	items = append(items, "+ Add new "+s.processType+" process")
 
 	list := widget.NewList(
 		func() int { return len(items) },
@@ -1124,8 +1235,16 @@ func (s *state) processListScreen() fyne.CanvasObject {
 	)
 	list.OnSelected = func(id widget.ListItemID) {
 		list.UnselectAll()
-		if int(id) < len(names) {
-			s.processName = names[id]
+		idx := int(id)
+		if evalRow {
+			if idx == 0 {
+				s.openNotes(noteEval, scrProcessList)
+				return
+			}
+			idx--
+		}
+		if idx < len(names) {
+			s.processName = names[idx]
 			s.screen = scrProcessDetail
 			s.render()
 			return

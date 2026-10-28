@@ -22,15 +22,9 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 	switch phase {
 	case PhaseImport:
 		return Import(ctx, r, db, src, ImportOptions{
-			Source:          SourceFilesystem,
-			Formats:         defaultFormatSet(),
-			Host:            c.Host,
-			TranscribeModel: c.TranscribeModel,
-			AudioEngine:     c.AudioEngine,
-			WhisperModel:    c.WhisperModel,
-			BinaryStorage:   c.BinaryStorage,
-			GoogleAPIKey:    c.GoogleAPIKey,
-			SpeechLanguage:  c.SpeechLanguage,
+			Source:        SourceFilesystem,
+			Formats:       SavedImportFormats(db),
+			BinaryStorage: c.BinaryStorage,
 		})
 	case PhaseAnalyze:
 		return Phase2(ctx, r, db, c)
@@ -39,7 +33,10 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 	case PhaseTagSingle:
 		return TagAllSingle(ctx, r, db, c)
 	case PhaseExtract:
-		return ExtractAll(ctx, r, db, c, true)
+		return ExtractAll(ctx, r, db, c, ExtractFilter{
+			Name:    c.ExtractName,
+			Formats: c.ExtractFormats,
+		}, true)
 	}
 	return nil
 }

@@ -29,6 +29,7 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 	custom.Out = "/data/out"
 	custom.Host = "http://example:11434"
 	custom.Model = "vision-model"
+	custom.VisionModel = "img-model"
 	custom.TranscribeModel = "whisper-large"
 	custom.AudioEngine = AudioEngineGoogle
 	custom.WhisperModel = "small"
@@ -49,8 +50,8 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM settings`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
-	if rows != 11 {
-		t.Fatalf("got %d saved settings, want 11", rows)
+	if rows != 12 {
+		t.Fatalf("got %d saved settings, want 12", rows)
 	}
 }
 

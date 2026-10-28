@@ -130,14 +130,16 @@ var extMime = func() map[string]string {
 }()
 
 // DefaultImportFormats returns the formats used when no explicit choice is
-// made. It covers everyday text files, all supported office/document formats
-// and audio files (which are transcribed locally through Ollama).
+// made. It covers everyday text files, all supported office/document formats,
+// audio and images. Importing only stores these files; documents, audio and
+// images are turned into markdown by the "Data extraction" process.
 func DefaultImportFormats() []string {
 	return []string{
 		"md", "txt", "csv", "json", "yaml", "xml", "html", "log", "mdx",
 		"pdf", "docx", "pptx", "xlsx", "odt", "odp", "ods",
 		"doc", "ppt", "xls", "rtf", "epub",
 		"mp3", "wav", "ogg", "m4a", "flac",
+		"png", "jpg", "jpeg", "webp", "avif", "gif", "bmp", "svg",
 	}
 }
 
@@ -216,33 +218,14 @@ type importFile struct {
 }
 
 // ImportOptions configures one import run.
+//
+// Importing only stores files; it never extracts them. Documents, images and
+// audio are turned into markdown later by the "Data extraction" one-by-one
+// process (see ExtractDataForAll).
 type ImportOptions struct {
-	Source          ImportSource
-	Formats         FormatSet
-	Host            string // Ollama host (legacy audio backend)
-	TranscribeModel string // Ollama transcription model (legacy)
-	AudioEngine     string
-	WhisperModel    string
-	BinaryStorage   string // links (default) or db
-	GoogleAPIKey    string
-	SpeechLanguage  string
-}
-
-func (o ImportOptions) audioOptions() AudioOptions {
-	engine := o.AudioEngine
-	if strings.TrimSpace(engine) == "" {
-		// Preserve the historical behaviour for callers that only set the
-		// Ollama host/model fields.
-		engine = AudioEngineOllama
-	}
-	return AudioOptions{
-		Engine:         engine,
-		WhisperModel:   o.WhisperModel,
-		GoogleAPIKey:   o.GoogleAPIKey,
-		SpeechLanguage: o.SpeechLanguage,
-		OllamaHost:     o.Host,
-		OllamaModel:    o.TranscribeModel,
-	}
+	Source        ImportSource
+	Formats       FormatSet
+	BinaryStorage string // links (default) or db
 }
 
 // Import reads files from src into the notes table according to opt. The
@@ -327,33 +310,19 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 			}
 		}
 
-		var extracted, extractErr, extractTool string
-		if IsExtractable(name, mimeType) {
-			text, tool, err := ExtractFileTextWithAudio(ctx, name, mimeType, data, opt.audioOptions())
-			extractTool = tool
-			if err != nil {
-				extractErr = err.Error()
-				r.Logf("%s: extraction failed: %v", rel, err)
-			} else if strings.TrimSpace(text) != "" {
-				extracted = text
-			}
-		}
-
-		// Build the markdown field: original content for text files, extracted
-		// text / transcript for binary files.
+		// markdown is the base representation: the original content for text
+		// files. Documents, images and audio stay empty until the "Data
+		// extraction" one-by-one process fills them in.
 		markdown := ""
-		switch {
-		case IsText(mimeType):
+		if IsText(mimeType) {
 			markdown = content
-		case extracted != "":
-			markdown = extracted
 		}
 
 		_, err = tx.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type,
 			markdown, extracted_text, extracted_path, blob_path, extract_error, extract_tool, imported_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 			rel, f.Abs, name, content, mimeType, markdown, "", "", blobPath,
-			extractErr, extractTool, time.Now().Format(time.RFC3339))
+			"", "", time.Now().Format(time.RFC3339))
 		if err != nil {
 			r.Fail("%s: %v", rel, err)
 			r.Advance(true)

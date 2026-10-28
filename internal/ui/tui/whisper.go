@@ -67,7 +67,7 @@ func (m *model) whisperKeys(msg tea.KeyMsg) tea.Cmd {
 		switch vimNav(msg.String()) {
 		case "esc":
 			m.screen = scrSettings
-			m.cursor = 5
+			m.cursor = setWhisper
 		case "?":
 			m.screen = scrAudioHelp
 		}
@@ -131,7 +131,7 @@ func (m *model) whisperKeys(msg tea.KeyMsg) tea.Cmd {
 		m.screen = scrAudioHelp
 	case "esc", "q":
 		m.screen = scrSettings
-		m.cursor = 5
+		m.cursor = setWhisper
 	}
 	return nil
 }

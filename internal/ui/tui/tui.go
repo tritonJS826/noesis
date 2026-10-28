@@ -43,6 +43,7 @@ const (
 	scrExportTemplateDetail
 	scrBrowse
 	scrBrowseDetail
+	scrExtract
 )
 
 type ollamaMsg struct {
@@ -69,10 +70,11 @@ type model struct {
 	screen  screen
 	cursor  int
 
-	src, out, dbPath, modelName, host, transcribeModel string
+	src, out, dbPath, modelName, host, transcribeModel     string
+	visionModel                                            string
 	audioEngine, whisperModel, googleAPIKey, binaryStorage string
-	speechLanguage                                        string
-	maxChars, workers                                     int
+	speechLanguage                                         string
+	maxChars, workers                                      int
 
 	ollamaModels []string
 	ollamaOK     bool
@@ -128,10 +130,16 @@ type model struct {
 	syncItems   []core.SyncItem
 	syncScroll  int
 	syncChecked map[string]bool // key: "del:<path>" or "new:<path>"
-	dataCursor int
-	pickMode   int // 0 remove, 1 remove+links
-	pickResult string
-	pickErr    string
+	dataCursor  int
+	pickMode    int // 0 remove, 1 remove+links
+	pickResult  string
+	pickErr     string
+
+	// re-extract picker
+	extractFilter  string
+	extractFormats core.FormatSet
+	extractCursor  int
+	extractTyping  bool
 
 	pickConfirm   bool
 	pickConfirmID int64
@@ -195,6 +203,9 @@ func newModel(db *sql.DB) *model {
 		formats[e] = true
 	}
 	st := core.LoadAppSettings(db)
+	if saved, ok := core.DecodeFormatSelection(st.Formats); ok {
+		formats = saved
+	}
 	return &model{
 		db:              db,
 		screen:          scrMenu,
@@ -204,6 +215,7 @@ func newModel(db *sql.DB) *model {
 		modelName:       st.Model,
 		host:            st.Host,
 		transcribeModel: st.TranscribeModel,
+		visionModel:     st.VisionModel,
 		audioEngine:     st.AudioEngine,
 		whisperModel:    st.WhisperModel,
 		googleAPIKey:    st.GoogleAPIKey,
@@ -231,6 +243,7 @@ func (m *model) persistSettings() {
 		Out:             m.out,
 		Host:            m.host,
 		Model:           m.modelName,
+		VisionModel:     m.visionModel,
 		TranscribeModel: m.transcribeModel,
 		AudioEngine:     m.audioEngine,
 		WhisperModel:    m.whisperModel,
@@ -239,6 +252,7 @@ func (m *model) persistSettings() {
 		SpeechLanguage:  m.speechLanguage,
 		MaxChars:        m.maxChars,
 		Workers:         m.workers,
+		Formats:         core.EncodeFormatSelection(m.importFormats),
 	}.Save(m.db)
 }
 
@@ -274,6 +288,8 @@ func fetchOllamaCmd(host string) tea.Cmd {
 
 func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) tea.Cmd {
 	src, out, modelName, host, transcribeModel := m.src, m.out, m.modelName, m.host, m.transcribeModel
+	visionModel := m.visionModel
+	extractFilter, extractFormats := m.extractFilter, m.extractFormats
 	audioEngine, whisperModel, googleAPIKey, speechLanguage := m.audioEngine, m.whisperModel, m.googleAPIKey, m.speechLanguage
 	maxChars, workers := m.maxChars, m.workers
 	return func() tea.Msg {
@@ -283,6 +299,7 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 		cfg := core.Config{
 			Host:            host,
 			Model:           modelName,
+			VisionModel:     visionModel,
 			TranscribeModel: transcribeModel,
 			AudioEngine:     audioEngine,
 			WhisperModel:    whisperModel,
@@ -293,6 +310,8 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 			Workers:         workers,
 			PromptName:      promptName,
 			TemplateName:    templateName,
+			ExtractName:     extractFilter,
+			ExtractFormats:  extractFormats,
 		}
 		progress := consoleshared.New(m.db)
 		progress.Start()
@@ -308,15 +327,9 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 func runImportCmd(m *model) tea.Cmd {
 	src := m.src
 	opts := core.ImportOptions{
-		Source:          m.importSource,
-		Formats:         m.importFormats,
-		Host:            m.host,
-		TranscribeModel: m.transcribeModel,
-		AudioEngine:     m.audioEngine,
-		WhisperModel:    m.whisperModel,
-		BinaryStorage:   m.binaryStorage,
-		GoogleAPIKey:    m.googleAPIKey,
-		SpeechLanguage:  m.speechLanguage,
+		Source:        m.importSource,
+		Formats:       m.importFormats,
+		BinaryStorage: m.binaryStorage,
 	}
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
