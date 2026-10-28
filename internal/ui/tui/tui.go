@@ -123,6 +123,7 @@ type model struct {
 	browseDetailID      int64
 	browseDetailPath    string
 	browseDetailConfirm bool
+	browseDetailOffset  int
 	removeFromDetail    bool
 
 	// filterTyping is true while a filter/search field is capturing text.
@@ -162,28 +163,45 @@ func newModel(db *sql.DB) *model {
 	ta.Prompt = ""
 	ta.ShowLineNumbers = false
 
-	cfg := core.DefaultConfig()
 	formats := make(core.FormatSet)
 	for _, e := range core.DefaultImportFormats() {
 		formats[e] = true
 	}
+	st := core.LoadAppSettings(db)
 	return &model{
 		db:              db,
 		screen:          scrMenu,
-		src:             ".",
-		out:             "out",
+		src:             st.Src,
+		out:             st.Out,
 		dbPath:          "notes.db",
-		modelName:       cfg.Model,
-		host:            cfg.Host,
-		transcribeModel: cfg.TranscribeModel,
-		maxChars:        cfg.MaxChars,
-		workers:         cfg.Workers,
+		modelName:       st.Model,
+		host:            st.Host,
+		transcribeModel: st.TranscribeModel,
+		maxChars:        st.MaxChars,
+		workers:         st.Workers,
 		textInput:       ti,
 		textArea:        ta,
 		importSource:    core.SourceFilesystem,
 		importFormats:   formats,
 		browseCols:      [5]bool{true, true, false, true, true},
 	}
+}
+
+// persistSettings stores non-default UI settings in the current database so
+// they are restored on the next launch.
+func (m *model) persistSettings() {
+	if m.db == nil {
+		return
+	}
+	_ = core.AppSettings{
+		Src:             m.src,
+		Out:             m.out,
+		Host:            m.host,
+		Model:           m.modelName,
+		TranscribeModel: m.transcribeModel,
+		MaxChars:        m.maxChars,
+		Workers:         m.workers,
+	}.Save(m.db)
 }
 
 // Run starts the TUI event loop.
@@ -370,6 +388,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetErr = ""
 			m.ollamaModels = nil
 			m.ollamaReady = false
+			m.persistSettings()
 		}
 		return m, fetchOllamaCmd(m.host)
 

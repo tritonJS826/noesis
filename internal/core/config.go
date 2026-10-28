@@ -26,7 +26,7 @@ func DefaultConfig() Config {
 		Host:            "http://localhost:11434",
 		Model:           DefaultModel,
 		TranscribeModel: DefaultTranscribeModel,
-		MaxChars:        4000,
-		Workers:         1,
+		MaxChars:        400000,
+		Workers:         2,
 	}
 }

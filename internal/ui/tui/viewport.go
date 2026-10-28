@@ -50,3 +50,69 @@ func scrollHint(start, end, total int) string {
 	}
 	return fmt.Sprintf("%d–%d of %d", start+1, end, total)
 }
+
+// ─── scrollable detail view ─────────────────────────────────────────────────
+
+// detailLine is one rendered line of the record detail view. Header lines are
+// column names and are shown in bold.
+type detailLine struct {
+	header bool
+	text   string
+}
+
+// browseDetailWidth is the usable text width inside the screen box.
+func (m *model) browseDetailWidth() int {
+	w := m.width - 4
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// browseDetailPage returns how many detail lines fit on one screen.
+func (m *model) browseDetailPage() int {
+	rows := m.listRows(5) // title, blank, footer and safety margin
+	if rows < 1 {
+		rows = 10
+	}
+	return rows
+}
+
+// browseDetailContent flattens the selected record into display lines, wrapping
+// long values so arrow keys can scroll through the whole document.
+func (m *model) browseDetailContent() []detailLine {
+	if m.browseDetailConfirm {
+		return []detailLine{{text: fmt.Sprintf("Remove %q from the database? (y/N)", m.browseDetailPath)}}
+	}
+	cw := m.browseDetailWidth()
+	var lines []detailLine
+	for _, f := range m.browseDetail {
+		lines = append(lines, detailLine{header: true, text: f.Name})
+		for _, l := range wrapText(f.Value, cw) {
+			lines = append(lines, detailLine{text: l})
+		}
+		lines = append(lines, detailLine{})
+	}
+	return lines
+}
+
+// browseDetailMaxOffset clamps the scroll offset so the last line stays visible.
+func (m *model) browseDetailMaxOffset() int {
+	total, page := len(m.browseDetailContent()), m.browseDetailPage()
+	if total <= page {
+		return 0
+	}
+	return total - page
+}
+
+// scrollBrowseDetail moves the detail viewport by delta lines.
+func (m *model) scrollBrowseDetail(delta int) {
+	offset := m.browseDetailOffset + delta
+	if offset < 0 {
+		offset = 0
+	}
+	if max := m.browseDetailMaxOffset(); offset > max {
+		offset = max
+	}
+	m.browseDetailOffset = offset
+}

@@ -13,7 +13,6 @@ const (
 	PhaseAnalyze
 	PhaseWrite
 	PhaseTagSingle
-	PhaseExportProcess
 	PhaseExtract
 )
 
@@ -34,8 +33,6 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 		return Phase3(ctx, r, db, out, src, c.TemplateName)
 	case PhaseTagSingle:
 		return TagAllSingle(ctx, r, db, c)
-	case PhaseExportProcess:
-		return ExportForProcess(ctx, r, db, out, c.PromptName, src, c.TemplateName)
 	case PhaseExtract:
 		return ExtractAll(ctx, r, db, c, true)
 	}

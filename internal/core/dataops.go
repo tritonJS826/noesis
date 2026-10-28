@@ -379,8 +379,20 @@ func TagSingle(ctx context.Context, db *sql.DB, c Config, id int64) (int, error)
 	return added, tx.Commit()
 }
 
-// TagAllSingle runs TagSingle over every note that has no tags yet.
+// TagAllSingle runs a one-by-one processing phase. The built-in tagging prompt
+// keeps its historical "only untagged notes" behaviour; the data extraction
+// process fills extracted text for documents/images/audio; every other single
+// prompt is executed as a generic process and its output is stored.
 func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
+	switch c.PromptName {
+	case DataExtractionProcess:
+		return ExtractDataForAll(ctx, r, db, c)
+	case "", DefaultSinglePrompt:
+		// built-in tagging below
+	default:
+		return RunSingleProcess(ctx, r, db, c)
+	}
+
 	if err := ensureOllama(ctx, c); err != nil {
 		return err
 	}
@@ -398,7 +410,7 @@ func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 
 	promptName := c.PromptName
 	if promptName == "" {
-		promptName = "tag_single"
+		promptName = DefaultSinglePrompt
 	}
 
 	r.SetPhase("tags one-by-one ("+c.Model+")", 0, len(ids))

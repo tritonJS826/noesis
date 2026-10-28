@@ -739,9 +739,6 @@ func (s *state) processDetailScreen() fyne.CanvasObject {
 		widget.NewButton(runLabel, func() {
 			s.startPhase(runPhase, s.processName, "")
 		}),
-		widget.NewButton("Export for "+s.processName, func() {
-			s.startPhase(core.PhaseExportProcess, s.processName, "")
-		}),
 		widget.NewButton("Edit prompt", func() {
 			s.openPrompt(s.processName, scrProcessDetail)
 		}),

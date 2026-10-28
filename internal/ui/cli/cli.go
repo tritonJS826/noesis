@@ -74,6 +74,33 @@ func Run(args []string) error {
 	}
 	defer db.Close()
 
+	// Flags that were not passed explicitly fall back to the settings saved by
+	// the TUI/GUI in this database.
+	saved := core.LoadAppSettings(db)
+	seen := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { seen[f.Name] = true })
+	if !seen["src"] && strings.TrimSpace(saved.Src) != "" {
+		*src = saved.Src
+	}
+	if !seen["out"] && strings.TrimSpace(saved.Out) != "" {
+		*out = saved.Out
+	}
+	if !seen["host"] && strings.TrimSpace(saved.Host) != "" {
+		*host = saved.Host
+	}
+	if !seen["model"] && strings.TrimSpace(saved.Model) != "" {
+		*model = saved.Model
+	}
+	if !seen["transcribe-model"] && strings.TrimSpace(saved.TranscribeModel) != "" {
+		*transcribeModel = saved.TranscribeModel
+	}
+	if !seen["maxchars"] {
+		*maxChars = saved.MaxChars
+	}
+	if !seen["workers"] {
+		*workers = saved.Workers
+	}
+
 	cfg := core.Config{
 		Host:            *host,
 		Model:           *model,

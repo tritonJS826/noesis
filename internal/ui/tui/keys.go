@@ -320,6 +320,7 @@ func (m *model) openBrowseDetail(n core.NoteDetail) {
 	m.browseDetailID = n.ID
 	m.browseDetailPath = n.FilePath
 	m.browseDetailConfirm = false
+	m.browseDetailOffset = 0
 	m.filterTyping = false
 	m.screen = scrBrowseDetail
 }
@@ -388,6 +389,37 @@ func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor++
 		}
 		m.browseResult = ""
+	case "pgup":
+		page := m.listRows(6)
+		if page < 1 {
+			page = 10
+		}
+		m.cursor -= page
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.browseResult = ""
+	case "pgdown":
+		page := m.listRows(6)
+		if page < 1 {
+			page = 10
+		}
+		m.cursor += page
+		if max := len(m.filteredBrowse()) - 1; m.cursor > max {
+			m.cursor = max
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.browseResult = ""
+	case "home", "g":
+		m.cursor = 0
+		m.browseResult = ""
+	case "end", "G":
+		if max := len(m.filteredBrowse()) - 1; max >= 0 {
+			m.cursor = max
+		}
+		m.browseResult = ""
 	case "enter":
 		filtered := m.filteredBrowse()
 		if len(filtered) > 0 && m.cursor < len(filtered) {
@@ -445,11 +477,24 @@ func (m *model) browseDetailKeys(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch vimNav(msg.String()) {
+	case "up":
+		m.scrollBrowseDetail(-1)
+	case "down":
+		m.scrollBrowseDetail(1)
+	case "pgup":
+		m.scrollBrowseDetail(-m.browseDetailPage())
+	case "pgdown":
+		m.scrollBrowseDetail(m.browseDetailPage())
+	case "home", "g":
+		m.browseDetailOffset = 0
+	case "end", "G":
+		m.browseDetailOffset = m.browseDetailMaxOffset()
 	case "d", "delete":
 		m.browseDetailConfirm = true
 	case "esc", "q":
 		m.screen = scrBrowse
 		m.browseDetail = nil
+		m.browseDetailOffset = 0
 	}
 	return nil
 }
@@ -611,6 +656,7 @@ func (m *model) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		if len(m.ollamaModels) > 0 && m.cursor < len(m.ollamaModels) {
 			m.modelName = m.ollamaModels[m.cursor]
+			m.persistSettings()
 		}
 		m.screen = scrSettings
 		m.cursor = 3
@@ -918,17 +964,18 @@ func (m *model) saveField() {
 	case 5:
 		m.host = val
 	case 6:
-		if n, _ := fmt.Sscanf(val, "%d", &m.maxChars); n != 1 {
-			m.maxChars = 4000
+		if n, _ := fmt.Sscanf(val, "%d", &m.maxChars); n != 1 || m.maxChars < 1 {
+			m.maxChars = core.DefaultAppSettings().MaxChars
 		}
 	case 7:
 		if n, _ := fmt.Sscanf(val, "%d", &m.workers); n != 1 || m.workers < 1 {
-			m.workers = 1
+			m.workers = core.DefaultAppSettings().Workers
 		}
 		if m.workers > 100 {
 			m.workers = 100
 		}
 	}
+	m.persistSettings()
 }
 
 func (m *model) openEvalPrompt() {
@@ -1052,7 +1099,7 @@ func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor--
 		}
 	case "down":
-		if m.cursor < 5 {
+		if m.cursor < 4 {
 			m.cursor++
 		}
 	case "enter":
@@ -1065,20 +1112,18 @@ func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
 				phase = core.PhaseTagSingle
 			}
 			return m.startPhase(phase, false, false, m.processName, "")
-		case 1: // export for this process
-			return m.startPhase(core.PhaseExportProcess, false, true, m.processName, "")
-		case 2: // edit prompt
+		case 1: // edit prompt
 			m.promptViewing = m.processName
 			m.promptText = core.LoadPrompt(m.db, m.promptViewing)
 			m.cursor = 0
-		case 3: // rename
+		case 2: // rename
 			m.textInput.SetValue(m.processName)
 			m.textInput.Focus()
 			m.editingMultiline = false
 			m.editingField = "Rename process: " + m.processName
-		case 4: // delete
+		case 3: // delete
 			m.processConfirmDelete = true
-		case 5: // back
+		case 4: // back
 			m.openProcessList(m.processType)
 		}
 	case "esc":

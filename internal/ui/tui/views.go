@@ -403,7 +403,7 @@ func (m *model) viewBrowse() string {
 	}
 
 	lines = append(lines, "")
-	hint := "↑↓/jk select  ·  Enter/l details  ·  Del delete  ·  / search  ·  h/ESC back  ·  F1-F5 columns"
+	hint := "↑↓/jk select  ·  PgUp/PgDn page  ·  Enter/l details  ·  Del delete  ·  / search  ·  h/ESC back  ·  F1-F5 columns"
 	if m.filterTyping {
 		hint = "typing filter  ·  Enter details  ·  ↑↓ select  ·  ESC stop search"
 	}
@@ -422,22 +422,41 @@ func (m *model) viewBrowseDetail() string {
 	lines = append(lines, lipgloss.NewStyle().Bold(true).MaxWidth(cw).Render("Record: "+m.browseDetailPath))
 	lines = append(lines, "")
 
-	if m.browseDetailConfirm {
-		lines = append(lines, tuiYel.Width(cw).Render(fmt.Sprintf("Remove %q from the database? (y/N)", m.browseDetailPath)))
-		lines = append(lines, "")
-	} else {
-		for _, f := range m.browseDetail {
-			lines = append(lines, lipgloss.NewStyle().Bold(true).MaxWidth(cw).Render(f.Name))
-			for _, l := range wrapText(f.Value, cw) {
-				lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(l))
-			}
-			lines = append(lines, "")
+	content := m.browseDetailContent()
+	page := m.browseDetailPage()
+	if max := m.browseDetailMaxOffset(); m.browseDetailOffset > max {
+		m.browseDetailOffset = max
+	}
+	start := m.browseDetailOffset
+	if start > len(content) {
+		start = len(content)
+	}
+	end := start + page
+	if end > len(content) {
+		end = len(content)
+	}
+	for _, l := range content[start:end] {
+		if m.browseDetailConfirm {
+			lines = append(lines, tuiYel.MaxWidth(cw).Render(l.text))
+			continue
 		}
+		style := lipgloss.NewStyle().MaxWidth(cw)
+		if l.header {
+			style = style.Bold(true)
+		}
+		lines = append(lines, style.Render(l.text))
 	}
 
-	lines = append(lines, tuiDim.MaxWidth(cw).Render("d/Delete remove from database  ·  h/ESC back"))
-	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
-	return tuiBox.Width(w).Render(content)
+	lines = append(lines, "")
+	hint := "↑↓/jk scroll  ·  PgUp/PgDn page  ·  g/G top/bottom  ·  d/Delete remove  ·  h/ESC back"
+	if m.browseDetailConfirm {
+		hint = "y — confirm  ·  any other key — cancel"
+	}
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(
+		fmt.Sprintf("%s  ·  %s", scrollHint(start, end, len(content)), hint),
+	))
+	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(body)
 }
 
 func (m *model) viewPickData() string {
@@ -821,7 +840,6 @@ func (m *model) viewProcessDetail() string {
 
 	items := []string{
 		"Run",
-		"Export for " + m.processName,
 		"Edit prompt",
 		"Rename",
 		"Delete",
@@ -834,7 +852,7 @@ func (m *model) viewProcessDetail() string {
 			cursor = tuiSel.Render("▸ ")
 		}
 		style := lipgloss.NewStyle().Width(cw)
-		if m.processConfirmDelete && i == 4 {
+		if m.processConfirmDelete && i == 3 {
 			style = style.Foreground(lipgloss.Color("#ff0000"))
 			item = "Delete — are you sure? (y/N)"
 		}

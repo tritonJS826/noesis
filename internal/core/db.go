@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS export_templates(
 	name     TEXT PRIMARY KEY,
 	template TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings(
+	name  TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 // OpenDB opens (or creates) the sqlite database and seeds the default prompts.
@@ -86,6 +90,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	}
 	migratePromptNames(db)
 	seedPrompts(db)
+	migrateExportTemplateNames(db)
 	seedExportTemplates(db)
 	migratePromptPlaceholders(db)
 	return db, nil
@@ -94,8 +99,44 @@ func OpenDB(path string) (*sql.DB, error) {
 // DefaultPairPrompt is the name of the built-in pair process.
 const DefaultPairPrompt = "Tags and bidirectional linking (for obsidian)"
 
-// DefaultExportTemplate is the name of the built-in export template.
-const DefaultExportTemplate = "default"
+// DefaultSinglePrompt is the built-in one-by-one tagging process.
+const DefaultSinglePrompt = "tag_single"
+
+// DataExtractionProcess is the built-in single process that turns documents,
+// images and audio into plain text.
+const DataExtractionProcess = "Data extraction"
+
+// DefaultSummaryProcess is the built-in single process that writes a very short
+// summary for every note.
+const DefaultSummaryProcess = "Short summary"
+
+// SummaryMaxChars is the hard limit applied to the built-in summary output.
+const SummaryMaxChars = 500
+
+const dataExtractionFallback = "Опиши содержимое изображения и перепиши весь видимый текст. Отвечай на языке содержимого. Ответь только текстом, без вступлений и пояснений.\n\nФайл: ${FILE_NAME}"
+
+const summaryFallback = "Сделай максимально короткое резюме заметки на языке заметки: одно-два предложения, только суть.\nЖелаемая длина — около 200 символов, жёсткий максимум — 500 символов.\nБез вступлений, без markdown, без списков.\n\n=== Заметка (файл: ${FILE_NAME}) ===\n${CONTENT}"
+
+// DefaultExportTemplate is the name of the built-in export template that
+// converts every imported file to a Markdown note.
+const DefaultExportTemplate = "All files to Markdown"
+
+// legacyExportTemplate is the old name of the built-in export template.
+const legacyExportTemplate = "default"
+
+// migrateExportTemplateNames renames the legacy "default" template to the
+// descriptive built-in name, preserving any user edits.
+func migrateExportTemplateNames(db *sql.DB) {
+	var one int
+	if db.QueryRow(`SELECT 1 FROM export_templates WHERE name=?`, legacyExportTemplate).Scan(&one) != nil {
+		return // nothing to migrate
+	}
+	// Do not clobber an existing template that already uses the new name.
+	if db.QueryRow(`SELECT 1 FROM export_templates WHERE name=?`, DefaultExportTemplate).Scan(&one) == nil {
+		return
+	}
+	_, _ = db.Exec(`UPDATE export_templates SET name=? WHERE name=?`, DefaultExportTemplate, legacyExportTemplate)
+}
 
 // migratePromptNames renames the legacy "phase2" pair prompt to the descriptive
 // default name, preserving any user edits and their stored process output.
@@ -239,8 +280,10 @@ func seedPrompts(db *sql.DB) {
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, DefaultPairPrompt, pairFallback, "pair")
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "eval",
 		"Ты аналитик личных заметок. Оцени заметку на предмет уникальности информации.\n\n=== ОСНОВНАЯ ЗАМЕТКА (${FILE_NAME}) ===\n${CONTENT}\n\n=== СВЯЗАННЫЕ ЗАМЕТКИ ===\n${LINKED_NOTES}\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"novelty\":\"высокая/средняя/низкая\",\"summary\":\"краткое содержание заметки (1-2 предложения)\",\"new_info\":\"что нового в этой заметке по сравнению со связанными (или 'всё уже описано в других заметках')\"}", "")
-	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, "tag_single",
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, DefaultSinglePrompt,
 		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: ${FILE_NAME}) ===\n${CONTENT}", "single")
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, DataExtractionProcess, dataExtractionFallback, "single")
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, DefaultSummaryProcess, summaryFallback, "single")
 }
 
 // DefaultExportTemplateBody reproduces the built-in Obsidian export format.
@@ -262,7 +305,8 @@ func guessPromptType(name, fallback string) string {
 		strings.Contains(lower, "bidirectional") || strings.Contains(lower, "linking") {
 		return "pair"
 	}
-	if strings.Contains(lower, "single") || strings.Contains(lower, "tag_single") || strings.Contains(lower, "one") {
+	if strings.Contains(lower, "single") || strings.Contains(lower, "tag_single") || strings.Contains(lower, "one") ||
+		strings.Contains(lower, "summary") || strings.Contains(lower, "extract") {
 		return "single"
 	}
 	return fallback
@@ -541,6 +585,24 @@ func NoteRecord(db *sql.DB, id int64) ([]NoteField, error) {
 		return nil, err
 	}
 	fields = append(fields, NoteField{Name: "tags", Value: strings.Join(tags, ", ")})
+
+	// Process outputs (summaries, extracted text, custom processes) are shown
+	// after the table columns so they can be inspected in the record view.
+	prows, err := db.Query(`SELECT process_name, output FROM process_output WHERE note_id=? ORDER BY process_name`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer prows.Close()
+	for prows.Next() {
+		var name, output string
+		if err := prows.Scan(&name, &output); err != nil {
+			return nil, err
+		}
+		fields = append(fields, NoteField{Name: "process: " + name, Value: output})
+	}
+	if err := prows.Err(); err != nil {
+		return nil, err
+	}
 	return fields, nil
 }
 
@@ -708,24 +770,6 @@ func LoadProcessOutput(db *sql.DB, noteID int64, processName string) string {
 		return out
 	}
 	return ""
-}
-
-// ListNotesWithOutput returns note IDs that have output for the given process.
-func ListNotesWithOutput(db *sql.DB, processName string) ([]int64, error) {
-	rows, err := db.Query(`SELECT note_id FROM process_output WHERE process_name=? ORDER BY note_id`, processName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }
 
 // ListPromptsByType returns prompt names filtered by type, ordered alphabetically.

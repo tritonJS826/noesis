@@ -163,27 +163,30 @@ func Run(dbPath string) error {
 }
 
 func newState(db *sql.DB, dbPath string) *state {
-	cfg := core.DefaultConfig()
 	s := &state{db: db, dbPath: dbPath}
 	s.app = app.NewWithID("com.noesis.noesis")
 	s.win = s.app.NewWindow("noesis")
 
 	s.src = widget.NewEntry()
-	s.src.SetText(".")
 	s.out = widget.NewEntry()
-	s.out.SetText("out")
 	s.dbEntry = widget.NewEntry()
 	s.dbEntry.SetText(dbPath)
 	s.host = widget.NewEntry()
-	s.host.SetText(cfg.Host)
 	s.model = widget.NewEntry()
-	s.model.SetText(cfg.Model)
 	s.transcribe = widget.NewEntry()
-	s.transcribe.SetText(cfg.TranscribeModel)
 	s.maxChars = widget.NewEntry()
-	s.maxChars.SetText(strconv.Itoa(cfg.MaxChars))
 	s.workers = widget.NewEntry()
-	s.workers.SetText(strconv.Itoa(cfg.Workers))
+	st := core.LoadAppSettings(db)
+	s.src.SetText(st.Src)
+	s.out.SetText(st.Out)
+	s.host.SetText(st.Host)
+	s.model.SetText(st.Model)
+	s.transcribe.SetText(st.TranscribeModel)
+	s.maxChars.SetText(strconv.Itoa(st.MaxChars))
+	s.workers.SetText(strconv.Itoa(st.Workers))
+	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.transcribe, s.maxChars, s.workers} {
+		e.OnSubmitted = func(string) { s.persistSettings() }
+	}
 	s.browseCols = defaultBrowseCols()
 	s.ollamaStatus = "checking ollama…"
 
@@ -224,7 +227,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.render()
 
 	go func() {
-		models, err := core.FetchModels(cfg.Host)
+		models, err := core.FetchModels(st.Host)
 		fyne.Do(func() {
 			switch {
 			case err != nil:
@@ -912,6 +915,7 @@ func (s *state) startImport() {
 		dialog.ShowError(err, s.win)
 		return
 	}
+	s.persistSettings()
 
 	opts := core.ImportOptions{
 		Source:          s.importSource,
@@ -947,7 +951,7 @@ func (s *state) startPhase(phase core.Phase, promptName, templateName string) {
 		dialog.ShowError(fmt.Errorf("not set: SRC"), s.win)
 		return
 	}
-	if out == "" && (phase == core.PhaseWrite || phase == core.PhaseExportProcess) {
+	if out == "" && phase == core.PhaseWrite {
 		dialog.ShowError(fmt.Errorf("not set: OUT"), s.win)
 		return
 	}
@@ -957,6 +961,7 @@ func (s *state) startPhase(phase core.Phase, promptName, templateName string) {
 		dialog.ShowError(err, s.win)
 		return
 	}
+	s.persistSettings()
 	db := s.currentDB()
 	if db == nil {
 		return
@@ -1041,6 +1046,7 @@ func (s *state) currentDB() *sql.DB {
 }
 
 func (s *state) close() {
+	s.persistSettings()
 	s.mu.Lock()
 	cancel := s.cancel
 	s.mu.Unlock()
@@ -1050,8 +1056,18 @@ func (s *state) close() {
 	s.win.Close()
 }
 
-// readConfig gathers the settings form into a core Config.
+// readConfig gathers the settings form into a core Config and persists the
+// non-default values for the next launch.
 func (s *state) readConfig() (core.Config, string, string, string, error) {
+	cfg, src, out, dbPath, err := s.readConfigRaw()
+	if err != nil {
+		return cfg, src, out, dbPath, err
+	}
+	s.saveSettings(cfg, src, out)
+	return cfg, src, out, dbPath, nil
+}
+
+func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 	maxChars, err := strconv.Atoi(strings.TrimSpace(s.maxChars.Text))
 	if err != nil || maxChars < 1 {
 		return core.Config{}, "", "", "", fmt.Errorf("max chars must be a positive integer")
@@ -1072,6 +1088,32 @@ func (s *state) readConfig() (core.Config, string, string, string, error) {
 		Workers:         workers,
 	}
 	return cfg, strings.TrimSpace(s.src.Text), strings.TrimSpace(s.out.Text), strings.TrimSpace(s.dbEntry.Text), nil
+}
+
+func (s *state) saveSettings(cfg core.Config, src, out string) {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	_ = core.AppSettings{
+		Src:             src,
+		Out:             out,
+		Host:            cfg.Host,
+		Model:           cfg.Model,
+		TranscribeModel: cfg.TranscribeModel,
+		MaxChars:        cfg.MaxChars,
+		Workers:         cfg.Workers,
+	}.Save(db)
+}
+
+// persistSettings stores the current form values without validating the whole
+// config; it is used for Enter presses and when the window closes.
+func (s *state) persistSettings() {
+	cfg, src, out, _, err := s.readConfigRaw()
+	if err != nil {
+		return
+	}
+	s.saveSettings(cfg, src, out)
 }
 
 // useDB switches to the database at path if needed.
@@ -1117,6 +1159,7 @@ func (s *state) confirmReset() {
 		s.db = newDB
 		s.dbPath = path
 		s.mu.Unlock()
+		s.persistSettings()
 
 		s.logs = nil
 		s.logLabel.SetText("")

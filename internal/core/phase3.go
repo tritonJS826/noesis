@@ -5,9 +5,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -154,6 +154,31 @@ func renderExport(db *sql.DB, templateName string, id int64, path, content, link
 	return expandPrompt(tmpl, vars)
 }
 
+// isMarkdownExport reports whether the selected template is the built-in
+// "All files to Markdown" export (an empty name also falls back to it).
+func isMarkdownExport(templateName string) bool {
+	return templateName == "" || templateName == DefaultExportTemplate
+}
+
+// exportPath returns the destination path for one note. The built-in Markdown
+// template converts every imported file to a .md note, while custom templates
+// keep the original relative path.
+func exportPath(relPath, templateName string) string {
+	rel := filepath.ToSlash(relPath)
+	if !isMarkdownExport(templateName) {
+		return rel
+	}
+	ext := path.Ext(rel)
+	if strings.EqualFold(ext, ".md") || strings.EqualFold(ext, ".markdown") {
+		return rel
+	}
+	// Dotfiles such as ".env" have no usable base name: keep them and add .md.
+	if ext == "" || path.Base(rel) == ext {
+		return rel + ".md"
+	}
+	return strings.TrimSuffix(rel, ext) + ".md"
+}
+
 // Phase3 writes the vault using the selected export template.
 func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName string) error {
 	if out == "" {
@@ -167,21 +192,22 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName 
 	}
 	var total int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&total)
-	r.SetPhase("3/3 export for Obsidian → "+out, 0, total)
+	r.SetPhase("3/3 export → "+out, 0, total)
 
 	type rec struct {
-		id            int64
-		path, content string
-		links, hash   string
+		id                     int64
+		path, content          string
+		extracted, mime, links string
+		hash                   string
 	}
-	rows, err := db.Query(`SELECT id, file_path, content, links_md, out_hash FROM notes ORDER BY id`)
+	rows, err := db.Query(`SELECT id, file_path, content, extracted_text, mime_type, links_md, out_hash FROM notes ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	var recs []rec
 	for rows.Next() {
 		var rec rec
-		if err := rows.Scan(&rec.id, &rec.path, &rec.content, &rec.links, &rec.hash); err != nil {
+		if err := rows.Scan(&rec.id, &rec.path, &rec.content, &rec.extracted, &rec.mime, &rec.links, &rec.hash); err != nil {
 			rows.Close()
 			return err
 		}
@@ -207,10 +233,18 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName 
 		}
 		trows.Close()
 
-		text := renderExport(db, templateName, rec.id, rec.path, rec.content, rec.links, tags)
+		// Binary documents (PDF, Office, audio…) are exported as their plain
+		// extracted text instead of the raw base64 payload. Older databases may
+		// lack a mime type, so fall back to the file extension.
+		mime := rec.mime
+		if mime == "" {
+			mime = extMime[strings.ToLower(path.Ext(rec.path))]
+		}
+		content := textForModel(rec.content, rec.extracted, mime)
+		text := renderExport(db, templateName, rec.id, rec.path, content, rec.links, tags)
 		sum := sha256.Sum256([]byte(text))
 		h := hex.EncodeToString(sum[:])
-		dst := filepath.Join(absOut, filepath.FromSlash(rec.path))
+		dst := filepath.Join(absOut, filepath.FromSlash(exportPath(rec.path, templateName)))
 		if _, statErr := os.Stat(dst); rec.hash == h && statErr == nil {
 			r.Advance(true)
 			continue
@@ -232,67 +266,5 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName 
 		r.Advance(false)
 	}
 	r.Logf("phase 3: written/updated files — %d", written)
-	return nil
-}
-
-// ExportForProcess writes process-specific output to a subfolder.
-func ExportForProcess(ctx context.Context, r Reporter, db *sql.DB, out, processName string, src string, templateName string) error {
-	absOut, err := filepath.Abs(out)
-	if err != nil {
-		return err
-	}
-	// Write to a subfolder named after the process
-	absOut = filepath.Join(absOut, "process_"+processName)
-
-	ids, err := ListNotesWithOutput(db, processName)
-	if err != nil {
-		return err
-	}
-	if len(ids) == 0 {
-		r.Logf("no output for process %q", processName)
-		return nil
-	}
-
-	r.SetPhase("export for process "+processName+" → "+absOut, 0, len(ids))
-
-	written := 0
-	for _, id := range ids {
-		if ctx.Err() != nil {
-			return nil
-		}
-		var path, content string
-		if err := db.QueryRow(`SELECT file_path, content FROM notes WHERE id=?`, id).Scan(&path, &content); err != nil {
-			r.Fail("note %d: %v", id, err)
-			r.Advance(true)
-			continue
-		}
-		r.SetCurrent(path)
-
-		output := LoadProcessOutput(db, id, processName)
-		var res struct {
-			Tags []string `json:"tags"`
-		}
-		tags := []string{}
-		if json.Unmarshal([]byte(output), &res) == nil {
-			tags = cleanTags(res.Tags)
-		}
-
-		// Compose with process-specific tags (no related links).
-		text := renderExport(db, templateName, id, path, content, "", tags)
-		dst := filepath.Join(absOut, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			r.Fail("%s: %v", path, err)
-			r.Advance(true)
-			continue
-		}
-		if err := os.WriteFile(dst, []byte(text), 0o644); err != nil {
-			r.Fail("%s: %v", path, err)
-			r.Advance(true)
-			continue
-		}
-		written++
-		r.Advance(false)
-	}
-	r.Logf("process %q: written files — %d", processName, written)
 	return nil
 }

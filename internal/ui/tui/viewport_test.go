@@ -56,3 +56,28 @@ func TestFormatsViewFitsTerminalHeight(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowseDetailScrollsWithVimKeys(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{80, 24}, {60, 12}} {
+		m := &model{width: size.width, height: size.height}
+		m.browseDetailPath = "docs/a.md"
+		m.browseDetail = []core.NoteField{{Name: "content", Value: strings.Repeat("line\n", 200)}}
+
+		m.scrollBrowseDetail(1000)
+		if m.browseDetailOffset != m.browseDetailMaxOffset() {
+			t.Fatalf("%dx%d: offset %d not clamped to %d", size.width, size.height, m.browseDetailOffset, m.browseDetailMaxOffset())
+		}
+		view := m.viewBrowseDetail()
+		if got := strings.Count(view, "\n") + 1; got > m.height {
+			t.Fatalf("%dx%d: detail view is %d lines:\n%s", size.width, size.height, got, view)
+		}
+		if !strings.Contains(view, "of "+strconv.Itoa(len(m.browseDetailContent()))) {
+			t.Fatalf("%dx%d: detail view does not show the scroll position:\n%s", size.width, size.height, view)
+		}
+
+		m.scrollBrowseDetail(-1000)
+		if m.browseDetailOffset != 0 {
+			t.Fatalf("%dx%d: offset %d, want 0", size.width, size.height, m.browseDetailOffset)
+		}
+	}
+}
