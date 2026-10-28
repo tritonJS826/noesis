@@ -287,8 +287,8 @@ func (m *model) viewSync() string {
 				prefix = tuiRed.Render("−")
 			}
 			name := it.Name
-			if len(name) > cw-12 {
-				rs := []rune(name)
+			rs := []rune(name)
+			if len(rs) > cw-12 {
 				name = string(rs[:cw-15]) + "…"
 			}
 			line := fmt.Sprintf("%s%s %s %s", cursor, mark, prefix, name)
