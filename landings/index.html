@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b0d10">
-  <title>noesis — локальный второй мозг из Markdown-заметок</title>
-  <meta name="description" content="noesis превращает папку с Markdown-дневником в Obsidian-vault. Бесплатно и навсегда, приватно, локально через Ollama.">
+  <title>noesisengine — смысловые связи между вашими файлами</title>
+  <meta name="description" content="noesisengine собирает PDF, DOCX, аудио и Markdown в один текстовый архив, находит смысловые связи между файлами и помогает оценить новизну идей. Локально, приватно, бесплатно.">
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
 </head>
@@ -15,7 +15,7 @@
 
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="brand" href="#top" aria-label="noesis — на главную" data-i18n-aria-label="common.brandAria">
+      <a class="brand" href="#top" aria-label="noesisengine — на главную" data-i18n-aria-label="common.brandAria">
         <span class="brand-mark" aria-hidden="true">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="6" cy="12" r="2.4"></circle>
@@ -24,16 +24,17 @@
             <path d="M8.2 10.9 15.8 7.1M8.2 13.1l7.6 3.8"></path>
           </svg>
         </span>
-        <span class="brand-name">noesis</span>
-        <span class="brand-sub" data-i18n="common.brandSub">второй мозг</span>
+        <span class="brand-name">noesisengine</span>
+        <span class="brand-sub" data-i18n="common.brandSub">связи и смысл</span>
       </a>
 
       <nav class="nav" aria-label="Основная навигация" data-i18n-aria-label="common.navAria">
-        <a href="#how" data-i18n="common.nav.how">Как работает</a>
-        <a href="#free" data-i18n="common.nav.free">Бесплатно</a>
-        <a href="#downloads" data-i18n="common.nav.download">Скачать</a>
         <a href="#examples" data-i18n="common.nav.examples">Примеры</a>
+        <a href="#formats" data-i18n="common.nav.formats">Форматы</a>
+        <a href="#how" data-i18n="common.nav.how">Как работает</a>
+        <a href="#downloads" data-i18n="common.nav.download">Скачать</a>
         <a href="#faq" data-i18n="common.nav.faq">FAQ</a>
+        <a href="#support" data-i18n="common.nav.support">Поддержать</a>
         <a href="feedback.html" data-i18n="common.nav.contact">Связаться</a>
       </nav>
 
@@ -42,6 +43,11 @@
           <button type="button" data-lang="ru" lang="ru">RU</button>
           <button type="button" data-lang="en" lang="en">EN</button>
         </div>
+        <a class="header-github" href="https://github.com/tritonJS826/noesis" target="_blank" rel="noopener" aria-label="noesisengine на GitHub" title="GitHub" data-i18n-aria-label="common.header.githubAria" data-i18n-title="common.header.githubTitle">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.41.36.78 1.06.78 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
+          </svg>
+        </a>
         <a class="header-contact-icon" href="feedback.html" aria-label="Обратная связь" title="Обратная связь" data-i18n-aria-label="common.header.contactAria" data-i18n-title="common.header.contactTitle">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
@@ -55,11 +61,12 @@
   <main id="main">
     <section class="hero wrap">
       <div class="hero-copy">
-        <div class="eyebrow" data-i18n="index.hero.eyebrow"><span class="pulse" aria-hidden="true"></span> локально · приватно · бесплатно навсегда</div>
-        <h1 data-i18n="index.hero.title">Ваш дневник заслуживает <em>второго мозга</em></h1>
+        <div class="eyebrow" data-i18n="index.hero.eyebrow"><span class="pulse" aria-hidden="true"></span> связи · новизна · любые форматы</div>
+        <h1 data-i18n="index.hero.title">Ваши заметки заслуживают <em>смысловых связей</em></h1>
         <p class="lead" data-i18n="index.hero.lead">
-          noesis читает обычные Markdown-заметки, находит смысловые связи и собирает из них
-          Obsidian-vault. Всё работает на вашем компьютере через Ollama.
+          noesisengine собирает PDF, DOCX, аудио и Markdown в один текстовый архив,
+          находит общее между файлами и строит граф связей. Сразу видно, что вы уже знаете,
+          что действительно ново и какие старые записи помогут новой идее.
         </p>
         <div class="free-forever"><span class="free-dot" aria-hidden="true"></span><span data-i18n="index.hero.freeNote">бесплатно и навсегда · без аккаунта и пробного периода</span></div>
         <div class="hero-actions">
@@ -67,10 +74,10 @@
           <a class="btn btn-ghost" href="#examples" data-i18n="index.hero.examples">Посмотреть примеры</a>
         </div>
         <ul class="hero-points">
-          <li data-i18n="index.hero.points.0">Всё на вашем железе</li>
-          <li data-i18n="index.hero.points.1">Одна кнопка — весь пайплайн</li>
-          <li data-i18n="index.hero.points.2">Оригиналы не меняются</li>
-          <li data-i18n="index.hero.points.3">SQLite + plain text</li>
+          <li data-i18n="index.hero.points.0">PDF, DOCX, аудио → Markdown</li>
+          <li data-i18n="index.hero.points.1">Смысловые связи между файлами</li>
+          <li data-i18n="index.hero.points.2">Оценка новизны и пользы</li>
+          <li data-i18n="index.hero.points.3">Локально и бесплатно</li>
         </ul>
       </div>
 
@@ -106,47 +113,178 @@
     </section>
 
     <div class="strip">
-      <div class="wrap strip-inner" aria-label="Ollama, SQLite, Markdown, Obsidian, Go">
-        <span data-i18n="index.strip.label">Внутри:</span>
-        <span>Ollama</span>
-        <span>SQLite</span>
+      <div class="wrap strip-inner" aria-label="PDF, DOCX, XLSX, EPUB, MP3, Markdown">
+        <span data-i18n="index.strip.label">На входе:</span>
+        <span>PDF</span>
+        <span>DOCX</span>
+        <span>XLSX</span>
+        <span>EPUB</span>
+        <span>MP3</span>
         <span>Markdown</span>
-        <span>Obsidian wikilinks</span>
-        <span>Go</span>
       </div>
     </div>
+
+    <section id="why" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="index.why.eyebrow">простыми словами</div>
+        <h2 data-i18n="index.why.title">Не просто папка заметок — карта того, что вы уже знаете</h2>
+        <p class="section-sub" data-i18n="index.why.sub">noesisengine читает каждый файл, превращает его в текст и сравнивает с остальными. Находятся общие люди, проекты, события и продолжения историй — даже если один файл был PDF, другой аудио, а третий обычной заметкой.</p>
+      </div>
+
+      <div class="steps">
+        <article class="card step">
+          <span class="step-num" data-i18n="index.why.cards.0.label">01 / СВЯЗИ</span>
+          <h3 data-i18n="index.why.cards.0.title">Видит общий смысл</h3>
+          <p data-i18n="index.why.cards.0.body">Связывает файлы, где речь об одном человеке, проекте или событии. Не по совпадению слов, а по смыслу.</p>
+        </article>
+        <article class="card step">
+          <span class="step-num" data-i18n="index.why.cards.1.label">02 / НОВИЗНА</span>
+          <h3 data-i18n="index.why.cards.1.title">Показывает, что нового</h3>
+          <p data-i18n="index.why.cards.1.body">Сравнивает новую мысль со старыми записями: это действительно ново и полезно или вы уже проходили этот путь?</p>
+        </article>
+        <article class="card step">
+          <span class="step-num" data-i18n="index.why.cards.2.label">03 / ИДЕИ</span>
+          <h3 data-i18n="index.why.cards.2.title">Помогает думать дальше</h3>
+          <p data-i18n="index.why.cards.2.body">Старые заметки становятся контекстом для следующей идеи: видно, что уже пробовали и куда двигаться.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="examples" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="index.examples.eyebrow">примеры</div>
+        <h2 data-i18n="index.examples.title">Три результата, которые понятны сразу</h2>
+        <p class="section-sub" data-i18n="index.examples.sub">Сначала файлы становятся текстом, потом между ними появляются связи. Вот как это выглядит на практике.</p>
+      </div>
+
+      <article class="example-card">
+        <div class="example-head">
+          <span class="badge" data-i18n="index.examples.one.badge">пример 01</span>
+          <h3 data-i18n="index.examples.one.title">Заметки → Obsidian с тегами и связями</h3>
+          <p data-i18n="index.examples.one.desc">Обычный текст без разметки превращается в заметку с тегами и ссылками на связанные записи.</p>
+        </div>
+        <div class="compare">
+          <div>
+            <div class="compare-title"><span data-i18n="index.examples.one.beforeLabel">До: обычный Markdown</span></div>
+            <pre class="code" data-i18n-text="index.examples.one.beforeCode"># Дневник — 5 марта</pre>
+          </div>
+          <div>
+            <div class="compare-title"><span data-i18n="index.examples.one.afterLabel">После: заметка в vault</span> <span class="tag-small" data-i18n="index.examples.one.preserved">текст не меняется</span></div>
+            <pre class="code" data-i18n-text="index.examples.one.afterCode">---</pre>
+          </div>
+        </div>
+        <p class="after-note" data-i18n="index.examples.one.note">Теги и связи добавляются в front matter и в конец заметки.</p>
+      </article>
+
+      <article class="example-card">
+        <div class="example-head">
+          <span class="badge" data-i18n="index.examples.two.badge">пример 02</span>
+          <h3 data-i18n="index.examples.two.title">Оценить новизну и полезность</h3>
+          <p data-i18n="index.examples.two.desc">Перед тем как писать новую заметку или статью, сравните её со связанными записями: это новая мысль или повтор? И стоит ли тратить на неё время?</p>
+        </div>
+        <div class="eval-grid">
+          <div class="eval-note">
+            <div class="note-label" data-i18n="index.examples.two.draftLabel">new.md · черновик</div>
+            <p data-i18n="index.examples.two.draft">«Я строю систему со связями между сущностями…»</p>
+            <p class="draft" style="margin-top:14px;" data-i18n="index.examples.two.linked">Связанные заметки: консультация с Иваном, встреча с Анной.</p>
+          </div>
+          <div class="eval-result">
+            <div class="eval-top">
+              <span data-i18n="index.examples.two.resultLabel">Оценить новизну и полезность</span>
+              <span class="rating" data-i18n="index.examples.two.rating">новизна: низкая</span>
+            </div>
+            <h4 data-i18n="index.examples.two.resultTitle">Черновик мысли о реляционной модели</h4>
+            <div class="eval-field"><b data-i18n="index.examples.two.summaryLabel">summary</b><p data-i18n="index.examples.two.summary">Короткая мысль.</p></div>
+            <div class="eval-field"><b data-i18n="index.examples.two.newLabel">new information</b><p data-i18n="index.examples.two.new">Новых деталей нет.</p></div>
+          </div>
+        </div>
+        <p class="after-note" data-i18n="index.examples.two.note">Оценка идёт относительно связанных заметок.</p>
+      </article>
+
+      <article class="example-card">
+        <div class="example-head">
+          <span class="badge" data-i18n="index.examples.three.badge">пример 03</span>
+          <h3 data-i18n="index.examples.three.title">Смысловая цепочка, которую видно в графе</h3>
+          <p data-i18n="index.examples.three.desc">Модель ищет не просто похожие слова, а общих людей, проекты и продолжение историй — даже если файлы были PDF, аудио и заметками разных лет.</p>
+        </div>
+        <div class="chain" aria-label="Example chain of linked notes" data-i18n-aria-label="index.examples.three.aria">
+          <span class="chain-node"><span data-i18n="index.examples.three.nodes.0.title">Консультация с Иваном</span><small data-i18n="index.examples.three.nodes.0.tags">audio · postgresql · keycloak · gophercon</small></span>
+          <span class="chain-arrow" aria-hidden="true">↔</span>
+          <span class="chain-node"><span data-i18n="index.examples.three.nodes.1.title">Изучаю PostgreSQL</span><small data-i18n="index.examples.three.nodes.1.tags">markdown · cte · индексы · таск-трекер</small></span>
+          <span class="chain-arrow" aria-hidden="true">↔</span>
+          <span class="chain-node"><span data-i18n="index.examples.three.nodes.2.title">Встреча с Анной</span><small data-i18n="index.examples.three.nodes.2.tags">pdf · архитектура · go · postgresql</small></span>
+          <span class="chain-arrow" aria-hidden="true">↔</span>
+          <span class="chain-node"><span data-i18n="index.examples.three.nodes.3.title">Прогресс по таск-трекеру</span><small data-i18n="index.examples.three.nodes.3.tags">docx · gRPC · docker · Иван</small></span>
+        </div>
+        <p class="after-note" data-i18n="index.examples.three.note">В Obsidian эти связи превращаются в граф.</p>
+      </article>
+    </section>
+
+    <section id="formats" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="index.formats.eyebrow">любые файлы → markdown</div>
+        <h2 data-i18n="index.formats.title">Соберите PDF, DOCX и аудио в один текстовый архив</h2>
+        <p class="section-sub" data-i18n="index.formats.sub">noesisengine извлекает текст из документов и расшифровывает аудио. На выходе — обычные .md-файлы: с ними работают поиск, Obsidian, редакторы и ваши скрипты.</p>
+        <div class="format-chips" aria-hidden="true">
+          <span>.pdf</span><span>.docx</span><span>.pptx</span><span>.xlsx</span><span>.epub</span><span>.mp3</span><span>.wav</span><span>.md</span><span>.txt</span>
+        </div>
+      </div>
+
+      <div class="steps">
+        <article class="card step">
+          <span class="step-num" data-i18n="index.formats.cards.0.label">01 / ИМПОРТ</span>
+          <h3 data-i18n="index.formats.cards.0.title">Любые форматы</h3>
+          <p data-i18n="index.formats.cards.0.body">PDF, DOCX, PPTX, XLSX, EPUB, MP3, WAV, Markdown, TXT и другие.</p>
+        </article>
+        <article class="card step">
+          <span class="step-num" data-i18n="index.formats.cards.1.label">02 / ТЕКСТ</span>
+          <h3 data-i18n="index.formats.cards.1.title">Документы и аудио → текст</h3>
+          <p data-i18n="index.formats.cards.1.body">Текст извлекается из документов, аудио расшифровывается локально через Whisper или Ollama.</p>
+        </article>
+        <article class="card step">
+          <span class="step-num" data-i18n="index.formats.cards.2.label">03 / РАБОТА</span>
+          <h3 data-i18n="index.formats.cards.2.title">Как с обычным текстом</h3>
+          <p data-i18n="index.formats.cards.2.body">Ищите по содержимому, обрабатывайте скриптами, открывайте в Obsidian и смотрите граф связей.</p>
+        </article>
+      </div>
+
+      <div class="pair-note">
+        <span aria-hidden="true">→</span>
+        <span data-i18n="index.formats.note"><strong>Оригиналы не меняются.</strong> В Markdown-архив попадает извлечённый текст, а теги и связи строятся поверх него.</span>
+      </div>
+    </section>
 
     <section id="how" class="section wrap">
       <div class="section-head">
         <div class="eyebrow" data-i18n="index.how.eyebrow">как это работает</div>
-        <h2 data-i18n="index.how.title">Три шага — и заметки начинают разговаривать</h2>
-        <p class="section-sub" data-i18n="index.how.sub">Пайплайн простой: модель предлагает теги и связи, всё остальное — локальная обработка.</p>
+        <h2 data-i18n="index.how.title">Три шага — и ваши файлы начинают разговаривать</h2>
+        <p class="section-sub" data-i18n="index.how.sub">Сначала текст, потом смысл, потом связи. Всё локально: файлы не уходят в облако.</p>
       </div>
 
       <div class="steps">
         <article class="card step">
           <span class="step-num" data-i18n="index.how.steps.0.num">01 / IMPORT</span>
-          <h3 data-i18n="index.how.steps.0.title">Импорт</h3>
-          <p data-i18n="index.how.steps.0.body">Находит <code>.md</code> в папке и складывает их в SQLite.</p>
+          <h3 data-i18n="index.how.steps.0.title">Импорт и текст</h3>
+          <p data-i18n="index.how.steps.0.body">Находит файлы в папке: PDF, DOCX, таблицы, EPUB, аудио, Markdown и текст. Из документов извлекается текст, аудио расшифровывается — всё складывается в SQLite.</p>
           <div class="mini-code">-phase 1</div>
         </article>
         <article class="card step">
           <span class="step-num" data-i18n="index.how.steps.1.num">02 / ANALYZE</span>
-          <h3 data-i18n="index.how.steps.1.title">Анализ</h3>
-          <p data-i18n="index.how.steps.1.body">Ollama сравнивает заметки попарно.</p>
+          <h3 data-i18n="index.how.steps.1.title">Поиск смысла</h3>
+          <p data-i18n="index.how.steps.1.body">Ollama сравнивает записи попарно и решает, есть ли между ними общие люди, проекты, события или продолжение истории.</p>
           <div class="mini-code">-phase 2</div>
         </article>
         <article class="card step">
           <span class="step-num" data-i18n="index.how.steps.2.num">03 / WRITE</span>
-          <h3 data-i18n="index.how.steps.2.title">Vault</h3>
-          <p data-i18n="index.how.steps.2.body">Собирает папку для Obsidian с тегами и ссылками.</p>
+          <h3 data-i18n="index.how.steps.2.title">Markdown и связи</h3>
+          <p data-i18n="index.how.steps.2.body">Собирает папку Markdown: front matter с тегами, двусторонние <code>[[ссылки]]</code> и блок <code>## Related notes</code>. Дальше — Obsidian, поиск или ваши скрипты.</p>
           <div class="mini-code">-phase 3</div>
         </article>
       </div>
 
       <div class="pair-note">
         <span aria-hidden="true">↔</span>
-        <span data-i18n="index.how.pairNote"><strong>Связи двусторонние.</strong> Если заметка A связана с B, то в B появится ссылка на A.</span>
+        <span data-i18n="index.how.pairNote"><strong>Связи двусторонние.</strong> Если файл A связан с B, в B появится ссылка на A. Так складывается смысловая цепочка, которую видно в графе.</span>
       </div>
     </section>
 
@@ -155,7 +293,7 @@
         <div class="free-copy">
           <div class="eyebrow" data-i18n="index.free.eyebrow">€0 за запросы</div>
           <h2 data-i18n="index.free.title">Бесплатно, потому что локально</h2>
-          <p data-i18n="index.free.body">Второй мозг не обязан быть подпиской.</p>
+          <p data-i18n="index.free.body">Личная база знаний не обязана быть подпиской.</p>
 
           <div class="free-list">
             <div class="free-item">
@@ -230,84 +368,15 @@
       </div>
     </section>
 
-    <section id="examples" class="section wrap">
-      <div class="section-head">
-        <div class="eyebrow" data-i18n="index.examples.eyebrow">примеры</div>
-        <h2 data-i18n="index.examples.title">Что это даёт на практике</h2>
-        <p class="section-sub" data-i18n="index.examples.sub">Два понятных сценария: превратить текстовый дневник в vault и проверить новизну заметки.</p>
-      </div>
-
-      <article class="example-card">
-        <div class="example-head">
-          <span class="badge" data-i18n="index.examples.one.badge">пример 01</span>
-          <h3 data-i18n="index.examples.one.title">Текстовый дневник → Obsidian с тегами и связями</h3>
-          <p data-i18n="index.examples.one.desc">На входе — обычный текст без разметки.</p>
-        </div>
-        <div class="compare">
-          <div>
-            <div class="compare-title"><span data-i18n="index.examples.one.beforeLabel">До: обычный Markdown</span></div>
-            <pre class="code" data-i18n-text="index.examples.one.beforeCode"># Дневник — 5 марта</pre>
-          </div>
-          <div>
-            <div class="compare-title"><span data-i18n="index.examples.one.afterLabel">После: заметка в vault</span> <span class="tag-small" data-i18n="index.examples.one.preserved">текст не меняется</span></div>
-            <pre class="code" data-i18n-text="index.examples.one.afterCode">---</pre>
-          </div>
-        </div>
-        <p class="after-note" data-i18n="index.examples.one.note">Теги и связи добавляются в front matter и в конец заметки.</p>
-      </article>
-
-      <article class="example-card">
-        <div class="example-head">
-          <span class="badge" data-i18n="index.examples.two.badge">пример 02</span>
-          <h3 data-i18n="index.examples.two.title">Оценить новизну информации</h3>
-          <p data-i18n="index.examples.two.desc">Сравните новую заметку с уже связанными записями.</p>
-        </div>
-        <div class="eval-grid">
-          <div class="eval-note">
-            <div class="note-label" data-i18n="index.examples.two.draftLabel">new.md · черновик</div>
-            <p data-i18n="index.examples.two.draft">«Я строю систему со связями между сущностями…»</p>
-            <p class="draft" style="margin-top:14px;" data-i18n="index.examples.two.linked">Связанные заметки: консультация с Иваном, встреча с Анной.</p>
-          </div>
-          <div class="eval-result">
-            <div class="eval-top">
-              <span data-i18n="index.examples.two.resultLabel">Оценить новизну информации</span>
-              <span class="rating" data-i18n="index.examples.two.rating">новизна: низкая</span>
-            </div>
-            <h4 data-i18n="index.examples.two.resultTitle">Черновик мысли о реляционной модели</h4>
-            <div class="eval-field"><b data-i18n="index.examples.two.summaryLabel">summary</b><p data-i18n="index.examples.two.summary">Короткая мысль.</p></div>
-            <div class="eval-field"><b data-i18n="index.examples.two.newLabel">new information</b><p data-i18n="index.examples.two.new">Новых деталей нет.</p></div>
-          </div>
-        </div>
-        <p class="after-note" data-i18n="index.examples.two.note">Оценка идёт относительно связанных заметок.</p>
-      </article>
-
-      <article class="example-card">
-        <div class="example-head">
-          <span class="badge" data-i18n="index.examples.three.badge">пример 03</span>
-          <h3 data-i18n="index.examples.three.title">Цепочка, которую видно в графе</h3>
-          <p data-i18n="index.examples.three.desc">Модель ищет общих людей, проекты и продолжение историй.</p>
-        </div>
-        <div class="chain" aria-label="Example chain of linked notes" data-i18n-aria-label="index.examples.three.aria">
-          <span class="chain-node"><span data-i18n="index.examples.three.nodes.0.title">Консультация с Иваном</span><small data-i18n="index.examples.three.nodes.0.tags">postgresql · keycloak · gophercon</small></span>
-          <span class="chain-arrow" aria-hidden="true">↔</span>
-          <span class="chain-node"><span data-i18n="index.examples.three.nodes.1.title">Изучаю PostgreSQL</span><small data-i18n="index.examples.three.nodes.1.tags">cte · индексы · таск-трекер</small></span>
-          <span class="chain-arrow" aria-hidden="true">↔</span>
-          <span class="chain-node"><span data-i18n="index.examples.three.nodes.2.title">Встреча с Анной</span><small data-i18n="index.examples.three.nodes.2.tags">архитектура · go · postgresql</small></span>
-          <span class="chain-arrow" aria-hidden="true">↔</span>
-          <span class="chain-node"><span data-i18n="index.examples.three.nodes.3.title">Прогресс по таск-трекеру</span><small data-i18n="index.examples.three.nodes.3.tags">gRPC · docker · Иван</small></span>
-        </div>
-        <p class="after-note" data-i18n="index.examples.three.note">В Obsidian эти связи превращаются в граф.</p>
-      </article>
-    </section>
 
     <section class="section wrap">
       <div class="section-head">
         <div class="eyebrow" data-i18n="index.scenarios.eyebrow">сценарии</div>
-        <h2 data-i18n="index.scenarios.title">Не только дневник</h2>
-        <p class="section-sub" data-i18n="index.scenarios.sub">Любая папка с Markdown подойдёт.</p>
+        <h2 data-i18n="index.scenarios.title">Не только заметки</h2>
+        <p class="section-sub" data-i18n="index.scenarios.sub">Подойдёт любая папка с файлами: PDF-документы, аудиозаписи встреч, заметки, книги и архив проектов.</p>
       </div>
       <div class="scenario-grid">
-        <article class="card scenario-card"><div class="mini-label" data-i18n="index.scenarios.cards.0.label">01 / АРХИВ</div><h3 data-i18n="index.scenarios.cards.0.title">Разобрать дневник за годы</h3><p data-i18n="index.scenarios.cards.0.body">Импортировать старые записи.</p></article>
+        <article class="card scenario-card"><div class="mini-label" data-i18n="index.scenarios.cards.0.label">01 / АРХИВ</div><h3 data-i18n="index.scenarios.cards.0.title">Разобрать архив за годы</h3><p data-i18n="index.scenarios.cards.0.body">Импортировать дневник, документы и записи встреч за годы — и получить один текстовый архив.</p></article>
         <article class="card scenario-card"><div class="mini-label" data-i18n="index.scenarios.cards.1.label">02 / ДУБЛИ</div><h3 data-i18n="index.scenarios.cards.1.title">Найти повторяющиеся идеи</h3><p data-i18n="index.scenarios.cards.1.body">Оценка новизны показывает повторы.</p></article>
         <article class="card scenario-card"><div class="mini-label" data-i18n="index.scenarios.cards.2.label">03 / ЛЮДИ</div><h3 data-i18n="index.scenarios.cards.2.title">Вспомнить контекст встреч</h3><p data-i18n="index.scenarios.cards.2.body">Связи через общие имена и проекты.</p></article>
         <article class="card scenario-card"><div class="mini-label" data-i18n="index.scenarios.cards.3.label">04 / ПРОЕКТЫ</div><h3 data-i18n="index.scenarios.cards.3.title">Собрать таймлайн</h3><p data-i18n="index.scenarios.cards.3.body">Решения, ретро и следующие шаги связаны.</p></article>
@@ -336,6 +405,48 @@
       </div>
     </section>
 
+    <section id="support" class="section wrap">
+      <div class="section-head">
+        <div class="eyebrow" data-i18n="index.support.eyebrow">поддержать проект</div>
+        <h2 data-i18n="index.support.title">Помочь noesisengine</h2>
+        <p class="section-sub" data-i18n="index.support.sub">Проект развивается открыто. Мы будем рады помощи — от идеи и кода до небольшого доната.</p>
+      </div>
+
+      <div class="support-grid">
+        <article class="support-card">
+          <div class="support-kicker" data-i18n="index.support.helpKicker">cooperation</div>
+          <h3 data-i18n="index.support.helpTitle">Предложить помощь</h3>
+          <p data-i18n="index.support.helpBody">Мы рады рассмотреть любое предложение помощи. Отправьте описание на <a href="mailto:victorveretennikov58@gmail.com?subject=noesisengine%3Acooperation">victorveretennikov58@gmail.com</a> с темой письма <code>noesisengine:cooperation</code>.</p>
+          <a class="btn btn-small support-action" href="mailto:victorveretennikov58@gmail.com?subject=noesisengine%3Acooperation" data-i18n="index.support.helpAction">Написать письмо →</a>
+        </article>
+
+        <article class="support-card">
+          <div class="support-kicker" data-i18n="index.support.donateKicker">donate</div>
+          <h3 data-i18n="index.support.donateTitle">Криптокошельки</h3>
+          <p data-i18n="index.support.donateBody">Небольшой донат помогает оплачивать разработку, тестирование и инфраструктуру.</p>
+          <ul class="wallet-list">
+            <li>
+              <div class="wallet-head"><span class="wallet-name">Bitcoin</span><span class="wallet-network" data-i18n="index.support.wallets.0.network">Bitcoin</span></div>
+              <code class="wallet-address">bc1qwemlhwklwsfl3xejkdg7w6s02x7s99eyy8vgwj</code>
+            </li>
+            <li>
+              <div class="wallet-head"><span class="wallet-name">Ethereum</span><span class="wallet-network" data-i18n="index.support.wallets.1.network">Ethereum</span></div>
+              <code class="wallet-address">0x24e32141E945D88a703051605f568C489ea89081</code>
+            </li>
+            <li>
+              <div class="wallet-head"><span class="wallet-name">Tether (USDT)</span><span class="wallet-network" data-i18n="index.support.wallets.2.network">сеть Ethereum / ERC-20</span></div>
+              <code class="wallet-address">0x24e32141E945D88a703051605f568C489ea89081</code>
+            </li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="support-community">
+        <span data-i18n="index.support.community">noesisengine поддерживается и предоставляется сообществом Mastersway.</span>
+        <a href="https://mastersway.netlify.app" target="_blank" rel="noopener" data-i18n="index.support.communityLink">mastersway.netlify.app →</a>
+      </div>
+    </section>
+
     <section id="faq" class="section wrap">
       <div class="section-head">
         <div class="eyebrow" data-i18n="index.faq.eyebrow">вопросы</div>
@@ -350,6 +461,8 @@
         <details><summary data-i18n="index.faq.items.5.q">Можно использовать свою модель?</summary><p data-i18n="index.faq.items.5.a">Да.</p></details>
         <details><summary data-i18n="index.faq.items.6.q">Можно всё сделать в одну кнопку?</summary><p data-i18n="index.faq.items.6.a">Да.</p></details>
         <details><summary data-i18n="index.faq.items.7.q">Это отдельный интерфейс приложения?</summary><p data-i18n="index.faq.items.7.a">Нет.</p></details>
+        <details><summary data-i18n="index.faq.items.8.q">Какие файлы можно импортировать?</summary><p data-i18n="index.faq.items.8.a">PDF, DOCX, PPTX, XLSX, ODT/ODP/ODS, DOC/PPT/XLS, RTF, EPUB, MP3, WAV, OGG, M4A, FLAC, Markdown и обычный текст.</p></details>
+        <details><summary data-i18n="index.faq.items.9.q">Можно ли искать по содержимому и обрабатывать архив скриптами?</summary><p data-i18n="index.faq.items.9.a">Да. Все файлы превращаются в текст, который хранится в SQLite и в Markdown-архиве.</p></details>
       </div>
     </section>
   </main>
@@ -390,12 +503,12 @@
               <path d="M8.2 10.9 15.8 7.1M8.2 13.1l7.6 3.8"></path>
             </svg>
           </span>
-          <span class="brand-name">noesis</span>
+          <span class="brand-name">noesisengine</span>
         </a>
-        <p data-i18n="common.footer.tagline">Локальный второй мозг из обычных Markdown-заметок.</p>
+        <p data-i18n="common.footer.tagline">Смысловые связи между вашими файлами и заметками.</p>
       </div>
       <div class="footer-meta">
-        <p data-i18n="index.footer.meta">Статический лендинг в <code>landings/</code>.</p>
+        <p data-i18n="index.footer.meta">Статический лендинг noesisengine в <code>landings/</code>. <a href="https://github.com/tritonJS826/noesis">GitHub</a> · <a href="mailto:victorveretennikov58@gmail.com">victorveretennikov58@gmail.com</a> · <a href="feedback.html">Обратная связь</a> · <a href="#top">Наверх ↑</a></p>
       </div>
     </div>
   </footer>

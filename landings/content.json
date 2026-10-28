@@ -24,95 +24,135 @@
   "ru": {
     "common": {
       "skip": "Перейти к содержанию",
-      "brandAria": "noesis — на главную",
-      "brandSub": "второй мозг",
+      "brandAria": "noesisengine — на главную",
+      "brandSub": "связи и смысл",
       "navAria": "Основная навигация",
       "nav": {
         "how": "Как работает",
         "free": "Бесплатно",
         "download": "Скачать",
         "examples": "Примеры",
+        "formats": "Форматы",
         "faq": "FAQ",
-        "contact": "Связаться"
+        "contact": "Связаться",
+        "support": "Поддержать"
       },
       "header": {
         "download": "Скачать",
         "contactAria": "Обратная связь",
-        "contactTitle": "Обратная связь"
+        "contactTitle": "Обратная связь",
+        "githubAria": "noesisengine на GitHub",
+        "githubTitle": "GitHub"
       },
       "langAria": "Язык / Language",
       "footer": {
-        "tagline": "Локальный второй мозг из обычных Markdown-заметок.",
+        "tagline": "Смысловые связи между вашими файлами и заметками.",
         "feedback": "Обратная связь",
         "backTop": "Наверх ↑"
       }
     },
     "index": {
       "meta": {
-        "title": "noesis — локальный второй мозг из Markdown-заметок",
-        "description": "noesis превращает папку с Markdown-дневником в Obsidian-vault: теги, двусторонние ссылки и оценка новизны. Бесплатно и навсегда, приватно, локально через Ollama. Скачайте сборку для Linux, Windows или macOS."
+        "title": "noesisengine — смысловые связи между вашими файлами",
+        "description": "noesisengine собирает PDF, DOCX, аудио и Markdown в один текстовый архив, находит смысловые связи между файлами и помогает оценить новизну идей. Локально, приватно, бесплатно."
       },
       "hero": {
-        "eyebrow": "<span class=\"pulse\" aria-hidden=\"true\"></span> локально · приватно · бесплатно навсегда",
-        "title": "Ваш дневник заслуживает <em>второго мозга</em>",
-        "lead": "noesis читает обычные Markdown-заметки, находит смысловые связи и собирает из них Obsidian-vault. Всё работает на вашем компьютере через Ollama: без API-ключей, облака и ежемесячных платежей. Бесплатно и навсегда — скачайте сборку и запускайте.",
+        "eyebrow": "<span class=\"pulse\" aria-hidden=\"true\"></span> связи · новизна · любые форматы",
+        "title": "Ваши заметки заслуживают <em>смысловых связей</em>",
+        "lead": "noesisengine собирает PDF, DOCX, аудио и Markdown в один текстовый архив, находит общее между файлами и строит граф связей. Сразу видно, что вы уже знаете, что действительно ново и какие старые записи помогут новой идее.",
         "download": "Скачать бесплатно <span aria-hidden=\"true\">↓</span>",
         "examples": "Посмотреть примеры",
         "freeNote": "бесплатно и навсегда · без аккаунта и пробного периода",
         "points": [
-          "Всё на вашем железе",
-          "Одна кнопка — весь пайплайн",
-          "Оригиналы не меняются",
-          "SQLite + plain text"
+          "PDF, DOCX, аудио → Markdown",
+          "Смысловые связи между файлами",
+          "Оценка новизны и пользы",
+          "Локально и бесплатно"
         ],
         "preview": {
           "aria": "Пример заметки в Obsidian-vault",
           "path": "vault / 2024-03-05-dnevnik.md",
-          "tags": ["#дневник", "#sqlite", "#дюна", "#планы-на-март"],
+          "tags": [
+            "#дневник",
+            "#sqlite",
+            "#дюна",
+            "#планы-на-март"
+          ],
           "title": "Дневник — 5 марта",
           "text": "Сегодня весь день шёл дождь. Работал из дома, сварил большой чайник зелёного чая…",
           "free": "за токены",
           "related": "## Related notes",
           "links": [
-            {"title": "[[2024-03-25-den-rozhdeniya-mamy]]", "note": "подарок маме на день рождения"},
-            {"title": "[[2024-03-20-progress-taska]]", "note": "доделать таск-трекер до MVP"},
-            {"title": "[[2024-04-05-reabilitatsiya-posle-bolezni]]", "note": "продолжение истории с «Дюной»"}
+            {
+              "title": "[[2024-03-25-den-rozhdeniya-mamy]]",
+              "note": "подарок маме на день рождения"
+            },
+            {
+              "title": "[[2024-03-20-progress-taska]]",
+              "note": "доделать таск-трекер до MVP"
+            },
+            {
+              "title": "[[2024-04-05-reabilitatsiya-posle-bolezni]]",
+              "note": "продолжение истории с «Дюной»"
+            }
           ]
         }
       },
       "strip": {
-        "label": "Внутри:"
+        "label": "На входе:"
+      },
+      "why": {
+        "eyebrow": "простыми словами",
+        "title": "Не просто папка заметок — карта того, что вы уже знаете",
+        "sub": "noesisengine читает каждый файл, превращает его в текст и сравнивает с остальными. Находятся общие люди, проекты, события и продолжения историй — даже если один файл был PDF, другой аудио, а третий обычной заметкой.",
+        "cards": [
+          {
+            "label": "01 / СВЯЗИ",
+            "title": "Видит общий смысл",
+            "body": "Связывает файлы, где речь об одном человеке, проекте или событии. Не по совпадению слов, а по смыслу."
+          },
+          {
+            "label": "02 / НОВИЗНА",
+            "title": "Показывает, что нового",
+            "body": "Сравнивает новую мысль со старыми записями: это действительно ново и полезно или вы уже проходили этот путь?"
+          },
+          {
+            "label": "03 / ИДЕИ",
+            "title": "Помогает думать дальше",
+            "body": "Старые заметки становятся контекстом для следующей идеи: видно, что уже пробовали и куда двигаться."
+          }
+        ]
       },
       "how": {
         "eyebrow": "как это работает",
-        "title": "Три шага — и заметки начинают разговаривать",
-        "sub": "Пайплайн простой: модель предлагает теги и связи, всё остальное — локальная обработка. Никакой магии и переписывания ваших текстов.",
+        "title": "Три шага — и ваши файлы начинают разговаривать",
+        "sub": "Сначала текст, потом смысл, потом связи. Всё локально: файлы не уходят в облако.",
         "steps": [
           {
             "num": "01 / IMPORT",
-            "title": "Импорт",
-            "body": "Находит <code>.md</code> в папке и складывает их в SQLite. Текст, имена файлов и структура папок остаются прежними.",
+            "title": "Импорт и текст",
+            "body": "Находит файлы в папке: PDF, DOCX, таблицы, EPUB, аудио, Markdown и текст. Из документов извлекается текст, аудио расшифровывается — всё складывается в SQLite.",
             "code": "-phase 1"
           },
           {
             "num": "02 / ANALYZE",
-            "title": "Анализ",
-            "body": "Ollama сравнивает заметки попарно: просит 2–8 тегов для каждой заметки в паре и решает, есть ли между ними общие люди, проекты или продолжение истории.",
+            "title": "Поиск смысла",
+            "body": "Ollama сравнивает записи попарно и решает, есть ли между ними общие люди, проекты, события или продолжение истории.",
             "code": "-phase 2"
           },
           {
             "num": "03 / WRITE",
-            "title": "Vault",
-            "body": "Собирает папку для Obsidian: front matter с тегами, двусторонние <code>[[ссылки]]</code> и блок <code>## Related notes</code>.",
+            "title": "Markdown и связи",
+            "body": "Собирает папку Markdown: front matter с тегами, двусторонние <code>[[ссылки]]</code> и блок <code>## Related notes</code>. Дальше — Obsidian, поиск или ваши скрипты.",
             "code": "-phase 3"
           }
         ],
-        "pairNote": "<strong>Связи двусторонние.</strong> Если заметка A связана с B, то в B появится ссылка на A с той же причиной. В Obsidian из этого сразу собирается граф."
+        "pairNote": "<strong>Связи двусторонние.</strong> Если файл A связан с B, в B появится ссылка на A. Так складывается смысловая цепочка, которую видно в графе."
       },
       "free": {
         "eyebrow": "€0 за запросы",
         "title": "Бесплатно, потому что локально",
-        "body": "Второй мозг не обязан быть подпиской. Модель запускается на вашем железе, заметки лежат в обычных файлах, а база — в одном SQLite-файле. Платить за токены и хранилище не нужно.",
+        "body": "Личная база знаний не обязана быть подпиской. Модель запускается на вашем железе, файлы лежат в обычных форматах, а база — в одном SQLite-файле. Платить за токены и хранилище не нужно.",
         "items": [
           {
             "title": "Открытые модели через Ollama",
@@ -170,12 +210,12 @@
       },
       "examples": {
         "eyebrow": "примеры",
-        "title": "Что это даёт на практике",
-        "sub": "Два понятных сценария: превратить текстовый дневник в vault и проверить, действительно ли новая заметка говорит что-то новое.",
+        "title": "Три результата, которые понятны сразу",
+        "sub": "Сначала файлы становятся текстом, потом между ними появляются связи. Вот как это выглядит на практике.",
         "one": {
           "badge": "пример 01",
-          "title": "Текстовый дневник → Obsidian с тегами и связями",
-          "desc": "На входе — обычный текст без разметки. На выходе — та же заметка с front matter, тегами и ссылками на связанные записи.",
+          "title": "Заметки → Obsidian с тегами и связями",
+          "desc": "Обычный текст без разметки превращается в заметку с тегами и ссылками на связанные записи.",
           "beforeLabel": "До: обычный Markdown",
           "afterLabel": "После: заметка в vault",
           "preserved": "текст не меняется",
@@ -185,12 +225,12 @@
         },
         "two": {
           "badge": "пример 02",
-          "title": "Оценить новизну информации",
-          "desc": "Перед тем как написать новую заметку или статью, можно сравнить её с уже связанными записями и понять: это действительно новая мысль или вы уже проходили этот путь?",
+          "title": "Оценить новизну и полезность",
+          "desc": "Перед тем как писать новую заметку или статью, сравните её со связанными записями: это новая мысль или повтор? И стоит ли тратить на неё время?",
           "draftLabel": "new.md · черновик",
           "draft": "«Я строю систему со связями между сущностями — задачи, пользователи, комментарии. Это реляционная модель. Не стоит изобретать велосипед, бери PostgreSQL или SQLite.»",
           "linked": "Связанные заметки: консультация с Иваном, встреча с Анной.",
-          "resultLabel": "Оценить новизну информации",
+          "resultLabel": "Оценить новизну и полезность",
           "rating": "новизна: низкая",
           "resultTitle": "Черновик мысли о реляционной модели",
           "summaryLabel": "summary",
@@ -202,28 +242,87 @@
         "three": {
           "aria": "Пример цепочки связанных заметок",
           "badge": "пример 03",
-          "title": "Цепочка, которую видно в графе",
-          "desc": "Модель ищет не просто похожие слова, а общих людей, проекты и продолжение историй. Вот как может выглядеть одна из цепочек в вашем vault.",
+          "title": "Смысловая цепочка, которую видно в графе",
+          "desc": "Модель ищет не просто похожие слова, а общих людей, проекты и продолжение историй — даже если файлы были PDF, аудио и заметками разных лет.",
           "nodes": [
-            {"title": "Консультация с Иваном", "tags": "postgresql · keycloak · gophercon"},
-            {"title": "Изучаю PostgreSQL", "tags": "cte · индексы · таск-трекер"},
-            {"title": "Встреча с Анной", "tags": "архитектура · go · postgresql"},
-            {"title": "Прогресс по таск-трекеру", "tags": "gRPC · docker · Иван"}
+            {
+              "title": "Консультация с Иваном",
+              "tags": "audio · postgresql · keycloak · gophercon"
+            },
+            {
+              "title": "Изучаю PostgreSQL",
+              "tags": "markdown · cte · индексы · таск-трекер"
+            },
+            {
+              "title": "Встреча с Анной",
+              "tags": "pdf · архитектура · go · postgresql"
+            },
+            {
+              "title": "Прогресс по таск-трекеру",
+              "tags": "docx · gRPC · docker · Иван"
+            }
           ],
           "note": "В Obsidian эти связи превращаются в граф, по которому удобно вспоминать контекст и находить забытые пересечения."
         }
       },
+      "formats": {
+        "eyebrow": "любые файлы → markdown",
+        "title": "Соберите PDF, DOCX и аудио в один текстовый архив",
+        "sub": "noesisengine извлекает текст из документов и расшифровывает аудио. На выходе — обычные .md-файлы: с ними работают поиск, Obsidian, редакторы и ваши скрипты.",
+        "cards": [
+          {
+            "label": "01 / ИМПОРТ",
+            "title": "Любые форматы",
+            "body": "PDF, DOCX, PPTX, XLSX, EPUB, MP3, WAV, Markdown, TXT и другие."
+          },
+          {
+            "label": "02 / ТЕКСТ",
+            "title": "Документы и аудио → текст",
+            "body": "Текст извлекается из документов, аудио расшифровывается локально через Whisper или Ollama."
+          },
+          {
+            "label": "03 / РАБОТА",
+            "title": "Как с обычным текстом",
+            "body": "Ищите по содержимому, обрабатывайте скриптами, открывайте в Obsidian и смотрите граф связей."
+          }
+        ],
+        "note": "<strong>Оригиналы не меняются.</strong> В Markdown-архив попадает извлечённый текст, а теги и связи строятся поверх него."
+      },
       "scenarios": {
         "eyebrow": "сценарии",
-        "title": "Не только дневник",
-        "sub": "Любая папка с Markdown подойдёт: заметки с встреч, идеи, книжные выписки, рабочий журнал или архив проектов.",
+        "title": "Не только заметки",
+        "sub": "Подойдёт любая папка с файлами: PDF-документы, аудиозаписи встреч, заметки, книги и архив проектов.",
         "cards": [
-          {"label": "01 / АРХИВ", "title": "Разобрать дневник за годы", "body": "Импортировать старые записи и получить теги, по которым легко искать людей, места и события."},
-          {"label": "02 / ДУБЛИ", "title": "Найти повторяющиеся идеи", "body": "Оценка новизны показывает, где вы снова пишете то, что уже исследовали."},
-          {"label": "03 / ЛЮДИ", "title": "Вспомнить контекст встреч", "body": "Связи через общие имена и проекты превращают разрозненные заметки в историю отношений."},
-          {"label": "04 / ПРОЕКТЫ", "title": "Собрать таймлайн", "body": "Заметки по проекту, решения, ретро и следующие шаги оказываются связаны между собой."},
-          {"label": "05 / БЛОГ", "title": "Подготовить материал", "body": "Теги быстро выводят на нужную тему, а ссылки показывают, чего не хватает в черновике."},
-          {"label": "06 / ПРИВАТНОСТЬ", "title": "Оставить данные себе", "body": "Локальная модель, локальная база, локальный vault. Без аккаунтов и облачных хранилищ."}
+          {
+            "label": "01 / АРХИВ",
+            "title": "Разобрать архив за годы",
+            "body": "Импортировать дневник, документы и записи встреч за годы — и получить один текстовый архив."
+          },
+          {
+            "label": "02 / ДУБЛИ",
+            "title": "Найти повторяющиеся идеи",
+            "body": "Оценка новизны показывает, где вы снова пишете то, что уже исследовали."
+          },
+          {
+            "label": "03 / ЛЮДИ",
+            "title": "Вспомнить контекст встреч",
+            "body": "Связи через общие имена и проекты превращают разрозненные заметки в историю отношений."
+          },
+          {
+            "label": "04 / ПРОЕКТЫ",
+            "title": "Собрать таймлайн",
+            "body": "Заметки по проекту, решения, ретро и следующие шаги оказываются связаны между собой."
+          },
+          {
+            "label": "05 / БЛОГ",
+            "title": "Подготовить материал",
+            "body": "Теги быстро выводят на нужную тему, а ссылки показывают, чего не хватает в черновике."
+          },
+          {
+            "label": "06 / ПРИВАТНОСТЬ",
+            "title": "Оставить данные себе",
+            "body": "Локальная модель, локальная база, локальный vault. Без аккаунтов и облачных хранилищ."
+          }
         ]
       },
       "downloads": {
@@ -246,6 +345,25 @@
         "after": "После скачивания на Linux/macOS: <code>chmod +x noesis-*</code> и запустите нужный бинарник. Windows: просто откройте .exe.",
         "all": "Все релизы на GitHub →",
         "source": "Исходники: github.com/tritonJS826/noesis"
+      },
+      "support": {
+        "eyebrow": "поддержать проект",
+        "title": "Помочь noesisengine",
+        "sub": "Проект развивается открыто. Мы будем рады помощи — от идеи и кода до небольшого доната.",
+        "helpKicker": "cooperation",
+        "helpTitle": "Предложить помощь",
+        "helpBody": "Мы рады рассмотреть любое предложение помощи. Отправьте описание на <a href=\"mailto:victorveretennikov58@gmail.com?subject=noesisengine%3Acooperation\">victorveretennikov58@gmail.com</a> с темой письма <code>noesisengine:cooperation</code>.",
+        "helpAction": "Написать письмо →",
+        "donateKicker": "donate",
+        "donateTitle": "Криптокошельки",
+        "donateBody": "Небольшой донат помогает оплачивать разработку, тестирование и инфраструктуру.",
+        "wallets": [
+          {"name": "Bitcoin", "network": "Bitcoin", "address": "bc1qwemlhwklwsfl3xejkdg7w6s02x7s99eyy8vgwj"},
+          {"name": "Ethereum", "network": "Ethereum", "address": "0x24e32141E945D88a703051605f568C489ea89081"},
+          {"name": "Tether (USDT)", "network": "сеть Ethereum / ERC-20", "address": "0x24e32141E945D88a703051605f568C489ea89081"}
+        ],
+        "community": "noesisengine поддерживается и предоставляется сообществом Mastersway.",
+        "communityLink": "mastersway.netlify.app →"
       },
       "faq": {
         "eyebrow": "вопросы",
@@ -282,13 +400,21 @@
           {
             "q": "Это отдельный интерфейс приложения?",
             "a": "Нет. Это статическая страница в папке <code>landings/</code>. Она не подключена к Go-приложению и живёт как самостоятельный лендинг: открывается в браузере или раздаётся любым статическим сервером."
+          },
+          {
+            "q": "Какие файлы можно импортировать?",
+            "a": "PDF, DOCX, PPTX, XLSX, ODT/ODP/ODS, DOC/PPT/XLS, RTF, EPUB, MP3, WAV, OGG, M4A, FLAC, Markdown и обычный текст. Из документов извлекается текст, аудио расшифровывается локально."
+          },
+          {
+            "q": "Можно ли искать по содержимому и обрабатывать архив скриптами?",
+            "a": "Да. Все файлы превращаются в текст, который хранится в SQLite и в Markdown-архиве. Можно искать по содержимому, открывать .md в Obsidian, запускать свои скрипты и смотреть граф связей."
           }
         ]
       },
       "feedback": {
         "eyebrow": "обратная связь",
         "title": "Что улучшить?",
-        "body": "Нашли ошибку, хотите предложить сценарий или рассказать, как используете noesis? Напишите пару строк — это помогает делать инструмент лучше.",
+        "body": "Нашли ошибку, хотите предложить сценарий или рассказать, как используете noesisengine? Напишите пару строк — это помогает делать инструмент лучше.",
         "link": "Открыть полную форму →",
         "name": "Имя",
         "email": "Email",
@@ -300,17 +426,17 @@
         "send": "Отправить"
       },
       "footer": {
-        "meta": "Статический лендинг в <code>landings/</code>. Не является отдельным UI приложения. <a href=\"feedback.html\">Обратная связь</a> · <a href=\"#top\">Наверх ↑</a>"
+        "meta": "Статический лендинг noesisengine в <code>landings/</code>. <a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a> · <a href=\"feedback.html\">Обратная связь</a> · <a href=\"#top\">Наверх ↑</a>"
       }
     },
     "feedback": {
       "meta": {
-        "title": "Обратная связь — noesis",
-        "description": "Оставить отзыв, сообщить об ошибке или предложить сценарий для noesis — локального второго мозга из Markdown-заметок."
+        "title": "Обратная связь — noesisengine",
+        "description": "Оставить отзыв, сообщить об ошибке или предложить сценарий для noesisengine — локального архива со смысловыми связями."
       },
       "eyebrow": "обратная связь",
       "title": "Расскажите, что улучшить",
-      "body": "noesis делается для того, чтобы личные заметки становились полезнее. Поэтому особенно ценны реальные сценарии: что получилось, что сломалось и чего не хватает.",
+      "body": "noesisengine делается для того, чтобы личные заметки становились полезнее. Поэтому особенно ценны реальные сценарии: что получилось, что сломалось и чего не хватает.",
       "points": [
         "Ошибка, странный тег или неточная связь между заметками.",
         "Идея сценария: дневник, встречи, архив проекта, книжные выписки.",
@@ -318,6 +444,7 @@
       ],
       "privacyNote": "<strong>Приватность.</strong> Форма отправляется через Netlify Forms. Не вставляйте в сообщение личные заметки, имена близких и другие чувствительные данные. Для приватного обсуждения лучше описать проблему в общих чертах.",
       "github": "Или откройте issue в <a href=\"https://github.com/tritonJS826/noesis/issues\">GitHub →</a>",
+      "email": "Почта для связи: <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a>",
       "cardTitle": "Написать нам",
       "cardBody": "Пара предложений — уже полезно. Email нужен только для ответа, публиковать его не будем.",
       "form": {
@@ -338,115 +465,155 @@
         "send": "Отправить сообщение"
       },
       "footer": {
-        "meta": "<a href=\"index.html\">← На главную</a> · <a href=\"index.html#faq\">FAQ</a>"
+        "meta": "<a href=\"index.html\">← На главную</a> · <a href=\"index.html#faq\">FAQ</a> · <a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a>"
       }
     },
     "thanks": {
       "meta": {
-        "title": "Спасибо — noesis",
-        "description": "Сообщение отправлено. Спасибо за обратную связь по noesis."
+        "title": "Спасибо — noesisengine",
+        "description": "Сообщение отправлено. Спасибо за обратную связь по noesisengine."
       },
       "title": "Сообщение улетело",
       "body": "Спасибо! Мы прочитаем его и ответим, если вы оставили email. А пока можно вернуться к заметкам — или посмотреть, как собрать из них vault.",
-      "primary": "Запустить noesis",
+      "primary": "Запустить noesisengine",
       "secondary": "На главную",
       "footer": {
-        "meta": "<a href=\"feedback.html\">Обратная связь</a> · <a href=\"index.html\">На главную</a>"
+        "meta": "<a href=\"feedback.html\">Обратная связь</a> · <a href=\"index.html\">На главную</a> · <a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a>"
       }
     }
   },
   "en": {
     "common": {
       "skip": "Skip to content",
-      "brandAria": "noesis — home",
-      "brandSub": "second brain",
+      "brandAria": "noesisengine — home",
+      "brandSub": "links & meaning",
       "navAria": "Main navigation",
       "nav": {
         "how": "How it works",
         "free": "Free",
         "download": "Download",
         "examples": "Examples",
+        "formats": "Formats",
         "faq": "FAQ",
-        "contact": "Contact"
+        "contact": "Contact",
+        "support": "Support"
       },
       "header": {
         "download": "Download",
         "contactAria": "Contact us",
-        "contactTitle": "Contact us"
+        "contactTitle": "Contact us",
+        "githubAria": "noesisengine on GitHub",
+        "githubTitle": "GitHub"
       },
       "langAria": "Language / Язык",
       "footer": {
-        "tagline": "A local second brain for plain Markdown notes.",
+        "tagline": "Meaningful connections between your files and notes.",
         "feedback": "Feedback",
         "backTop": "Back to top ↑"
       }
     },
     "index": {
       "meta": {
-        "title": "noesis — a local second brain for your Markdown notes",
-        "description": "noesis turns a folder of Markdown diary entries into an Obsidian vault: tags, backlinks and novelty checks. Free forever, private and local with Ollama. Download a build for Linux, Windows or macOS."
+        "title": "noesisengine — meaningful connections between your files",
+        "description": "noesisengine turns PDFs, DOCX files, audio and Markdown into one text archive, finds meaningful connections between files and helps you judge how novel an idea is. Local, private and free."
       },
       "hero": {
-        "eyebrow": "<span class=\"pulse\" aria-hidden=\"true\"></span> local · private · free forever",
-        "title": "Give your diary<br><em>a second brain</em>",
-        "lead": "noesis reads plain Markdown notes, finds meaningful connections and turns them into an Obsidian vault. Everything runs on your computer through Ollama: no API keys, no cloud and no monthly fees. Free forever — download a build and run it.",
+        "eyebrow": "<span class=\"pulse\" aria-hidden=\"true\"></span> connections · novelty · any format",
+        "title": "Your notes deserve <em>meaningful connections</em>",
+        "lead": "noesisengine turns PDFs, DOCX files, audio and Markdown into one text archive, finds what they share and builds a graph of connections. See what you already know, what is genuinely new and which old notes can move your next idea forward.",
         "download": "Download free <span aria-hidden=\"true\">↓</span>",
         "examples": "See examples",
         "freeNote": "free forever · no account, no trial",
         "points": [
-          "Everything on your hardware",
-          "One button — the whole pipeline",
-          "Originals stay untouched",
-          "SQLite + plain text"
+          "PDF, DOCX, audio → Markdown",
+          "Meaningful links between files",
+          "Novelty and usefulness checks",
+          "Local and free"
         ],
         "preview": {
           "aria": "Example note in an Obsidian vault",
           "path": "vault / 2024-03-05-diary.md",
-          "tags": ["#diary", "#sqlite", "#dune", "#march-plans"],
+          "tags": [
+            "#diary",
+            "#sqlite",
+            "#dune",
+            "#march-plans"
+          ],
           "title": "Diary — March 5",
           "text": "It rained all day. Worked from home and made a big pot of green tea…",
           "free": "for tokens",
           "related": "## Related notes",
           "links": [
-            {"title": "[[2024-03-25-moms-birthday]]", "note": "a gift for mom's birthday"},
-            {"title": "[[2024-03-20-task-tracker-progress]]", "note": "finish the task tracker MVP"},
-            {"title": "[[2024-04-05-recovery-after-illness]]", "note": "the Dune story continues"}
+            {
+              "title": "[[2024-03-25-moms-birthday]]",
+              "note": "a gift for mom's birthday"
+            },
+            {
+              "title": "[[2024-03-20-task-tracker-progress]]",
+              "note": "finish the task tracker MVP"
+            },
+            {
+              "title": "[[2024-04-05-recovery-after-illness]]",
+              "note": "the Dune story continues"
+            }
           ]
         }
       },
       "strip": {
-        "label": "Inside:"
+        "label": "Input:"
+      },
+      "why": {
+        "eyebrow": "in plain words",
+        "title": "Not just a notes folder — a map of what you already know",
+        "sub": "noesisengine reads every file, turns it into text and compares it with the rest. It finds shared people, projects, events and continuing stories — even when one file is a PDF, another is audio and a third is a plain note.",
+        "cards": [
+          {
+            "label": "01 / LINKS",
+            "title": "Sees the shared meaning",
+            "body": "Links files about the same person, project or event — by meaning, not by matching words."
+          },
+          {
+            "label": "02 / NOVELTY",
+            "title": "Shows what is new",
+            "body": "Compares a new thought with your old notes: is it genuinely new and useful, or a path you have already walked?"
+          },
+          {
+            "label": "03 / IDEAS",
+            "title": "Helps you think further",
+            "body": "Old notes become context for the next idea: see what you have tried and where to go next."
+          }
+        ]
       },
       "how": {
         "eyebrow": "how it works",
-        "title": "Three steps — and your notes start talking",
-        "sub": "The pipeline is simple: the model suggests tags and connections, everything else is local processing. No magic and no rewriting your texts.",
+        "title": "Three steps — and your files start talking",
+        "sub": "First text, then meaning, then connections. Everything stays local: your files never go to the cloud.",
         "steps": [
           {
             "num": "01 / IMPORT",
-            "title": "Import",
-            "body": "Finds <code>.md</code> files in a folder and stores them in SQLite. Text, filenames and folder structure stay the same.",
+            "title": "Import and extract",
+            "body": "Finds files in a folder: PDFs, DOCX, spreadsheets, EPUB, audio, Markdown and text. Text is extracted from documents, audio is transcribed, and everything goes into SQLite.",
             "code": "-phase 1"
           },
           {
             "num": "02 / ANALYZE",
-            "title": "Analyze",
-            "body": "Ollama compares notes pairwise: it asks for 2–8 tags per note and decides whether they share people, projects or a continuing story.",
+            "title": "Find meaning",
+            "body": "Ollama compares entries pairwise and decides whether they share people, projects, events or a continuing story.",
             "code": "-phase 2"
           },
           {
             "num": "03 / WRITE",
-            "title": "Vault",
-            "body": "Builds an Obsidian folder: front matter with tags, bidirectional <code>[[links]]</code> and a <code>## Related notes</code> block.",
+            "title": "Markdown and links",
+            "body": "Builds a Markdown folder: front matter with tags, bidirectional <code>[[links]]</code> and a <code>## Related notes</code> block. Then use Obsidian, search or your own scripts.",
             "code": "-phase 3"
           }
         ],
-        "pairNote": "<strong>Links go both ways.</strong> If note A is linked to B, B gets a link back to A with the same reason. Obsidian turns that into a graph."
+        "pairNote": "<strong>Links go both ways.</strong> If file A is linked to B, B gets a link back to A. Together they form a meaning chain you can see in the graph."
       },
       "free": {
         "eyebrow": "€0 per request",
         "title": "Free because it's local",
-        "body": "A second brain doesn't have to be a subscription. The model runs on your hardware, notes stay in plain files and the database is a single SQLite file. There is nothing to pay for tokens or storage.",
+        "body": "A personal knowledge base doesn't have to be a subscription. The model runs on your hardware, files stay in open formats and the database is a single SQLite file. There is nothing to pay for tokens or storage.",
         "items": [
           {
             "title": "Open models via Ollama",
@@ -504,12 +671,12 @@
       },
       "examples": {
         "eyebrow": "examples",
-        "title": "What it looks like in practice",
-        "sub": "Two clear scenarios: turn a text diary into a vault, and check whether a new note actually says something new.",
+        "title": "Three outcomes you can see right away",
+        "sub": "First files become text, then connections appear between them. Here is what that looks like in practice.",
         "one": {
           "badge": "example 01",
-          "title": "Text diary → Obsidian with tags and links",
-          "desc": "Input: plain text with no markup. Output: the same note with front matter, tags and links to related entries.",
+          "title": "Notes → Obsidian with tags and links",
+          "desc": "Plain text without markup becomes a note with tags and links to related entries.",
           "beforeLabel": "Before: plain Markdown",
           "afterLabel": "After: a note in the vault",
           "preserved": "text preserved",
@@ -519,12 +686,12 @@
         },
         "two": {
           "badge": "example 02",
-          "title": "Check how novel the information is",
-          "desc": "Before writing a new note or article, compare it with notes it is already linked to and see whether it is truly new or a path you have already walked.",
+          "title": "Check novelty and usefulness",
+          "desc": "Before writing a new note or article, compare it with linked entries: is this a new thought or a repeat? Is it worth your time?",
           "draftLabel": "new.md · draft",
           "draft": "“I'm building a system with relationships between entities — tasks, users, comments. It's a relational model. Don't reinvent the wheel: use PostgreSQL or SQLite.”",
           "linked": "Linked notes: consultation with Ivan, meeting with Anna.",
-          "resultLabel": "Evaluate note uniqueness",
+          "resultLabel": "Check novelty and usefulness",
           "rating": "novelty: low",
           "resultTitle": "Draft thought on the relational model",
           "summaryLabel": "summary",
@@ -536,28 +703,87 @@
         "three": {
           "aria": "Example chain of linked notes",
           "badge": "example 03",
-          "title": "A chain you can see in the graph",
-          "desc": "The model looks beyond similar words: it finds shared people, projects and continuing stories. Here is one chain you might see in your vault.",
+          "title": "A meaning chain you can see in the graph",
+          "desc": "The model looks beyond similar words: it finds shared people, projects and continuing stories — even when the files were PDFs, audio and notes from different years.",
           "nodes": [
-            {"title": "Consultation with Ivan", "tags": "postgresql · keycloak · gophercon"},
-            {"title": "Learning PostgreSQL", "tags": "cte · indexes · task-tracker"},
-            {"title": "Meeting with Anna", "tags": "architecture · go · postgresql"},
-            {"title": "Task tracker progress", "tags": "gRPC · docker · Ivan"}
+            {
+              "title": "Consultation with Ivan",
+              "tags": "audio · postgresql · keycloak · gophercon"
+            },
+            {
+              "title": "Learning PostgreSQL",
+              "tags": "markdown · cte · indexes · task-tracker"
+            },
+            {
+              "title": "Meeting with Anna",
+              "tags": "pdf · architecture · go · postgresql"
+            },
+            {
+              "title": "Task tracker progress",
+              "tags": "docx · gRPC · docker · Ivan"
+            }
           ],
           "note": "In Obsidian these connections become a graph you can use to recall context and discover forgotten intersections."
         }
       },
+      "formats": {
+        "eyebrow": "any file → markdown",
+        "title": "Turn PDFs, DOCX files and audio into one text archive",
+        "sub": "noesisengine extracts text from documents and transcribes audio. The output is ordinary .md files that work with search, Obsidian, editors and your scripts.",
+        "cards": [
+          {
+            "label": "01 / IMPORT",
+            "title": "Any format",
+            "body": "PDF, DOCX, PPTX, XLSX, EPUB, MP3, WAV, Markdown, TXT and more."
+          },
+          {
+            "label": "02 / TEXT",
+            "title": "Documents and audio → text",
+            "body": "Text is extracted from documents; audio is transcribed locally with Whisper or Ollama."
+          },
+          {
+            "label": "03 / WORK",
+            "title": "Work with it like text",
+            "body": "Search the content, process it with scripts, open it in Obsidian and explore the graph of connections."
+          }
+        ],
+        "note": "<strong>Originals stay untouched.</strong> The Markdown archive contains the extracted text, and tags and links are built on top of it."
+      },
       "scenarios": {
         "eyebrow": "use cases",
-        "title": "Not just a diary",
-        "sub": "Any Markdown folder works: meeting notes, ideas, book highlights, a work log or a project archive.",
+        "title": "Not just notes",
+        "sub": "Any folder of files works: PDF documents, audio from meetings, notes, books and a project archive.",
         "cards": [
-          {"label": "01 / ARCHIVE", "title": "Go through years of diary", "body": "Import old entries and get tags that make people, places and events easy to find."},
-          {"label": "02 / DUPLICATES", "title": "Find repeated ideas", "body": "Novelty checks show where you are writing again what you have already explored."},
-          {"label": "03 / PEOPLE", "title": "Recall meeting context", "body": "Links through shared names and projects turn scattered notes into a history of relationships."},
-          {"label": "04 / PROJECTS", "title": "Build a timeline", "body": "Project notes, decisions, retros and next steps end up connected to each other."},
-          {"label": "05 / BLOG", "title": "Prepare material", "body": "Tags surface the right topic quickly, while links show what is missing from a draft."},
-          {"label": "06 / PRIVACY", "title": "Keep your data to yourself", "body": "Local model, local database, local vault. No accounts or cloud storage."}
+          {
+            "label": "01 / ARCHIVE",
+            "title": "Go through years of files",
+            "body": "Import years of diary entries, documents and meeting recordings — and get one text archive."
+          },
+          {
+            "label": "02 / DUPLICATES",
+            "title": "Find repeated ideas",
+            "body": "Novelty checks show where you are writing again what you have already explored."
+          },
+          {
+            "label": "03 / PEOPLE",
+            "title": "Recall meeting context",
+            "body": "Links through shared names and projects turn scattered notes into a history of relationships."
+          },
+          {
+            "label": "04 / PROJECTS",
+            "title": "Build a timeline",
+            "body": "Project notes, decisions, retros and next steps end up connected to each other."
+          },
+          {
+            "label": "05 / BLOG",
+            "title": "Prepare material",
+            "body": "Tags surface the right topic quickly, while links show what is missing from a draft."
+          },
+          {
+            "label": "06 / PRIVACY",
+            "title": "Keep your data to yourself",
+            "body": "Local model, local database, local vault. No accounts or cloud storage."
+          }
         ]
       },
       "downloads": {
@@ -580,6 +806,25 @@
         "after": "After downloading on Linux/macOS: <code>chmod +x noesis-*</code> and run the binary you need. On Windows: just open the .exe.",
         "all": "All releases on GitHub →",
         "source": "Source: github.com/tritonJS826/noesis"
+      },
+      "support": {
+        "eyebrow": "support the project",
+        "title": "Help noesisengine grow",
+        "sub": "The project is developed in the open. We welcome help — from ideas and code to a small donation.",
+        "helpKicker": "cooperation",
+        "helpTitle": "Offer help",
+        "helpBody": "We are happy to consider any offer of help. Send a description to <a href=\"mailto:victorveretennikov58@gmail.com?subject=noesisengine%3Acooperation\">victorveretennikov58@gmail.com</a> with the subject <code>noesisengine:cooperation</code>.",
+        "helpAction": "Send an email →",
+        "donateKicker": "donate",
+        "donateTitle": "Crypto wallets",
+        "donateBody": "A small donation helps cover development, testing and infrastructure.",
+        "wallets": [
+          {"name": "Bitcoin", "network": "Bitcoin", "address": "bc1qwemlhwklwsfl3xejkdg7w6s02x7s99eyy8vgwj"},
+          {"name": "Ethereum", "network": "Ethereum", "address": "0x24e32141E945D88a703051605f568C489ea89081"},
+          {"name": "Tether (USDT)", "network": "Ethereum network / ERC-20", "address": "0x24e32141E945D88a703051605f568C489ea89081"}
+        ],
+        "community": "noesisengine is supported and provided by the Mastersway community.",
+        "communityLink": "mastersway.netlify.app →"
       },
       "faq": {
         "eyebrow": "questions",
@@ -616,13 +861,21 @@
           {
             "q": "Is this a separate app interface?",
             "a": "No. This is a static page in the <code>landings/</code> folder. It is not connected to the Go application and lives as a standalone landing page: open it in a browser or serve it with any static server."
+          },
+          {
+            "q": "Which files can I import?",
+            "a": "PDF, DOCX, PPTX, XLSX, ODT/ODP/ODS, DOC/PPT/XLS, RTF, EPUB, MP3, WAV, OGG, M4A, FLAC, Markdown and plain text. Text is extracted from documents and audio is transcribed locally."
+          },
+          {
+            "q": "Can I search the content and process the archive with scripts?",
+            "a": "Yes. Every file becomes text stored in SQLite and in the Markdown archive. You can search the content, open the .md files in Obsidian, run your own scripts and explore the graph of connections."
           }
         ]
       },
       "feedback": {
         "eyebrow": "feedback",
         "title": "What should we improve?",
-        "body": "Found a bug, have a use case, or want to share how you use noesis? A couple of lines helps make the tool better.",
+        "body": "Found a bug, have a use case, or want to share how you use noesisengine? A couple of lines helps make the tool better.",
         "link": "Open the full form →",
         "name": "Name",
         "email": "Email",
@@ -634,17 +887,17 @@
         "send": "Send"
       },
       "footer": {
-        "meta": "A static landing page in <code>landings/</code>. Not a separate app UI. <a href=\"feedback.html\">Feedback</a> · <a href=\"#top\">Back to top ↑</a>"
+        "meta": "Static noesisengine landing in <code>landings/</code>. <a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a> · <a href=\"feedback.html\">Feedback</a> · <a href=\"#top\">Back to top ↑</a>"
       }
     },
     "feedback": {
       "meta": {
-        "title": "Contact — noesis",
-        "description": "Send feedback, report a bug or suggest a use case for noesis — a local second brain for Markdown notes."
+        "title": "Contact — noesisengine",
+        "description": "Send feedback, report a bug or suggest a use case for noesisengine — a local archive with meaningful connections."
       },
       "eyebrow": "feedback",
       "title": "Tell us what to improve",
-      "body": "noesis exists to make personal notes more useful. Real scenarios are especially valuable: what worked, what broke and what is missing.",
+      "body": "noesisengine exists to make personal notes more useful. Real scenarios are especially valuable: what worked, what broke and what is missing.",
       "points": [
         "A bug, a strange tag or an inaccurate link between notes.",
         "A use case: diary, meetings, a project archive, book highlights.",
@@ -652,6 +905,7 @@
       ],
       "privacyNote": "<strong>Privacy.</strong> This form is processed by Netlify Forms. Please don't paste personal notes, names of loved ones or other sensitive data. For a private conversation, describe the issue in general terms.",
       "github": "Or open an issue on <a href=\"https://github.com/tritonJS826/noesis/issues\">GitHub →</a>",
+      "email": "Contact email: <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a>",
       "cardTitle": "Write to us",
       "cardBody": "A couple of sentences is already useful. Email is only for a reply; we won't publish it.",
       "form": {
@@ -672,20 +926,20 @@
         "send": "Send message"
       },
       "footer": {
-        "meta": "<a href=\"index.html\">← Back to home</a> · <a href=\"index.html#faq\">FAQ</a>"
+        "meta": "<a href=\"index.html\">← Back to home</a> · <a href=\"index.html#faq\">FAQ</a> · <a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a>"
       }
     },
     "thanks": {
       "meta": {
-        "title": "Thank you — noesis",
-        "description": "Your message has been sent. Thank you for the feedback on noesis."
+        "title": "Thank you — noesisengine",
+        "description": "Your message has been sent. Thank you for the feedback on noesisengine."
       },
       "title": "Your message is on its way",
       "body": "Thank you! We'll read it and reply if you left an email. For now, you can get back to your notes — or see how to turn them into a vault.",
-      "primary": "Run noesis",
+      "primary": "Run noesisengine",
       "secondary": "Back to home",
       "footer": {
-        "meta": "<a href=\"feedback.html\">Feedback</a> · <a href=\"index.html\">Back to home</a>"
+        "meta": "<a href=\"feedback.html\">Feedback</a> · <a href=\"index.html\">Back to home</a> · <a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a>"
       }
     }
   }

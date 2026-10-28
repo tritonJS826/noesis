@@ -116,7 +116,7 @@
     state.lang = lang;
 
     try {
-      window.localStorage.setItem("noesis.lang", lang);
+      window.localStorage.setItem("noesisengine.lang", lang);
     } catch (error) {
       /* Storage can be unavailable in private mode; the query param still works. */
     }
@@ -138,7 +138,7 @@
     if (supported.indexOf(fromQuery) !== -1) return fromQuery;
 
     try {
-      var saved = window.localStorage.getItem("noesis.lang");
+      var saved = window.localStorage.getItem("noesisengine.lang");
       if (supported.indexOf(saved) !== -1) return saved;
     } catch (error) {
       /* ignore */
@@ -148,7 +148,7 @@
   }
 
   function showLoadError(error) {
-    console.error("noesis: could not load content.json", error);
+    console.error("noesisengine: could not load content.json", error);
     var box = document.createElement("div");
     box.className = "i18n-error";
     box.innerHTML = "Не удалось загрузить <code>content.json</code>. Откройте сайт через HTTP-сервер, а не через <code>file://</code>.";

@@ -151,8 +151,12 @@
     .nav a { transition: color .18s ease; }
     .nav a:hover { color: var(--text); }
 
-    @media (max-width: 1120px) and (min-width: 1000px) {
+    @media (max-width: 1320px) and (min-width: 1000px) {
       .nav { gap: 12px; font-size: .78rem; }
+    }
+
+    @media (max-width: 1250px) and (min-width: 1000px) {
+      .brand-sub { display: none; }
     }
 
     .header-actions {
@@ -1848,4 +1852,167 @@
     @media (max-width: 380px) {
       h1 { font-size: 2.25rem; }
       .window-body { padding: 18px; }
+    }
+
+    /* ── github + support ────────────────────────────────── */
+
+    .header-github {
+      display: grid;
+      place-items: center;
+      width: 35px;
+      height: 35px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(17, 22, 31, .7);
+      color: var(--muted);
+      transition: color .18s ease, border-color .18s ease;
+    }
+
+    .header-github:hover { color: var(--text); border-color: var(--line-bright); }
+
+    .support-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .format-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .format-chips span {
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0a0e13;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: .73rem;
+    }
+
+    .support-card {
+      padding: clamp(22px, 3vw, 30px);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+
+    .support-kicker {
+      margin-bottom: 24px;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .66rem;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    .support-card h3 { margin-bottom: 10px; }
+    .support-card p { color: var(--muted); font-size: .9rem; line-height: 1.65; }
+
+    .support-card p a {
+      color: var(--mint);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .support-card code {
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #0a0e13;
+      color: var(--text);
+      font-size: .85em;
+    }
+
+    .support-action { margin-top: 6px; }
+
+    .wallet-list {
+      display: grid;
+      gap: 8px;
+      margin: 18px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .wallet-list li {
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #0a0e13;
+    }
+
+    .wallet-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 5px;
+    }
+
+    .wallet-name {
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .76rem;
+      font-weight: 700;
+    }
+
+    .wallet-network {
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: .64rem;
+      letter-spacing: .04em;
+      text-align: right;
+    }
+
+    .wallet-address {
+      display: block;
+      color: var(--muted);
+      font-size: .7rem;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      user-select: all;
+    }
+
+    .support-community {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 16px;
+      margin-top: 18px;
+      padding: 15px 18px;
+      border: 1px solid rgba(143, 240, 181, .16);
+      border-radius: 10px;
+      background: rgba(143, 240, 181, .045);
+      color: var(--muted);
+      font-size: .85rem;
+    }
+
+    .support-community a {
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: .8rem;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    @media (max-width: 900px) {
+      .support-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      .header-contact-icon { display: none; }
+      .wallet-head { align-items: flex-start; flex-direction: column; gap: 2px; }
+      .wallet-network { text-align: left; }
+      .support-community { align-items: flex-start; flex-direction: column; }
+    }
+
+    @media (max-width: 480px) {
+      .header-inner { gap: 10px; }
+      .header-actions { gap: 6px; }
+      .header-github { width: 32px; height: 32px; }
+      .header-cta { padding: 0 11px; font-size: .78rem; }
+      .brand-name { font-size: 1.02rem; }
     }
