@@ -887,7 +887,7 @@
         "send": "Send"
       },
       "footer": {
-        "meta": "Static noesisengine landing in <code>landings/</code>. <a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a> · <a href=\"feedback.html\">Feedback</a> · <a href=\"#top\">Back to top ↑</a>"
+        "meta": "<a href=\"https://github.com/tritonJS826/noesis\">GitHub</a> · <a href=\"mailto:victorveretennikov58@gmail.com\">victorveretennikov58@gmail.com</a> · <a href=\"feedback.html\">Feedback</a> · <a href=\"#top\">Back to top ↑</a>"
       }
     },
     "feedback": {
