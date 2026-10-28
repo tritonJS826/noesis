@@ -50,6 +50,8 @@ func (m *model) View() string {
 		return m.viewExportTemplates()
 	case scrExportTemplateDetail:
 		return m.viewExportTemplateDetail()
+	case scrBrowse:
+		return m.viewBrowse()
 	default:
 		return m.viewMenu()
 	}
@@ -74,7 +76,6 @@ func (m *model) viewMenu() string {
 		"Data processing — pairs",
 		"Data processing — one by one",
 		"Export for Obsidian",
-		"All phases",
 		"Work with data",
 		"Evaluate note uniqueness",
 		"Settings",
@@ -276,6 +277,7 @@ func (m *model) viewData() string {
 	cw := w - 4
 
 	items := []string{
+		"Browse database",
 		"Remove file",
 		"Remove file + obsidian links",
 		"Compare file (filesystem search)",
@@ -293,6 +295,110 @@ func (m *model) viewData() string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, tuiDim.Width(cw).Render("↑↓ select  ·  Enter  ·  ESC back"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) browseHeader() string {
+	var parts []string
+	for i, label := range browseColLabels {
+		if m.browseCols[i] {
+			parts = append(parts, label)
+		}
+	}
+	if len(parts) == 0 {
+		return "File"
+	}
+	return strings.Join(parts, "  │  ")
+}
+
+func (m *model) browseRow(n core.NoteDetail) string {
+	var parts []string
+	if m.browseCols[0] {
+		parts = append(parts, n.FilePath)
+	}
+	if m.browseCols[1] {
+		parts = append(parts, n.Format())
+	}
+	if m.browseCols[2] {
+		parts = append(parts, n.ImportedAt)
+	}
+	if m.browseCols[3] {
+		tags := n.Tags
+		if tags == "" {
+			tags = "—"
+		}
+		parts = append(parts, tags)
+	}
+	if m.browseCols[4] {
+		parts = append(parts, fmt.Sprintf("%d", n.Links))
+	}
+	if len(parts) == 0 {
+		return n.FileName
+	}
+	return strings.Join(parts, "  │  ")
+}
+
+func (m *model) viewBrowse() string {
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Browse database"))
+	lines = append(lines, "")
+
+	filterLine := m.browseFilter
+	if filterLine == "" {
+		filterLine = tuiDim.Render("start typing to filter by path or format…")
+	} else {
+		filterLine += "█"
+	}
+	lines = append(lines, lipgloss.NewStyle().Width(cw).Render(filterLine))
+
+	var colParts []string
+	for i, label := range browseColLabels {
+		mark := "[ ]"
+		if m.browseCols[i] {
+			mark = "[x]"
+		}
+		colParts = append(colParts, fmt.Sprintf("%d %s%s", i+1, label, mark))
+	}
+	lines = append(lines, tuiDim.MaxWidth(cw).Render("Columns: "+strings.Join(colParts, "  ·  ")))
+	lines = append(lines, "")
+
+	filtered := m.filteredBrowse()
+	if m.browseConfirm {
+		lines = append(lines, tuiYel.Width(cw).Render(m.browseResult))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("y — confirm  ·  any other key — cancel"))
+	} else if m.browseErr != "" {
+		lines = append(lines, tuiRed.Width(cw).Render("Error: "+m.browseErr))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("Press any key to continue"))
+	} else {
+		if len(filtered) == 0 {
+			lines = append(lines, tuiDim.Width(cw).Render("nothing found"))
+		} else {
+			lines = append(lines, lipgloss.NewStyle().Bold(true).MaxWidth(cw).Render(m.browseHeader()))
+			start, end := listWindow(len(filtered), m.cursor, m.listRows(6))
+			for i := start; i < end; i++ {
+				cursor := "  "
+				if m.cursor == i {
+					cursor = tuiSel.Render("▸ ")
+				}
+				lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+m.browseRow(filtered[i])))
+			}
+		}
+		if m.browseResult != "" {
+			lines = append(lines, "")
+			lines = append(lines, tuiGreen.Width(cw).Render(m.browseResult))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf(
+		"found: %d  ·  ↑↓ select  ·  Enter remove  ·  1-5 toggle columns  ·  ESC back", len(filtered))))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)

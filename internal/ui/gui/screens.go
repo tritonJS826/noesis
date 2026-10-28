@@ -37,12 +37,16 @@ func (s *state) menuScreen() fyne.CanvasObject {
 	))
 	summary.Wrapping = fyne.TextWrapWord
 
+	ollama := widget.NewLabel(s.ollamaStatus)
+	ollama.Wrapping = fyne.TextWrapWord
+
 	return container.NewBorder(
-		widget.NewLabel("Choose an action — the same flow as the TUI:"),
+		widget.NewLabel("Choose an action:"),
 		container.NewVBox(
 			summary,
+			ollama,
 			widget.NewLabelWithStyle(
-				"Arrow keys move the highlight, Space opens an item. The status and log panel stays at the bottom.",
+				"Select an item to open it. The status and log panel stays at the bottom.",
 				fyne.TextAlignLeading, fyne.TextStyle{Italic: true},
 			),
 		),
@@ -149,7 +153,7 @@ func (s *state) formatsScreen() fyne.CanvasObject {
 		checks[i] = check
 	}
 
-	toggleAll := widget.NewButton("a — select all / none", func() {
+	toggleAll := widget.NewButton("Select all / none", func() {
 		selectAll := len(s.importFormats) < len(formats)
 		for i, f := range formats {
 			checks[i].SetChecked(selectAll)
@@ -189,6 +193,7 @@ func (s *state) formatsScreen() fyne.CanvasObject {
 
 func (s *state) dataScreen() fyne.CanvasObject {
 	items := []string{
+		"Browse database",
 		"Remove file",
 		"Remove file + Obsidian links",
 		"Compare file (filesystem search)",
@@ -201,10 +206,12 @@ func (s *state) dataScreen() fyne.CanvasObject {
 	list.OnSelected = func(id widget.ListItemID) {
 		switch id {
 		case 0:
-			s.openNotes(noteRemove, scrData)
+			s.openBrowse()
 		case 1:
-			s.openNotes(noteRemoveLinks, scrData)
+			s.openNotes(noteRemove, scrData)
 		case 2:
+			s.openNotes(noteRemoveLinks, scrData)
+		case 3:
 			s.openFsSearch()
 		}
 	}
@@ -272,6 +279,149 @@ func (s *state) notesScreen() fyne.CanvasObject {
 		widget.NewLabel("Select a file to continue — ← Back returns."),
 		nil, nil,
 		list,
+	)
+}
+
+// ─── database browser ───────────────────────────────────────────────────────
+
+// browseColumnOrder is the order in which columns are shown and toggled.
+var browseColumnOrder = []string{"path", "format", "imported", "tags", "links"}
+
+var browseColumnLabels = map[string]string{
+	"path":     "Path",
+	"format":   "Format",
+	"imported": "Imported",
+	"tags":     "Tags",
+	"links":    "Links",
+}
+
+// defaultBrowseCols selects the columns shown when the browser is first opened.
+func defaultBrowseCols() map[string]bool {
+	return map[string]bool{
+		"path":   true,
+		"format": true,
+		"tags":   true,
+		"links":  true,
+	}
+}
+
+func (s *state) filteredBrowseNotes() []core.NoteDetail {
+	filter := strings.ToLower(strings.TrimSpace(s.browseFilter))
+	if filter == "" {
+		return s.browseNotes
+	}
+	var out []core.NoteDetail
+	for _, n := range s.browseNotes {
+		if strings.Contains(strings.ToLower(n.FilePath), filter) ||
+			strings.Contains(strings.ToLower(n.FileName), filter) ||
+			strings.Contains(strings.ToLower(n.MimeType), filter) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func (s *state) browseHeader() string {
+	var parts []string
+	for _, key := range browseColumnOrder {
+		if s.browseCols[key] {
+			parts = append(parts, browseColumnLabels[key])
+		}
+	}
+	if len(parts) == 0 {
+		return "File"
+	}
+	return strings.Join(parts, "  ·  ")
+}
+
+func (s *state) browseRowText(n core.NoteDetail) string {
+	var parts []string
+	if s.browseCols["path"] {
+		parts = append(parts, n.FilePath)
+	}
+	if s.browseCols["format"] {
+		parts = append(parts, n.Format())
+	}
+	if s.browseCols["imported"] {
+		parts = append(parts, n.ImportedAt)
+	}
+	if s.browseCols["tags"] {
+		tags := n.Tags
+		if tags == "" {
+			tags = "—"
+		}
+		parts = append(parts, tags)
+	}
+	if s.browseCols["links"] {
+		parts = append(parts, fmt.Sprintf("%d", n.Links))
+	}
+	if len(parts) == 0 {
+		return n.FileName
+	}
+	return strings.Join(parts, "  ·  ")
+}
+
+func (s *state) browseScreen() fyne.CanvasObject {
+	filter := widget.NewEntry()
+	filter.SetPlaceHolder("filter by path or format…")
+	filter.SetText(s.browseFilter)
+
+	list := widget.NewList(
+		func() int { return len(s.filteredBrowseNotes()) },
+		func() fyne.CanvasObject { return widget.NewLabel("") },
+		func(id widget.ListItemID, o fyne.CanvasObject) {
+			notes := s.filteredBrowseNotes()
+			if id < len(notes) {
+				o.(*widget.Label).SetText(s.browseRowText(notes[id]))
+			}
+		},
+	)
+	list.OnSelected = func(id widget.ListItemID) {
+		notes := s.filteredBrowseNotes()
+		list.UnselectAll()
+		if id < len(notes) {
+			s.removeBrowseNote(notes[id])
+		}
+	}
+
+	count := widget.NewLabel("")
+	updateCount := func() {
+		count.SetText(fmt.Sprintf("found: %d", len(s.filteredBrowseNotes())))
+	}
+	filter.OnChanged = func(v string) {
+		s.browseFilter = v
+		list.UnselectAll()
+		list.Refresh()
+		updateCount()
+	}
+	updateCount()
+
+	header := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	refreshHeader := func() { header.SetText(s.browseHeader()) }
+	refreshHeader()
+
+	cols := container.NewHBox(widget.NewLabel("Columns:"))
+	for _, key := range browseColumnOrder {
+		key := key
+		check := widget.NewCheck(browseColumnLabels[key], func(on bool) {
+			s.browseCols[key] = on
+			list.Refresh()
+			refreshHeader()
+		})
+		check.SetChecked(s.browseCols[key])
+		cols.Add(check)
+	}
+
+	top := container.NewVBox(
+		filter,
+		container.NewBorder(nil, nil, nil, count, cols),
+		header,
+	)
+
+	return container.NewBorder(
+		top,
+		widget.NewLabel("Type to filter by path/format · select a row to remove it · ← Back returns."),
+		nil, nil, list,
 	)
 }
 
@@ -407,6 +557,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 	scroll := container.NewVScroll(container.NewVBox(
 		form,
 		widget.NewSeparator(),
+		widget.NewLabel(s.ollamaStatus),
 		widget.NewButton("Edit eval prompt…", func() {
 			s.openPrompt("eval", scrSettings)
 		}),
@@ -419,7 +570,35 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 
 // ─── prompts ────────────────────────────────────────────────────────────────
 
+func (s *state) promptVarsHint(name string) string {
+	db := s.currentDB()
+	ptype := core.LoadPromptType(db, name)
+	var named []string
+	switch {
+	case ptype == "pair":
+		named = []string{"${A_NAME}", "${A_CONTENT}", "${B_NAME}", "${B_CONTENT}"}
+	case name == "eval":
+		named = []string{"${FILE_NAME}", "${CONTENT}", "${LINKED_NOTES}"}
+	default:
+		named = []string{"${FILE_NAME}", "${CONTENT}"}
+	}
+	parts := append([]string{}, named...)
+	cols := core.NotesColumns(db)
+	for _, c := range cols {
+		parts = append(parts, "${db."+c+"}")
+	}
+	if ptype == "pair" {
+		for _, c := range cols {
+			parts = append(parts, "${db_b."+c+"}")
+		}
+	}
+	return "Variables: " + strings.Join(parts, "  ")
+}
+
 func (s *state) promptScreen() fyne.CanvasObject {
+	hint := widget.NewLabel(s.promptVarsHint(s.promptName))
+	hint.Wrapping = fyne.TextWrapWord
+
 	if s.promptEdit {
 		editor := widget.NewMultiLineEntry()
 		editor.SetText(s.promptText)
@@ -430,14 +609,14 @@ func (s *state) promptScreen() fyne.CanvasObject {
 			s.savePrompt()
 		}
 		return container.NewBorder(
-			nil,
+			hint,
 			container.NewHBox(
 				widget.NewButton("Save", save),
 				widget.NewButton("Cancel", func() {
 					s.promptEdit = false
 					s.render()
 				}),
-				widget.NewLabel("Enter saves · ← Back cancels"),
+				widget.NewLabel("Save to keep your changes."),
 			),
 			nil, nil, editor,
 		)
@@ -450,7 +629,7 @@ func (s *state) promptScreen() fyne.CanvasObject {
 	scroll.SetMinSize(fyne.NewSize(740, 400))
 
 	return container.NewBorder(
-		nil,
+		hint,
 		container.NewHBox(
 			widget.NewButton("Edit", func() {
 				s.promptEdit = true

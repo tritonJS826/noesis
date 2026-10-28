@@ -37,6 +37,7 @@ const (
 	scrFsSearch
 	scrExportTemplates
 	scrExportTemplateDetail
+	scrBrowse
 )
 
 type ollamaMsg struct {
@@ -107,6 +108,16 @@ type model struct {
 	pickConfirm   bool
 	pickConfirmID int64
 
+	// database browser
+	browseNotes      []core.NoteDetail
+	browseFilter     string
+	browseCols       [5]bool // path, format, imported, tags, links
+	browseConfirm    bool
+	browseConfirmID  int64
+	browseResult     string
+	browseErr        string
+	removeFromBrowse bool
+
 	comparePath string
 
 	promptViewing string
@@ -159,6 +170,7 @@ func newModel(db *sql.DB) *model {
 		textArea:      ta,
 		importSource:  core.SourceFilesystem,
 		importFormats: formats,
+		browseCols:    [5]bool{true, true, false, true, true},
 	}
 }
 
@@ -349,6 +361,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case removeMsg:
+		if m.removeFromBrowse {
+			m.removeFromBrowse = false
+			if msg.err != nil {
+				m.browseErr = msg.err.Error()
+				m.browseResult = ""
+			} else {
+				m.browseResult = fmtRemoveResult(msg.removed, msg.scrubbed)
+				m.browseErr = ""
+			}
+			if notes, err := core.ListNotesDetailed(m.db); err == nil {
+				m.browseNotes = notes
+			}
+			if m.cursor >= len(m.filteredBrowse()) && m.cursor > 0 {
+				m.cursor--
+			}
+			m.screen = scrBrowse
+			return m, nil
+		}
 		if msg.err != nil {
 			m.pickErr = msg.err.Error()
 			m.pickResult = ""

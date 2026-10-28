@@ -1,5 +1,5 @@
-// Package gui implements the Fyne desktop frontend. Like the TUI and CLI it
-// only drives internal/core; the actual work is UI-independent.
+// Package gui implements the Fyne desktop frontend. It only drives
+// internal/core; the actual work is UI-independent.
 package gui
 
 import (
@@ -40,6 +40,7 @@ const (
 	scrRunning
 	scrExportTemplates
 	scrExportTemplateDetail
+	scrBrowse
 )
 
 type noteAction int
@@ -50,13 +51,12 @@ const (
 	noteEval
 )
 
-// menuItems mirrors the TUI main menu one-to-one.
+// menuItems is the main menu shown on the start screen.
 var menuItems = []string{
 	"Import",
 	"Data processing — pairs",
 	"Data processing — one by one",
 	"Export for Obsidian",
-	"All phases",
 	"Work with data",
 	"Evaluate note uniqueness",
 	"Settings",
@@ -108,6 +108,11 @@ type state struct {
 	noteFilter string
 	notes      []core.NoteInfo
 
+	// database browser
+	browseNotes  []core.NoteDetail
+	browseFilter string
+	browseCols   map[string]bool
+
 	// filesystem search for compare
 	fsFilter string
 	fsFiles  []string
@@ -129,6 +134,9 @@ type state struct {
 	evalResult  string
 	evalErr     string
 	evalLoading bool
+
+	// ollama connection status shown on the start screen and in settings
+	ollamaStatus string
 }
 
 // Run opens the database and starts the desktop application. It blocks until
@@ -170,6 +178,8 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.maxChars.SetText(strconv.Itoa(cfg.MaxChars))
 	s.workers = widget.NewEntry()
 	s.workers.SetText(strconv.Itoa(cfg.Workers))
+	s.browseCols = defaultBrowseCols()
+	s.ollamaStatus = "checking ollama…"
 
 	s.importSource = core.SourceFilesystem
 	s.importFormats = make(core.FormatSet)
@@ -206,6 +216,21 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.win.SetCloseIntercept(s.close)
 	s.refreshStats()
 	s.render()
+
+	go func() {
+		models, err := core.FetchModels(cfg.Host)
+		fyne.Do(func() {
+			switch {
+			case err != nil:
+				s.ollamaStatus = "ollama ✗ " + err.Error()
+			case len(models) == 0:
+				s.ollamaStatus = "ollama ✓ — no models found"
+			default:
+				s.ollamaStatus = "ollama ✓ " + strings.Join(models, ", ")
+			}
+			s.render()
+		})
+	}()
 
 	return s
 }
@@ -267,6 +292,8 @@ func (s *state) screenTitle() string {
 			return "Edit export template: " + s.templateName
 		}
 		return "Export template: " + s.templateName
+	case scrBrowse:
+		return "Browse database"
 	case scrRunning:
 		return "Processing…"
 	default:
@@ -297,6 +324,8 @@ func (s *state) goBack() {
 	case scrExportTemplateDetail:
 		s.openExportTemplates()
 		return
+	case scrBrowse:
+		s.screen = scrData
 	case scrRunning:
 		return
 	default:
@@ -331,6 +360,8 @@ func (s *state) body() fyne.CanvasObject {
 		return s.exportTemplatesScreen()
 	case scrExportTemplateDetail:
 		return s.exportTemplateDetailScreen()
+	case scrBrowse:
+		return s.browseScreen()
 	case scrRunning:
 		return s.runningScreen()
 	default:
@@ -352,14 +383,11 @@ func (s *state) activateMenu(id int) {
 		s.openExportTemplates()
 		return
 	case 4:
-		s.startPhase(core.PhaseAll, "", "")
-		return
-	case 5:
 		s.screen = scrData
-	case 6:
+	case 5:
 		s.openNotes(noteEval, scrMenu)
 		return
-	case 7:
+	case 6:
 		s.screen = scrSettings
 	}
 	s.render()
@@ -393,6 +421,55 @@ func (s *state) reloadNotes() {
 	if notes, err := core.ListNotes(db); err == nil {
 		s.notes = notes
 	}
+}
+
+// openBrowse loads the database contents into the browse screen.
+func (s *state) openBrowse() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	notes, err := core.ListNotesDetailed(db)
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	s.browseNotes = notes
+	s.browseFilter = ""
+	s.screen = scrBrowse
+	s.render()
+}
+
+func (s *state) reloadBrowse() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	if notes, err := core.ListNotesDetailed(db); err == nil {
+		s.browseNotes = notes
+	}
+}
+
+func (s *state) removeBrowseNote(n core.NoteDetail) {
+	message := fmt.Sprintf("Remove %q from the database?", n.FilePath)
+	dialog.ShowConfirm("Remove file", message, func(ok bool) {
+		if !ok {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		removed, err := core.RemoveNoteByID(db, n.ID)
+		if err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.reloadBrowse()
+		s.refreshStats()
+		s.phaseLabel.SetText(fmt.Sprintf("Removed %d note(s)", removed))
+		s.render()
+	}, s.win)
 }
 
 func (s *state) pickNote(n core.NoteInfo) {
@@ -756,13 +833,16 @@ func (s *state) pickModel() {
 		models, err := core.FetchModels(host)
 		fyne.Do(func() {
 			if err != nil {
+				s.ollamaStatus = "ollama ✗ " + err.Error()
 				dialog.ShowError(err, s.win)
 				return
 			}
 			if len(models) == 0 {
+				s.ollamaStatus = "ollama ✓ — no models found"
 				dialog.ShowInformation("Models", "No models found on "+host, s.win)
 				return
 			}
+			s.ollamaStatus = "ollama ✓ " + strings.Join(models, ", ")
 			list := widget.NewList(
 				func() int { return len(models) },
 				func() fyne.CanvasObject { return widget.NewLabel("") },
@@ -824,11 +904,11 @@ func (s *state) startPhase(phase core.Phase, promptName, templateName string) {
 		dialog.ShowError(err, s.win)
 		return
 	}
-	if src == "" && phase == core.PhaseAll {
+	if src == "" && phase == core.PhaseImport {
 		dialog.ShowError(fmt.Errorf("not set: SRC"), s.win)
 		return
 	}
-	if out == "" && (phase == core.PhaseWrite || phase == core.PhaseAll || phase == core.PhaseExportProcess) {
+	if out == "" && (phase == core.PhaseWrite || phase == core.PhaseExportProcess) {
 		dialog.ShowError(fmt.Errorf("not set: OUT"), s.win)
 		return
 	}

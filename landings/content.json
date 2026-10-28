@@ -161,9 +161,9 @@
           "status": "после загрузки модели интернет не нужен"
         },
         "card2": {
-          "kicker": "one button",
-          "title": "Импорт → анализ → vault. Одна кнопка.",
-          "body": "В GUI нажмите <strong>All phases</strong>; в TUI выберите тот же пункт. CLI запускает весь путь флагом <code>-phase all</code>.",
+          "kicker": "one command",
+          "title": "Импорт → анализ → vault. Три шага.",
+          "body": "В GUI и TUI запустите импорт, анализ и экспорт по очереди; CLI выполняет весь путь флагом <code>-phase all</code>.",
           "code": "./noesis-cli ... -phase all",
           "done": "и готово"
         }
@@ -277,7 +277,7 @@
           },
           {
             "q": "Можно всё сделать в одну кнопку?",
-            "a": "Да. В GUI и TUI есть пункт <strong>All phases</strong>: он запускает импорт, анализ и запись vault подряд. В CLI это флаг <code>-phase all</code>. Отдельные фазы нужны, если вы хотите остановиться, проверить теги или продолжить обработку позже."
+            "a": "В GUI и TUI фазы запускаются по отдельности: импорт, анализ и запись vault. В CLI весь путь выполняется одной командой с флагом <code>-phase all</code>. Отдельные фазы нужны, если вы хотите остановиться, проверить теги или продолжить позже."
           },
           {
             "q": "Это отдельный интерфейс приложения?",
@@ -495,9 +495,9 @@
           "status": "after the model download, the internet is optional"
         },
         "card2": {
-          "kicker": "one button",
-          "title": "Import → analyze → vault. One click.",
-          "body": "In the GUI, press <strong>All phases</strong>; in the TUI, choose the same item. The CLI runs the whole path with one flag, <code>-phase all</code>.",
+          "kicker": "one command",
+          "title": "Import → analyze → vault. Three steps.",
+          "body": "In the GUI and TUI, run import, analysis and export one after another; the CLI runs the whole path with the <code>-phase all</code> flag.",
           "code": "./noesis-cli ... -phase all",
           "done": "and you're done"
         }
@@ -611,7 +611,7 @@
           },
           {
             "q": "Can I do everything with one button?",
-            "a": "Yes. The GUI and TUI have an <strong>All phases</strong> item that runs import, analysis and vault writing in sequence. In the CLI it is the <code>-phase all</code> flag. Separate phases are useful when you want to stop, review tags or continue later."
+            "a": "In the GUI and TUI the phases run separately: import, analysis and vault writing. In the CLI the whole path runs with one command using the <code>-phase all</code> flag. Separate phases are useful when you want to stop, review tags or continue later."
           },
           {
             "q": "Is this a separate app interface?",

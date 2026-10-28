@@ -42,6 +42,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.exportTemplatesKeys(msg)
 	case scrExportTemplateDetail:
 		return m.exportTemplateDetailKeys(msg)
+	case scrBrowse:
+		return m.browseKeys(msg)
 	case scrRunning:
 	}
 	return nil
@@ -49,7 +51,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // ─── main menu ───────────────────────────────────────────────────────────────
 
-const menuItems = 7 // 0..7
+const menuItems = 6 // 0..6
 
 func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
@@ -79,15 +81,13 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 			m.openProcessList("single")
 		case 3: // export for obsidian → choose a template
 			m.openExportTemplates()
-		case 4: // all phases
-			return m.startPhase(core.PhaseAll, true, true, "", "")
-		case 5: // work with data
+		case 4: // work with data
 			m.screen = scrData
 			m.dataCursor = 0
 			m.cursor = 0
-		case 6: // evaluate note uniqueness
+		case 5: // evaluate note uniqueness
 			m.openFilePicker()
-		case 7: // settings
+		case 6: // settings
 			m.screen = scrSettings
 			m.cursor = 0
 		}
@@ -210,7 +210,7 @@ func (m *model) toggleFormat(ext string) {
 
 // ─── work with data submenu ────────────────────────────────────────────────
 
-const dataItems = 2 // 0..2
+const dataItems = 3 // 0..3
 
 func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
@@ -224,11 +224,13 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "enter":
 		switch m.dataCursor {
-		case 0: // remove file
+		case 0: // browse database
+			m.openBrowse()
+		case 1: // remove file
 			m.openPickData(0)
-		case 1: // remove file + links
+		case 2: // remove file + links
 			m.openPickData(1)
-		case 2: // compare file — file system search
+		case 3: // compare file — file system search
 			m.screen = scrFsSearch
 			m.fsFilter = ""
 			m.fsFiles = nil
@@ -236,7 +238,7 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc", "q":
 		m.screen = scrMenu
-		m.cursor = 5
+		m.cursor = 4
 	}
 	return nil
 }
@@ -253,6 +255,115 @@ func (m *model) openPickData(mode int) {
 	m.pickResult = ""
 	m.pickErr = ""
 	m.screen = scrPickData
+}
+
+// ─── database browser ──────────────────────────────────────────────────────
+
+var browseColLabels = [5]string{"Path", "Format", "Imported", "Tags", "Links"}
+
+func (m *model) openBrowse() {
+	notes, err := core.ListNotesDetailed(m.db)
+	if err != nil {
+		m.phaseErr = err
+		return
+	}
+	m.browseNotes = notes
+	m.browseFilter = ""
+	m.browseConfirm = false
+	m.browseResult = ""
+	m.browseErr = ""
+	m.cursor = 0
+	m.screen = scrBrowse
+}
+
+func (m *model) filteredBrowse() []core.NoteDetail {
+	filter := strings.ToLower(strings.TrimSpace(m.browseFilter))
+	if filter == "" {
+		return m.browseNotes
+	}
+	var out []core.NoteDetail
+	for _, n := range m.browseNotes {
+		if strings.Contains(strings.ToLower(n.FilePath), filter) ||
+			strings.Contains(strings.ToLower(n.FileName), filter) ||
+			strings.Contains(strings.ToLower(n.MimeType), filter) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.browseConfirm {
+		switch msg.String() {
+		case "y", "Y":
+			m.browseConfirm = false
+			m.removeFromBrowse = true
+			m.browseResult = ""
+			return removeNoteCmd(m.db, m.browseConfirmID, 0)
+		default:
+			m.browseConfirm = false
+			m.browseResult = ""
+		}
+		return nil
+	}
+
+	// Dismiss a removal error on any key; navigation keys keep working.
+	if m.browseErr != "" {
+		m.browseErr = ""
+		switch msg.String() {
+		case "up", "down", "enter", "1", "2", "3", "4", "5", "esc", "q", "backspace":
+		default:
+			return nil
+		}
+	}
+
+	switch msg.String() {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		m.browseResult = ""
+		m.browseErr = ""
+	case "down":
+		if m.cursor < len(m.filteredBrowse())-1 {
+			m.cursor++
+		}
+		m.browseResult = ""
+		m.browseErr = ""
+	case "enter":
+		filtered := m.filteredBrowse()
+		if len(filtered) > 0 && m.cursor < len(filtered) {
+			n := filtered[m.cursor]
+			m.browseConfirmID = n.ID
+			m.browseConfirm = true
+			m.browseErr = ""
+			m.browseResult = fmt.Sprintf("Remove %q — are you sure? (y/N)", n.FilePath)
+		}
+	case "1", "2", "3", "4", "5":
+		idx := int(msg.Runes[0] - '1')
+		m.browseCols[idx] = !m.browseCols[idx]
+		m.browseResult = ""
+		m.browseErr = ""
+	case "esc", "q":
+		m.screen = scrData
+		m.dataCursor = 0
+	case "backspace":
+		r := []rune(m.browseFilter)
+		if len(r) > 0 {
+			m.browseFilter = string(r[:len(r)-1])
+		}
+		m.cursor = 0
+		m.browseResult = ""
+		m.browseErr = ""
+	default:
+		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.browseFilter += string(msg.Runes[0])
+			m.cursor = 0
+			m.browseResult = ""
+			m.browseErr = ""
+		}
+	}
+	return nil
 }
 
 // ─── pick-data (search by path for remove) ─────────────────────────────────
@@ -311,7 +422,7 @@ func (m *model) pickDataKeys(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.screen = scrData
-		m.dataCursor = 0
+		m.dataCursor = 1 + m.pickMode
 	case "backspace":
 		r := []rune(m.fileFilter)
 		if len(r) > 0 {
@@ -343,7 +454,7 @@ func (m *model) comparePathKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc", "q":
 		m.screen = scrData
-		m.dataCursor = 2
+		m.dataCursor = 3
 	case "backspace":
 		r := []rune(m.comparePath)
 		if len(r) > 0 {
@@ -387,7 +498,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.screen = scrMenu
-		m.cursor = 7
+		m.cursor = 6
 	case "enter":
 		if m.cursor == 8 {
 			// Reset database
@@ -431,7 +542,7 @@ func (m *model) openFilePicker() {
 	m.cursor = 0
 	m.fileFilter = ""
 	m.evalReturn = scrMenu
-	m.evalReturnCursor = 6
+	m.evalReturnCursor = 5
 	m.screen = scrFilePicker
 }
 
@@ -461,7 +572,7 @@ func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.screen = scrMenu
-		m.cursor = 6
+		m.cursor = 5
 	case "backspace":
 		r := []rune(m.fileFilter)
 		if len(r) > 0 {
@@ -700,7 +811,7 @@ func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.promptViewing = ""
 		m.promptText = ""
-		m.cursor = 7
+		m.cursor = 6
 	}
 	return nil
 }
@@ -983,7 +1094,7 @@ func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.screen = scrData
-		m.dataCursor = 2
+		m.dataCursor = 3
 	case "backspace":
 		r := []rune(m.fsFilter)
 		if len(r) > 0 {

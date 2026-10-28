@@ -104,14 +104,27 @@ func Run(args []string) error {
 		return nil
 	}
 
+	progress := consoleshared.New(db)
+	progress.Start()
+	defer progress.Stop()
+
+	// "all" (the default) runs import → analysis → export in sequence.
+	if isAllPhase(*phaseName) {
+		for _, p := range []core.Phase{core.PhaseImport, core.PhaseAnalyze, core.PhaseWrite} {
+			if err := core.Run(ctx, progress, db, cfg, p, *src, *out); err != nil {
+				return err
+			}
+			if ctx.Err() != nil {
+				return nil
+			}
+		}
+		return nil
+	}
+
 	phase, err := parsePhase(*phaseName)
 	if err != nil {
 		return err
 	}
-
-	progress := consoleshared.New(db)
-	progress.Start()
-	defer progress.Stop()
 
 	// custom import source/format paths bypass the default phase pipeline
 	if phase == core.PhaseImport && (*source != "" || *format != "") {
@@ -141,6 +154,11 @@ func parseFormats(s string) core.FormatSet {
 	return fs
 }
 
+func isAllPhase(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return s == "all" || s == ""
+}
+
 func parsePhase(s string) (core.Phase, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "1", "import":
@@ -151,8 +169,6 @@ func parsePhase(s string) (core.Phase, error) {
 		return core.PhaseWrite, nil
 	case "single", "1x1", "tags-single", "one":
 		return core.PhaseTagSingle, nil
-	case "all", "":
-		return core.PhaseAll, nil
 	default:
 		return 0, fmt.Errorf("unknown phase %q (use import, pairs, single, export or all)", s)
 	}

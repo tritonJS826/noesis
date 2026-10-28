@@ -363,6 +363,55 @@ func ListNotes(db *sql.DB) ([]NoteInfo, error) {
 	return notes, rows.Err()
 }
 
+// NoteDetail is a richer note record used by the database browser.
+type NoteDetail struct {
+	ID         int64
+	FileName   string
+	FilePath   string
+	AbsPath    string
+	MimeType   string
+	ImportedAt string
+	Tags       string // comma-separated tag list
+	Links      int    // number of outgoing links
+}
+
+// Format returns the note's MIME type, falling back to its file extension.
+func (n NoteDetail) Format() string {
+	if n.MimeType != "" {
+		return n.MimeType
+	}
+	ext := strings.TrimPrefix(filepath.Ext(n.FileName), ".")
+	if ext == "" {
+		return "—"
+	}
+	return ext
+}
+
+// ListNotesDetailed returns every note with its format, tags and outgoing link
+// count, ordered by path. It is intended for the database browser.
+func ListNotesDetailed(db *sql.DB) ([]NoteDetail, error) {
+	rows, err := db.Query(`
+		SELECT n.id, n.file_name, n.file_path, n.abs_path, n.mime_type, n.imported_at,
+		       COALESCE((SELECT GROUP_CONCAT(tag, ', ') FROM tags WHERE note_id=n.id), ''),
+		       (SELECT COUNT(*) FROM links WHERE src_id=n.id)
+		FROM notes n
+		ORDER BY n.file_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteDetail
+	for rows.Next() {
+		var n NoteDetail
+		if err := rows.Scan(&n.ID, &n.FileName, &n.FilePath, &n.AbsPath, &n.MimeType, &n.ImportedAt, &n.Tags, &n.Links); err != nil {
+			return nil, err
+		}
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
 // LinkedNoteIDs returns IDs of notes linked from the given note.
 func LinkedNoteIDs(db *sql.DB, id int64) ([]int64, error) {
 	rows, err := db.Query(`SELECT dst_id FROM links WHERE src_id=?`, id)
