@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"noesis/internal/core"
@@ -42,6 +43,12 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.settingsKeys(msg)
 	case scrModelPicker:
 		return m.modelPickerKeys(msg)
+	case scrOptionPicker:
+		return m.optionPickerKeys(msg)
+	case scrWhisper:
+		return m.whisperKeys(msg)
+	case scrAudioHelp:
+		return m.audioHelpKeys(msg)
 	case scrFilePicker:
 		return m.filePickerKeys(msg)
 	case scrEval:
@@ -583,7 +590,7 @@ func (m *model) comparePathKeys(msg tea.KeyMsg) tea.Cmd {
 			m.evalReturn = scrComparePath
 			m.evalReturnCursor = 0
 			m.screen = scrEval
-			return compareFileCmd(m.db, m.comparePath, m.host, m.modelName, m.transcribeModel, m.maxChars)
+			return compareFileCmd(m.db, m.comparePath, m.host, m.modelName, m.audioOptions(), m.maxChars)
 		}
 	case "esc", "q":
 		m.screen = scrData
@@ -619,7 +626,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.promptViewing != "" {
 		return m.promptKeys(msg)
 	}
-	max := 9 // 0..9 (TRANSCRIBE + Reset database)
+	max := 12 // 0..12 (SRC … EVAL PROMPT + Reset database)
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
@@ -632,8 +639,10 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.screen = scrMenu
 		m.cursor = 6
+	case "?":
+		m.screen = scrAudioHelp
 	case "enter":
-		if m.cursor == 9 {
+		if m.cursor == 12 {
 			// Reset database
 			m.confirmReset = true
 		} else {
@@ -663,6 +672,62 @@ func (m *model) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.screen = scrSettings
 		m.cursor = 3
+	}
+	return nil
+}
+
+func (m *model) openOptionPicker(kind string, values, labels []string, current string) {
+	m.pickerKind = kind
+	m.pickerValues = values
+	m.pickerLabels = labels
+	m.pickerCursor = 0
+	for i, v := range values {
+		if strings.EqualFold(v, current) {
+			m.pickerCursor = i
+			break
+		}
+	}
+	m.screen = scrOptionPicker
+}
+
+func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
+	switch vimNav(msg.String()) {
+	case "up":
+		if m.pickerCursor > 0 {
+			m.pickerCursor--
+		}
+	case "down":
+		if m.pickerCursor < len(m.pickerValues)-1 {
+			m.pickerCursor++
+		}
+	case "enter":
+		if len(m.pickerValues) > 0 && m.pickerCursor < len(m.pickerValues) {
+			value := m.pickerValues[m.pickerCursor]
+			switch m.pickerKind {
+			case "audio":
+				m.audioEngine = core.NormalizeAudioEngine(value)
+			case "language":
+				m.speechLanguage = core.NormalizeSpeechLanguage(value)
+			}
+			m.persistSettings()
+		}
+		m.screen = scrSettings
+		if m.pickerKind == "audio" {
+			m.cursor = 4
+		} else {
+			m.cursor = 7
+		}
+	case "esc":
+		m.screen = scrSettings
+		if m.pickerKind == "audio" {
+			m.cursor = 4
+		} else {
+			m.cursor = 7
+		}
+	case "?":
+		if m.pickerKind == "audio" {
+			m.screen = scrAudioHelp
+		}
 	}
 	return nil
 }
@@ -811,6 +876,7 @@ func (m *model) startMultilineEdit(field, value string) {
 
 func (m *model) startEdit() {
 	m.editingMultiline = false
+	m.textInput.EchoMode = textinput.EchoNormal
 	switch m.cursor {
 	case 0: // SRC
 		m.textInput.SetValue(m.src)
@@ -839,29 +905,40 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(m.modelName)
 		m.textInput.Focus()
 		m.editingField = "MODEL — ollama model"
-	case 4: // TRANSCRIBE
-		m.textInput.SetValue(m.transcribeModel)
+	case 4: // AUDIO
+		m.openOptionPicker("audio", core.AudioEngineIDs(), core.AudioEngineLabels(), m.audioEngine)
+		return
+	case 5: // WHISPER
+		m.openWhisperScreen()
+		return
+	case 6: // GOOGLE KEY
+		m.textInput.SetValue(m.googleAPIKey)
+		m.textInput.EchoMode = textinput.EchoPassword
 		m.textInput.Focus()
-		m.editingField = "TRANSCRIBE — ollama audio model"
-	case 5: // HOST
+		m.editingField = "GOOGLE API KEY — stored in the database"
+	case 7: // LANG
+		m.openOptionPicker("language", core.SpeechLanguageCodes(), core.SpeechLanguageLabels(), m.speechLanguage)
+		return
+	case 8: // HOST
 		m.textInput.SetValue(m.host)
 		m.textInput.Focus()
 		m.editingField = "HOST — ollama host"
-	case 6: // MAXCHARS
+	case 9: // MAXCHARS
 		m.textInput.SetValue(fmt.Sprintf("%d", m.maxChars))
 		m.textInput.Focus()
 		m.editingField = "MAXCHARS — max chars"
-	case 7: // WORKERS
+	case 10: // WORKERS
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
 		m.editingField = "WORKERS — concurrency (1–100)"
-	case 8: // EVAL PROMPT
+	case 11: // EVAL PROMPT
 		m.openEvalPrompt()
 		return
 	}
 }
 
 func (m *model) saveField() {
+	defer func() { m.textInput.EchoMode = textinput.EchoNormal }()
 	val := m.textInput.Value()
 	if m.editingMultiline {
 		val = m.textArea.Value()
@@ -959,15 +1036,15 @@ func (m *model) saveField() {
 		m.dbPath = val
 	case 3:
 		m.modelName = val
-	case 4:
-		m.transcribeModel = val
-	case 5:
-		m.host = val
 	case 6:
+		m.googleAPIKey = val
+	case 8:
+		m.host = val
+	case 9:
 		if n, _ := fmt.Sscanf(val, "%d", &m.maxChars); n != 1 || m.maxChars < 1 {
 			m.maxChars = core.DefaultAppSettings().MaxChars
 		}
-	case 7:
+	case 10:
 		if n, _ := fmt.Sscanf(val, "%d", &m.workers); n != 1 || m.workers < 1 {
 			m.workers = core.DefaultAppSettings().Workers
 		}
@@ -1336,7 +1413,7 @@ func (m *model) compareSelectedFile() tea.Cmd {
 	m.evalReturnCursor = m.cursor
 	m.filterTyping = false
 	m.screen = scrEval
-	return compareFileCmd(m.db, path, m.host, m.modelName, m.transcribeModel, m.maxChars)
+	return compareFileCmd(m.db, path, m.host, m.modelName, m.audioOptions(), m.maxChars)
 }
 
 func fsSearchCmd(filter string) tea.Cmd {

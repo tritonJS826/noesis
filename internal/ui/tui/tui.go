@@ -29,6 +29,9 @@ const (
 	scrComparePath
 	scrSettings
 	scrModelPicker
+	scrOptionPicker
+	scrWhisper
+	scrAudioHelp
 	scrRunning
 	scrFilePicker
 	scrEval
@@ -66,6 +69,8 @@ type model struct {
 	cursor  int
 
 	src, out, dbPath, modelName, host, transcribeModel string
+	audioEngine, whisperModel, googleAPIKey            string
+	speechLanguage                                     string
 	maxChars, workers                                  int
 
 	ollamaModels []string
@@ -77,6 +82,22 @@ type model struct {
 	textArea         textarea.Model
 	editingField     string
 	editingMultiline bool
+
+	// generic settings picker (audio engine / speech language)
+	pickerKind   string
+	pickerValues []string
+	pickerLabels []string
+	pickerCursor int
+
+	// whisper.cpp model manager
+	whisperModels []core.WhisperModelInfo
+	whisperCursor int
+	whisperStatus string
+	whisperBusy   bool
+	whisperStage  string
+	whisperDone   int64
+	whisperTotal  int64
+	whisperErr    string
 
 	phaseErr error
 
@@ -177,6 +198,10 @@ func newModel(db *sql.DB) *model {
 		modelName:       st.Model,
 		host:            st.Host,
 		transcribeModel: st.TranscribeModel,
+		audioEngine:     st.AudioEngine,
+		whisperModel:    st.WhisperModel,
+		googleAPIKey:    st.GoogleAPIKey,
+		speechLanguage:  st.SpeechLanguage,
 		maxChars:        st.MaxChars,
 		workers:         st.Workers,
 		textInput:       ti,
@@ -199,9 +224,25 @@ func (m *model) persistSettings() {
 		Host:            m.host,
 		Model:           m.modelName,
 		TranscribeModel: m.transcribeModel,
+		AudioEngine:     m.audioEngine,
+		WhisperModel:    m.whisperModel,
+		GoogleAPIKey:    m.googleAPIKey,
+		SpeechLanguage:  m.speechLanguage,
 		MaxChars:        m.maxChars,
 		Workers:         m.workers,
 	}.Save(m.db)
+}
+
+// audioOptions builds the selected audio backend configuration.
+func (m *model) audioOptions() core.AudioOptions {
+	return core.AudioOptions{
+		Engine:         m.audioEngine,
+		WhisperModel:   m.whisperModel,
+		GoogleAPIKey:   m.googleAPIKey,
+		SpeechLanguage: m.speechLanguage,
+		OllamaHost:     m.host,
+		OllamaModel:    m.transcribeModel,
+	}
 }
 
 // Run starts the TUI event loop.
@@ -223,7 +264,9 @@ func fetchOllamaCmd(host string) tea.Cmd {
 }
 
 func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) tea.Cmd {
-	src, out, modelName, host, transcribeModel, maxChars, workers := m.src, m.out, m.modelName, m.host, m.transcribeModel, m.maxChars, m.workers
+	src, out, modelName, host, transcribeModel := m.src, m.out, m.modelName, m.host, m.transcribeModel
+	audioEngine, whisperModel, googleAPIKey, speechLanguage := m.audioEngine, m.whisperModel, m.googleAPIKey, m.speechLanguage
+	maxChars, workers := m.maxChars, m.workers
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
 		defer m.program.RestoreTerminal()
@@ -232,6 +275,10 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 			Host:            host,
 			Model:           modelName,
 			TranscribeModel: transcribeModel,
+			AudioEngine:     audioEngine,
+			WhisperModel:    whisperModel,
+			GoogleAPIKey:    googleAPIKey,
+			SpeechLanguage:  speechLanguage,
 			MaxChars:        maxChars,
 			Workers:         workers,
 			PromptName:      promptName,
@@ -255,6 +302,10 @@ func runImportCmd(m *model) tea.Cmd {
 		Formats:         m.importFormats,
 		Host:            m.host,
 		TranscribeModel: m.transcribeModel,
+		AudioEngine:     m.audioEngine,
+		WhisperModel:    m.whisperModel,
+		GoogleAPIKey:    m.googleAPIKey,
+		SpeechLanguage:  m.speechLanguage,
 	}
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
@@ -285,9 +336,9 @@ func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, lin
 	}
 }
 
-func compareFileCmd(db *sql.DB, path, host, model, transcribeModel string, maxChars int) tea.Cmd {
+func compareFileCmd(db *sql.DB, path, host, model string, audio core.AudioOptions, maxChars int) tea.Cmd {
 	return func() tea.Msg {
-		result, err := core.CompareFile(context.Background(), db, path, host, model, transcribeModel, maxChars)
+		result, err := core.CompareFileWithAudio(context.Background(), db, path, host, model, audio, maxChars)
 		return evalMsg{result: result, err: err}
 	}
 }
@@ -351,6 +402,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, fetchOllamaCmd(m.host)
 			case "esc":
 				m.editingField = ""
+				m.textInput.EchoMode = textinput.EchoNormal
 				return m, nil
 			}
 		}
@@ -371,6 +423,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.ollamaOK = true
 			m.ollamaModels = msg.models
+		}
+		return m, nil
+
+	case whisperProgressMsg:
+		m.whisperStage = msg.stage
+		m.whisperDone = msg.done
+		m.whisperTotal = msg.total
+		return m, nil
+
+	case whisperDoneMsg:
+		m.whisperBusy = false
+		m.whisperDone, m.whisperTotal = 0, 0
+		if msg.err != nil {
+			m.whisperErr = msg.err.Error()
+			m.whisperStatus = ""
+		} else {
+			m.whisperErr = ""
+			m.refreshWhisperModels()
+			if msg.model == "" {
+				m.whisperStatus = "whisper.cpp runtime installed."
+			} else {
+				m.whisperModel = core.NormalizeWhisperModel(msg.model)
+				m.persistSettings()
+				if core.WhisperRuntimeInstalled() {
+					m.whisperStatus = fmt.Sprintf("%s is downloaded and selected.", m.whisperModel)
+				} else {
+					m.whisperStatus = fmt.Sprintf("%s is downloaded. Install whisper-cli to use it — see the instructions above.", m.whisperModel)
+				}
+			}
 		}
 		return m, nil
 

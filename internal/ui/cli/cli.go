@@ -38,7 +38,11 @@ func Run(args []string) error {
 	dbPath := fs.String("db", "notes.db", "sqlite database file")
 	host := fs.String("host", def.Host, "ollama host")
 	model := fs.String("model", def.Model, "ollama model")
-	transcribeModel := fs.String("transcribe-model", def.TranscribeModel, "ollama audio transcription model")
+	transcribeModel := fs.String("transcribe-model", def.TranscribeModel, "legacy ollama audio transcription model")
+	audioEngine := fs.String("audio", def.AudioEngine, "audio backend: whisper, google or ollama (legacy)")
+	whisperModel := fs.String("whisper-model", def.WhisperModel, "whisper.cpp model; download it first in the TUI/GUI settings")
+	googleKey := fs.String("google-key", def.GoogleAPIKey, "Google Speech-to-Text API key (requires ffmpeg)")
+	speechLanguage := fs.String("speech-language", def.SpeechLanguage, "language code for Google transcription, e.g. ru-RU")
 	maxChars := fs.Int("maxchars", def.MaxChars, "max characters per note sent to ollama")
 	workers := fs.Int("workers", def.Workers, "concurrent ollama requests (1-100)")
 	phaseName := fs.String("phase", "all", "phase to run: import, extract, pairs, single, export, all")
@@ -94,6 +98,18 @@ func Run(args []string) error {
 	if !seen["transcribe-model"] && strings.TrimSpace(saved.TranscribeModel) != "" {
 		*transcribeModel = saved.TranscribeModel
 	}
+	if !seen["audio"] {
+		*audioEngine = saved.AudioEngine
+	}
+	if !seen["whisper-model"] {
+		*whisperModel = saved.WhisperModel
+	}
+	if !seen["google-key"] {
+		*googleKey = saved.GoogleAPIKey
+	}
+	if !seen["speech-language"] {
+		*speechLanguage = saved.SpeechLanguage
+	}
 	if !seen["maxchars"] {
 		*maxChars = saved.MaxChars
 	}
@@ -105,6 +121,10 @@ func Run(args []string) error {
 		Host:            *host,
 		Model:           *model,
 		TranscribeModel: *transcribeModel,
+		AudioEngine:     core.NormalizeAudioEngine(*audioEngine),
+		WhisperModel:    core.NormalizeWhisperModel(*whisperModel),
+		GoogleAPIKey:    *googleKey,
+		SpeechLanguage:  core.NormalizeSpeechLanguage(*speechLanguage),
 		MaxChars:        *maxChars,
 		Workers:         *workers,
 		PromptName:      *promptName,
@@ -132,7 +152,15 @@ func Run(args []string) error {
 		return nil
 
 	case *comparePath != "":
-		result, err := core.CompareFile(ctx, db, *comparePath, *host, *model, *transcribeModel, *maxChars)
+		audio := core.AudioOptions{
+			Engine:         cfg.AudioEngine,
+			WhisperModel:   cfg.WhisperModel,
+			GoogleAPIKey:   cfg.GoogleAPIKey,
+			SpeechLanguage: cfg.SpeechLanguage,
+			OllamaHost:     cfg.Host,
+			OllamaModel:    cfg.TranscribeModel,
+		}
+		result, err := core.CompareFileWithAudio(ctx, db, *comparePath, *host, *model, audio, *maxChars)
 		if err != nil {
 			return err
 		}
@@ -171,8 +199,12 @@ func Run(args []string) error {
 		opts := core.ImportOptions{
 			Source:          src2,
 			Formats:         parseFormats(*format),
-			Host:            *host,
-			TranscribeModel: *transcribeModel,
+			Host:            cfg.Host,
+			TranscribeModel: cfg.TranscribeModel,
+			AudioEngine:     cfg.AudioEngine,
+			WhisperModel:    cfg.WhisperModel,
+			GoogleAPIKey:    cfg.GoogleAPIKey,
+			SpeechLanguage:  cfg.SpeechLanguage,
 		}
 		return core.Import(ctx, progress, db, *src, opts)
 	}

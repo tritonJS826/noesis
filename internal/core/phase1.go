@@ -15,6 +15,10 @@ func Phase1(ctx context.Context, r Reporter, db *sql.DB, src string) error {
 		Formats:         defaultFormatSet(),
 		Host:            cfg.Host,
 		TranscribeModel: cfg.TranscribeModel,
+		AudioEngine:     cfg.AudioEngine,
+		WhisperModel:    cfg.WhisperModel,
+		GoogleAPIKey:    cfg.GoogleAPIKey,
+		SpeechLanguage:  cfg.SpeechLanguage,
 	})
 }
 

@@ -8,19 +8,19 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// TranscribeAudio sends an audio file to Ollama's OpenAI-compatible
-// transcription endpoint and returns the transcript plus a tool identifier.
+// TranscribeAudio sends an audio file to an OpenAI-compatible transcription
+// endpoint and returns the transcript plus a tool identifier.
 //
-// Ollama's official API currently exposes POST /v1/audio/transcriptions. The
-// request is multipart/form-data with "file" and "model" fields. When ffmpeg is
-// installed, audio is converted to 16 kHz mono WAV first, which is the format
-// most local speech models expect.
+// This is a legacy backend for custom servers: Ollama itself does not ship
+// native audio transcription. New code should use TranscribeWhisper or
+// TranscribeGoogle via AudioOptions. When ffmpeg is installed, audio is
+// converted to 16 kHz mono WAV first, which is the format most local speech
+// models expect.
 func TranscribeAudio(ctx context.Context, host, model, name string, data []byte) (string, string, error) {
 	if strings.TrimSpace(host) == "" {
 		host = DefaultConfig().Host
@@ -35,7 +35,7 @@ func TranscribeAudio(ctx context.Context, host, model, name string, data []byte)
 	audio := data
 	tool := "ollama:" + model
 	converted := false
-	if ffmpeg, err := exec.LookPath("ffmpeg"); err == nil {
+	if ffmpeg := findExecutable("ffmpeg"); ffmpeg != "" {
 		out, err := runCommand(ctx, 5*time.Minute, ffmpeg, []string{
 			"-hide_banner", "-loglevel", "error",
 			"-i", "pipe:0",

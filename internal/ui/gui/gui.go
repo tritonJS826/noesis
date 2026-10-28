@@ -34,6 +34,7 @@ const (
 	scrFsSearch
 	scrEval
 	scrSettings
+	scrWhisper
 	scrPromptView
 	scrProcessList
 	scrProcessDetail
@@ -83,6 +84,10 @@ type state struct {
 	// persistent settings widgets (shared by the settings and import screens)
 	src, out, dbEntry, model, host, transcribe *widget.Entry
 	maxChars, workers                          *widget.Entry
+	audioEngine                                *widget.Select
+	whisperModel                               *widget.Select
+	googleKey                                  *widget.Entry
+	speechLanguage                             *widget.Select
 	formatsLabel                               *widget.Label
 
 	phaseLabel   *widget.Label
@@ -99,6 +104,14 @@ type state struct {
 	fsBack     screen
 	evalBack   screen
 	promptBack screen
+
+	// whisper.cpp model manager
+	whisperModels   []core.WhisperModelInfo
+	whisperBusy     bool
+	whisperProgress float64
+	whisperStage    string
+	whisperStatus   string
+	whisperErr      string
 
 	// import
 	importSource  core.ImportSource
@@ -177,6 +190,11 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.maxChars = widget.NewEntry()
 	s.workers = widget.NewEntry()
 	st := core.LoadAppSettings(db)
+	s.audioEngine = widget.NewSelect(core.AudioEngineLabels(), nil)
+	s.whisperModel = widget.NewSelect(core.WhisperModelNames(), nil)
+	s.googleKey = widget.NewEntry()
+	s.googleKey.Password = true
+	s.speechLanguage = widget.NewSelect(core.SpeechLanguageLabels(), nil)
 	s.src.SetText(st.Src)
 	s.out.SetText(st.Out)
 	s.host.SetText(st.Host)
@@ -184,7 +202,14 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.transcribe.SetText(st.TranscribeModel)
 	s.maxChars.SetText(strconv.Itoa(st.MaxChars))
 	s.workers.SetText(strconv.Itoa(st.Workers))
-	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.transcribe, s.maxChars, s.workers} {
+	s.audioEngine.SetSelected(core.AudioEngineLabel(st.AudioEngine))
+	s.whisperModel.SetSelected(core.NormalizeWhisperModel(st.WhisperModel))
+	s.googleKey.SetText(st.GoogleAPIKey)
+	s.speechLanguage.SetSelected(core.SpeechLanguageLabel(st.SpeechLanguage))
+	s.audioEngine.OnChanged = func(string) { s.persistSettings() }
+	s.whisperModel.OnChanged = func(string) { s.persistSettings() }
+	s.speechLanguage.OnChanged = func(string) { s.persistSettings() }
+	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.transcribe, s.maxChars, s.workers, s.googleKey} {
 		e.OnSubmitted = func(string) { s.persistSettings() }
 	}
 	s.browseCols = defaultBrowseCols()
@@ -282,6 +307,8 @@ func (s *state) screenTitle() string {
 		return "Novelty"
 	case scrSettings:
 		return "Settings"
+	case scrWhisper:
+		return "Whisper models"
 	case scrPromptView:
 		if s.promptEdit {
 			return "Edit prompt: " + s.promptName
@@ -317,6 +344,8 @@ func (s *state) goBack() {
 	case scrImport, scrData, scrSettings, scrProcessList:
 		s.noteFilter = ""
 		s.screen = scrMenu
+	case scrWhisper:
+		s.screen = scrSettings
 	case scrFormats:
 		s.screen = scrImport
 	case scrNotes:
@@ -363,6 +392,8 @@ func (s *state) body() fyne.CanvasObject {
 		return s.evalScreen()
 	case scrSettings:
 		return s.settingsScreen()
+	case scrWhisper:
+		return s.whisperScreen()
 	case scrPromptView:
 		return s.promptScreen()
 	case scrProcessList:
@@ -601,7 +632,15 @@ func (s *state) startCompare(path string) {
 	s.render()
 
 	go func() {
-		result, err := core.CompareFile(context.Background(), db, path, cfg.Host, cfg.Model, cfg.TranscribeModel, cfg.MaxChars)
+		audio := core.AudioOptions{
+			Engine:         cfg.AudioEngine,
+			WhisperModel:   cfg.WhisperModel,
+			GoogleAPIKey:   cfg.GoogleAPIKey,
+			SpeechLanguage: cfg.SpeechLanguage,
+			OllamaHost:     cfg.Host,
+			OllamaModel:    cfg.TranscribeModel,
+		}
+		result, err := core.CompareFileWithAudio(context.Background(), db, path, cfg.Host, cfg.Model, audio, cfg.MaxChars)
 		fyne.Do(func() {
 			s.evalLoading = false
 			if err != nil {
@@ -922,6 +961,10 @@ func (s *state) startImport() {
 		Formats:         s.importFormats,
 		Host:            cfg.Host,
 		TranscribeModel: cfg.TranscribeModel,
+		AudioEngine:     cfg.AudioEngine,
+		WhisperModel:    cfg.WhisperModel,
+		GoogleAPIKey:    cfg.GoogleAPIKey,
+		SpeechLanguage:  cfg.SpeechLanguage,
 	}
 	db := s.currentDB()
 	if db == nil {
@@ -1084,6 +1127,10 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 		Host:            strings.TrimSpace(s.host.Text),
 		Model:           strings.TrimSpace(s.model.Text),
 		TranscribeModel: strings.TrimSpace(s.transcribe.Text),
+		AudioEngine:     core.NormalizeAudioEngine(s.audioEngine.Selected),
+		WhisperModel:    core.NormalizeWhisperModel(s.whisperModel.Selected),
+		GoogleAPIKey:    strings.TrimSpace(s.googleKey.Text),
+		SpeechLanguage:  core.NormalizeSpeechLanguage(s.speechLanguage.Selected),
 		MaxChars:        maxChars,
 		Workers:         workers,
 	}
@@ -1101,6 +1148,10 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		Host:            cfg.Host,
 		Model:           cfg.Model,
 		TranscribeModel: cfg.TranscribeModel,
+		AudioEngine:     cfg.AudioEngine,
+		WhisperModel:    cfg.WhisperModel,
+		GoogleAPIKey:    cfg.GoogleAPIKey,
+		SpeechLanguage:  cfg.SpeechLanguage,
 		MaxChars:        cfg.MaxChars,
 		Workers:         cfg.Workers,
 	}.Save(db)

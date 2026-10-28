@@ -73,14 +73,23 @@ var audioExtensions = map[string]bool{
 	"mp3": true, "wav": true, "ogg": true, "m4a": true, "flac": true,
 }
 
-// ExtractFileText extracts text from a document or transcribes an audio file.
-// Documents are handled locally (pure Go first, external tools as fallback);
-// audio is sent to the local Ollama transcription endpoint.
+// ExtractFileText extracts text from a document or transcribes an audio file
+// using the legacy Ollama backend.
 func ExtractFileText(ctx context.Context, name, mimeType string, data []byte, host, transcribeModel string) (string, string, error) {
+	return ExtractFileTextWithAudio(ctx, name, mimeType, data, AudioOptions{
+		Engine:      AudioEngineOllama,
+		OllamaHost:  host,
+		OllamaModel: transcribeModel,
+	})
+}
+
+// ExtractFileTextWithAudio extracts a document or transcribes audio with the
+// selected audio backend.
+func ExtractFileTextWithAudio(ctx context.Context, name, mimeType string, data []byte, audio AudioOptions) (string, string, error) {
 	ext := extensionOf(name)
 	switch {
 	case audioExtensions[ext] || IsAudio(mimeType):
-		return TranscribeAudio(ctx, host, transcribeModel, name, data)
+		return audio.Transcribe(ctx, name, data)
 	case documentExtensions[ext] || documentMIMEs[mimeType]:
 		return ExtractDocument(ctx, name, data)
 	default:
@@ -1107,8 +1116,8 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 	}
 
 	label := "extract documents & audio"
-	if strings.TrimSpace(c.TranscribeModel) != "" {
-		label += " (" + c.TranscribeModel + ")"
+	if c.AudioEngine != "" {
+		label += " (" + AudioEngineLabel(c.AudioEngine) + ")"
 	}
 	r.SetPhase(label, 0, len(candidates))
 	if len(candidates) == 0 {
@@ -1130,7 +1139,7 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 			r.Advance(false)
 			continue
 		}
-		text, tool, err := ExtractFileText(ctx, n.name, n.mime, data, c.Host, c.TranscribeModel)
+		text, tool, err := ExtractFileTextWithAudio(ctx, n.name, n.mime, data, c.audioOptions())
 		if err != nil {
 			failed++
 			_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool=? WHERE id=?`, err.Error(), tool, n.id)

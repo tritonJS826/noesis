@@ -1,8 +1,10 @@
 package gui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,8 +34,8 @@ func (s *state) menuScreen() fyne.CanvasObject {
 	}
 
 	summary := widget.NewLabel(fmt.Sprintf(
-		"SRC: %s   ·   OUT: %s   ·   DB: %s   ·   MODEL: %s   ·   TRANSCRIBE: %s   ·   HOST: %s   ·   MAXCHARS: %s   ·   WORKERS: %s",
-		s.src.Text, s.out.Text, s.dbEntry.Text, s.model.Text, s.transcribe.Text, s.host.Text, s.maxChars.Text, s.workers.Text,
+		"SRC: %s   ·   OUT: %s   ·   DB: %s   ·   MODEL: %s   ·   AUDIO: %s   ·   WHISPER: %s   ·   HOST: %s   ·   MAXCHARS: %s   ·   WORKERS: %s",
+		s.src.Text, s.out.Text, s.dbEntry.Text, s.model.Text, s.audioEngine.Selected, s.whisperModel.Selected, s.host.Text, s.maxChars.Text, s.workers.Text,
 	))
 	summary.Wrapping = fyne.TextWrapWord
 
@@ -573,16 +575,47 @@ func (s *state) evalScreen() fyne.CanvasObject {
 
 func (s *state) settingsScreen() fyne.CanvasObject {
 	modelRow := container.NewBorder(nil, nil, nil, widget.NewButton("Fetch…", s.pickModel), s.model)
+	whisperValue := container.NewVBox(s.whisperModel, wrappedLabel(s.whisperModelStatus()))
+	whisperRow := container.NewBorder(nil, nil, nil, widget.NewButton("Manage…", s.openWhisperManager), whisperValue)
 
 	form := widget.NewForm(
 		widget.NewFormItem("SRC", s.src),
 		widget.NewFormItem("OUT", s.out),
 		widget.NewFormItem("DB", s.dbEntry),
 		widget.NewFormItem("MODEL", modelRow),
-		widget.NewFormItem("TRANSCRIBE", s.transcribe),
+		widget.NewFormItem("AUDIO", s.audioEngine),
+		widget.NewFormItem("WHISPER MODEL", whisperRow),
+		widget.NewFormItem("GOOGLE API KEY", s.googleKey),
+		widget.NewFormItem("SPEECH LANGUAGE", s.speechLanguage),
 		widget.NewFormItem("HOST", s.host),
 		widget.NewFormItem("MAXCHARS", s.maxChars),
 		widget.NewFormItem("WORKERS", s.workers),
+	)
+
+	audioHint := wrappedLabel("Local Whisper runs offline after downloading a model and auto-detects the language. Google Speech-to-Text needs an API key (stored in the database) and ffmpeg.")
+	ffmpegHelp := fyne.CanvasObject(wrappedLabel("ffmpeg: installed."))
+	if !core.FFmpegAvailable() {
+		ffmpegHelp = container.NewVBox(
+			wrappedLabel("ffmpeg: not found — it is needed for Google and some audio formats."),
+			docsLink("Install ffmpeg", core.FFmpegDownloadURL),
+			wrappedLabel(core.FFmpegInstallExample()),
+		)
+	}
+	audioHelp := container.NewVBox(
+		widget.NewLabelWithStyle("Audio setup help", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		wrappedLabel("Local Whisper: "+core.LocalWhisperSetupNote()),
+		container.NewHBox(
+			docsLink("whisper.cpp installation guide", core.WhisperCPPBuildURL),
+			docsLink("Homebrew formula (macOS)", core.WhisperCPPHomebrewURL),
+		),
+		widget.NewSeparator(),
+		wrappedLabel("Google Speech-to-Text: enable the API (billing required), create an API key, then install ffmpeg. Choose a specific language; Google handles about one minute per file."),
+		container.NewHBox(
+			docsLink("Enable Speech-to-Text", core.GoogleSpeechEnableURL),
+			docsLink("Create API key", core.GoogleCredentialsURL),
+		),
+		ffmpegHelp,
+		docsLink("Speech-to-Text documentation", core.GoogleSpeechDocsURL),
 	)
 
 	reset := widget.NewButton("Reset database", s.confirmReset)
@@ -590,6 +623,8 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 
 	scroll := container.NewVScroll(container.NewVBox(
 		form,
+		audioHint,
+		audioHelp,
 		widget.NewSeparator(),
 		widget.NewLabel(s.ollamaStatus),
 		widget.NewButton("Edit eval prompt…", func() {
@@ -600,6 +635,221 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 	scroll.SetMinSize(fyne.NewSize(720, 380))
 
 	return scroll
+}
+
+// ─── whisper manager ────────────────────────────────────────────────────────
+
+func (s *state) whisperModelStatus() string {
+	name := core.NormalizeWhisperModel(s.whisperModel.Selected)
+	if !core.WhisperModelInstalled(name) {
+		return "Not downloaded — use Manage… to download it."
+	}
+	if !core.WhisperRuntimeInstalled() {
+		return "Model downloaded; runtime not installed — use Manage…"
+	}
+	return "Downloaded and ready."
+}
+
+func (s *state) openWhisperManager() {
+	s.whisperModels = core.WhisperModels()
+	s.whisperStatus = ""
+	s.whisperErr = ""
+	s.screen = scrWhisper
+	s.render()
+}
+
+func (s *state) useWhisperModel(name string) {
+	s.whisperModel.SetSelected(core.NormalizeWhisperModel(name))
+	s.persistSettings()
+	if core.WhisperRuntimeInstalled() {
+		s.whisperStatus = name + " selected."
+	} else {
+		s.whisperStatus = name + " selected. Install whisper-cli to use it — see the instructions above."
+	}
+	s.whisperErr = ""
+	s.render()
+}
+
+func (s *state) deleteWhisperModel(name string) {
+	if err := core.DeleteWhisperModel(name); err != nil {
+		s.whisperErr = err.Error()
+		s.render()
+		return
+	}
+	if s.whisperModel.Selected == name {
+		s.whisperModel.SetSelected(core.DefaultWhisperModel)
+		s.persistSettings()
+	}
+	s.whisperModels = core.WhisperModels()
+	s.whisperStatus = name + " deleted."
+	s.whisperErr = ""
+	s.render()
+}
+
+func (s *state) startWhisperDownload(model string) {
+	if s.whisperBusy {
+		return
+	}
+	if model == "" && !core.WhisperRuntimeInstalled() && !core.WhisperRuntimeAutoInstallSupported() {
+		s.whisperErr = core.WhisperRuntimeInstallInstructions()
+		s.whisperStatus = ""
+		s.render()
+		return
+	}
+	s.whisperBusy = true
+	s.whisperProgress = 0
+	s.whisperErr = ""
+	s.whisperStatus = ""
+	if model == "" {
+		s.whisperStage = "runtime"
+	} else {
+		s.whisperStage = "model " + model
+	}
+	s.render()
+
+	go func() {
+		ctx := context.Background()
+		lastStage, lastPct := "", -1
+		updateProgress := func(stage string, done, total int64) {
+			pct := 0.0
+			if total > 0 {
+				pct = float64(done) * 100 / float64(total)
+			}
+			rounded := int(pct)
+			if stage == lastStage && rounded == lastPct && total > 0 {
+				return
+			}
+			lastStage, lastPct = stage, rounded
+			fyne.Do(func() {
+				s.whisperStage = stage
+				s.whisperProgress = pct
+				s.render()
+			})
+		}
+
+		if !core.WhisperRuntimeInstalled() && core.WhisperRuntimeAutoInstallSupported() {
+			updateProgress("runtime", 0, 0)
+			if err := core.EnsureWhisperRuntime(ctx, func(done, total int64) {
+				updateProgress("runtime", done, total)
+			}); err != nil {
+				fyne.Do(func() { s.finishWhisperDownload(model, err) })
+				return
+			}
+		}
+		if model != "" {
+			updateProgress("model "+model, 0, 0)
+			if err := core.DownloadWhisperModel(ctx, model, func(done, total int64) {
+				updateProgress("model "+model, done, total)
+			}); err != nil {
+				fyne.Do(func() { s.finishWhisperDownload(model, err) })
+				return
+			}
+		}
+		fyne.Do(func() { s.finishWhisperDownload(model, nil) })
+	}()
+}
+
+func (s *state) finishWhisperDownload(model string, err error) {
+	s.whisperBusy = false
+	s.whisperProgress = 0
+	if err != nil {
+		s.whisperErr = err.Error()
+		s.whisperStatus = ""
+	} else {
+		s.whisperErr = ""
+		s.whisperModels = core.WhisperModels()
+		if model == "" {
+			s.whisperStatus = "whisper.cpp runtime installed."
+		} else {
+			s.whisperModel.SetSelected(core.NormalizeWhisperModel(model))
+			s.persistSettings()
+			if core.WhisperRuntimeInstalled() {
+				s.whisperStatus = model + " downloaded and selected."
+			} else {
+				s.whisperStatus = model + " downloaded. Install whisper-cli to use it — see the instructions above."
+			}
+		}
+	}
+	s.render()
+}
+
+func (s *state) whisperScreen() fyne.CanvasObject {
+	status := widget.NewLabel("")
+	status.Wrapping = fyne.TextWrapWord
+	if path := core.WhisperRuntimePath(); path != "" {
+		status.SetText("Runtime installed: " + path)
+	} else {
+		status.SetText("Runtime not installed.")
+	}
+
+	rows := container.NewVBox()
+	rows.Add(status)
+	if !core.WhisperRuntimeInstalled() {
+		rows.Add(wrappedLabel(core.LocalWhisperSetupNote()))
+		rows.Add(container.NewHBox(
+			docsLink("whisper.cpp installation guide", core.WhisperCPPBuildURL),
+			docsLink("Homebrew formula (macOS)", core.WhisperCPPHomebrewURL),
+			docsLink("Download builds", core.WhisperCPPReleasesURL),
+		))
+		if core.WhisperRuntimeAutoInstallSupported() {
+			rows.Add(widget.NewButton("Install whisper.cpp runtime", func() {
+				s.startWhisperDownload("")
+			}))
+		}
+	}
+	rows.Add(widget.NewSeparator())
+
+	for _, info := range s.whisperModels {
+		info := info
+		state := "not downloaded"
+		if info.Downloaded {
+			state = "downloaded"
+		}
+		if info.Name == s.whisperModel.Selected {
+			state += " · active"
+		}
+		label := widget.NewLabel(fmt.Sprintf("%s — %s — %s", info.Name, formatBytes(info.Size), state))
+		var actions *fyne.Container
+		if info.Downloaded {
+			actions = container.NewHBox(
+				widget.NewButton("Use", func() { s.useWhisperModel(info.Name) }),
+				widget.NewButton("Delete", func() { s.deleteWhisperModel(info.Name) }),
+			)
+		} else {
+			actions = container.NewHBox(widget.NewButton("Download", func() {
+				s.startWhisperDownload(info.Name)
+			}))
+		}
+		rows.Add(container.NewBorder(nil, nil, nil, actions, label))
+	}
+
+	rows.Add(widget.NewSeparator())
+	if s.whisperBusy {
+		label := s.whisperStage
+		if label == "" {
+			label = "download"
+		}
+		rows.Add(widget.NewLabel("Downloading " + label + "…"))
+		bar := widget.NewProgressBar()
+		bar.SetValue(s.whisperProgress / 100)
+		rows.Add(bar)
+	}
+	if s.whisperErr != "" {
+		errLabel := widget.NewLabel(s.whisperErr)
+		errLabel.Wrapping = fyne.TextWrapWord
+		errLabel.Importance = widget.DangerImportance
+		rows.Add(errLabel)
+	}
+	if s.whisperStatus != "" {
+		rows.Add(widget.NewLabel(s.whisperStatus))
+	}
+
+	scroll := container.NewVScroll(rows)
+	scroll.SetMinSize(fyne.NewSize(760, 420))
+	return container.NewBorder(nil, widget.NewButton("Back", func() {
+		s.screen = scrSettings
+		s.render()
+	}), nil, nil, scroll)
 }
 
 // ─── prompts ────────────────────────────────────────────────────────────────
@@ -857,4 +1107,33 @@ func (s *state) runningScreen() fyne.CanvasObject {
 		widget.NewLabel("Progress, the current file and the log are shown in the panel below."),
 		widget.NewButton("Stop", s.stopRun),
 	)
+}
+
+func formatBytes(n int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * kb
+		gb = 1024 * mb
+	)
+	switch {
+	case n >= gb:
+		return fmt.Sprintf("%.1f GB", float64(n)/float64(gb))
+	case n >= mb:
+		return fmt.Sprintf("%.0f MB", float64(n)/float64(mb))
+	case n >= kb:
+		return fmt.Sprintf("%.0f KB", float64(n)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+func wrappedLabel(text string) *widget.Label {
+	label := widget.NewLabel(text)
+	label.Wrapping = fyne.TextWrapWord
+	return label
+}
+
+func docsLink(label, target string) *widget.Hyperlink {
+	u, _ := url.Parse(target)
+	return widget.NewHyperlink(label, u)
 }

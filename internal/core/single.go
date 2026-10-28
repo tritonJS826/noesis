@@ -258,7 +258,7 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 				// SVG is XML text, so no vision model is needed.
 				text, tool = string(data), "raw"
 			} else {
-				text, tool, err = ExtractFileText(ctx, n.name, n.mime, data, c.Host, c.TranscribeModel)
+				text, tool, err = ExtractFileTextWithAudio(ctx, n.name, n.mime, data, c.audioOptions())
 			}
 			if err != nil {
 				_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool=? WHERE id=?`, err.Error(), tool, n.id)

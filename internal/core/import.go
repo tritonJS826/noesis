@@ -219,8 +219,29 @@ type importFile struct {
 type ImportOptions struct {
 	Source          ImportSource
 	Formats         FormatSet
-	Host            string // Ollama host for audio transcription
-	TranscribeModel string // Ollama transcription model (empty = default)
+	Host            string // Ollama host (legacy audio backend)
+	TranscribeModel string // Ollama transcription model (legacy)
+	AudioEngine     string
+	WhisperModel    string
+	GoogleAPIKey    string
+	SpeechLanguage  string
+}
+
+func (o ImportOptions) audioOptions() AudioOptions {
+	engine := o.AudioEngine
+	if strings.TrimSpace(engine) == "" {
+		// Preserve the historical behaviour for callers that only set the
+		// Ollama host/model fields.
+		engine = AudioEngineOllama
+	}
+	return AudioOptions{
+		Engine:         engine,
+		WhisperModel:   o.WhisperModel,
+		GoogleAPIKey:   o.GoogleAPIKey,
+		SpeechLanguage: o.SpeechLanguage,
+		OllamaHost:     o.Host,
+		OllamaModel:    o.TranscribeModel,
+	}
 }
 
 // Import reads files from src into the notes table according to opt. The
@@ -294,7 +315,7 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 
 		var extracted, extractErr, extractTool string
 		if IsExtractable(name, mimeType) {
-			text, tool, err := ExtractFileText(ctx, name, mimeType, data, opt.Host, opt.TranscribeModel)
+			text, tool, err := ExtractFileTextWithAudio(ctx, name, mimeType, data, opt.audioOptions())
 			extractTool = tool
 			if err != nil {
 				extractErr = err.Error()

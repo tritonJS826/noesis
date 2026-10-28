@@ -200,10 +200,19 @@ func textForModel(content, extracted, mime string) string {
 	return fmt.Sprintf("[binary file: %s — no extracted text available]", mime)
 }
 
-// CompareFile evaluates a file's novelty the same way EvalNote does, but
-// without adding it to the database. The file is compared against ALL notes
-// already in the db treated as "related notes".
+// CompareFile evaluates a file's novelty using the legacy Ollama audio backend.
 func CompareFile(ctx context.Context, db *sql.DB, path, host, model, transcribeModel string, maxChars int) (string, error) {
+	return CompareFileWithAudio(ctx, db, path, host, model, AudioOptions{
+		Engine:      AudioEngineOllama,
+		OllamaHost:  host,
+		OllamaModel: transcribeModel,
+	}, maxChars)
+}
+
+// CompareFileWithAudio evaluates a file's novelty the same way EvalNote does,
+// but without adding it to the database. The file is compared against ALL notes
+// already in the db treated as "related notes".
+func CompareFileWithAudio(ctx context.Context, db *sql.DB, path, host, model string, audio AudioOptions, maxChars int) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -217,7 +226,7 @@ func CompareFile(ctx context.Context, db *sql.DB, path, host, model, transcribeM
 
 	var extracted, extractTool, extractErrText string
 	if IsExtractable(name, mimeType) {
-		extracted, extractTool, err = ExtractFileText(ctx, name, mimeType, data, host, transcribeModel)
+		extracted, extractTool, err = ExtractFileTextWithAudio(ctx, name, mimeType, data, audio)
 		if err != nil {
 			extractErrText = err.Error()
 			return "", fmt.Errorf("%s: %w", name, err)

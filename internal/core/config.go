@@ -4,16 +4,32 @@ package core
 // -ldflags "-X noesis/internal/core.DefaultModel=...".
 var DefaultModel = "gemma4:31b-cloud"
 
-// DefaultTranscribeModel is the Ollama audio-transcription model used when the
-// user has not configured one. It can be overridden at build time via
-// -ldflags "-X noesis/internal/core.DefaultTranscribeModel=...".
+// DefaultTranscribeModel is the legacy Ollama audio-transcription model.
 var DefaultTranscribeModel = "whisper"
+
+// Audio backend identifiers.
+const (
+	AudioEngineWhisper = "whisper"
+	AudioEngineGoogle  = "google"
+	AudioEngineOllama  = "ollama"
+)
+
+// DefaultWhisperModel is the whisper.cpp model selected on first launch.
+const DefaultWhisperModel = "base"
+
+// DefaultSpeechLanguage is the language used by API backends that require one.
+// Whisper ignores this and auto-detects.
+const DefaultSpeechLanguage = "ru-RU"
 
 // Config holds everything the processing phases need.
 type Config struct {
 	Host            string
 	Model           string
-	TranscribeModel string // Ollama audio transcription model
+	TranscribeModel string // legacy Ollama audio transcription model
+	AudioEngine     string // whisper / google / ollama
+	WhisperModel    string
+	GoogleAPIKey    string
+	SpeechLanguage  string
 	MaxChars        int
 	Workers         int
 	PromptName      string // prompt to use (empty = default)
@@ -26,6 +42,9 @@ func DefaultConfig() Config {
 		Host:            "http://localhost:11434",
 		Model:           DefaultModel,
 		TranscribeModel: DefaultTranscribeModel,
+		AudioEngine:     AudioEngineWhisper,
+		WhisperModel:    DefaultWhisperModel,
+		SpeechLanguage:  DefaultSpeechLanguage,
 		MaxChars:        400000,
 		Workers:         2,
 	}

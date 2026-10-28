@@ -26,6 +26,10 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 			Formats:         defaultFormatSet(),
 			Host:            c.Host,
 			TranscribeModel: c.TranscribeModel,
+			AudioEngine:     c.AudioEngine,
+			WhisperModel:    c.WhisperModel,
+			GoogleAPIKey:    c.GoogleAPIKey,
+			SpeechLanguage:  c.SpeechLanguage,
 		})
 	case PhaseAnalyze:
 		return Phase2(ctx, r, db, c)

@@ -15,6 +15,10 @@ type AppSettings struct {
 	Host            string
 	Model           string
 	TranscribeModel string
+	AudioEngine     string
+	WhisperModel    string
+	GoogleAPIKey    string
+	SpeechLanguage  string
 	MaxChars        int
 	Workers         int
 }
@@ -28,6 +32,10 @@ func DefaultAppSettings() AppSettings {
 		Host:            c.Host,
 		Model:           c.Model,
 		TranscribeModel: c.TranscribeModel,
+		AudioEngine:     c.AudioEngine,
+		WhisperModel:    c.WhisperModel,
+		GoogleAPIKey:    c.GoogleAPIKey,
+		SpeechLanguage:  c.SpeechLanguage,
 		MaxChars:        c.MaxChars,
 		Workers:         c.Workers,
 	}
@@ -61,6 +69,18 @@ func LoadAppSettings(db *sql.DB) AppSettings {
 	}
 	if v, ok := get("transcribe_model"); ok {
 		s.TranscribeModel = v
+	}
+	if v, ok := get("audio_engine"); ok {
+		s.AudioEngine = NormalizeAudioEngine(v)
+	}
+	if v, ok := get("whisper_model"); ok {
+		s.WhisperModel = NormalizeWhisperModel(v)
+	}
+	if v, ok := get("google_api_key"); ok {
+		s.GoogleAPIKey = v
+	}
+	if v, ok := get("speech_language"); ok {
+		s.SpeechLanguage = NormalizeSpeechLanguage(v)
 	}
 	if v, ok := get("maxchars"); ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
@@ -106,6 +126,10 @@ func (s AppSettings) Save(db *sql.DB) error {
 		{"host", s.Host, def.Host},
 		{"model", s.Model, def.Model},
 		{"transcribe_model", s.TranscribeModel, def.TranscribeModel},
+		{"audio_engine", s.AudioEngine, def.AudioEngine},
+		{"whisper_model", s.WhisperModel, def.WhisperModel},
+		{"google_api_key", s.GoogleAPIKey, def.GoogleAPIKey},
+		{"speech_language", s.SpeechLanguage, def.SpeechLanguage},
 		{"maxchars", strconv.Itoa(s.MaxChars), strconv.Itoa(def.MaxChars)},
 		{"workers", strconv.Itoa(s.Workers), strconv.Itoa(def.Workers)},
 	}
