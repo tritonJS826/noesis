@@ -56,8 +56,7 @@ const (
 
 // menuItems is the main menu shown on the start screen.
 var menuItems = []string{
-	"Import",
-	"Synchronize with folder",
+	"Synchronize",
 	"Data processing — pairs",
 	"Data processing — one by one",
 	"Export for Obsidian",
@@ -293,7 +292,7 @@ func (s *state) render() {
 func (s *state) screenTitle() string {
 	switch s.screen {
 	case scrImport:
-		return "Import — choose source & formats"
+		return "Synchronize"
 	case scrSync:
 		return "Synchronize with folder"
 	case scrFormats:
@@ -355,7 +354,7 @@ func (s *state) goBack() {
 	case scrWhisper:
 		s.screen = scrSettings
 	case scrFormats:
-		s.screen = scrImport
+		s.screen = scrSync
 	case scrNotes:
 		s.screen = s.noteBack
 	case scrFsSearch:
@@ -387,7 +386,7 @@ func (s *state) goBack() {
 func (s *state) body() fyne.CanvasObject {
 	switch s.screen {
 	case scrImport:
-		return s.importScreen()
+		return s.syncScreen()
 	case scrSync:
 		return s.syncScreen()
 	case scrFormats:
@@ -428,24 +427,22 @@ func (s *state) body() fyne.CanvasObject {
 func (s *state) activateMenu(id int) {
 	switch id {
 	case 0:
-		s.screen = scrImport
-	case 1:
 		s.screen = scrSync
-	case 2:
+	case 1:
 		s.openProcessList("pair")
 		return
-	case 3:
+	case 2:
 		s.openProcessList("single")
 		return
-	case 4:
+	case 3:
 		s.openExportTemplates()
 		return
-	case 5:
+	case 4:
 		s.screen = scrData
-	case 6:
+	case 5:
 		s.openNotes(noteEval, scrMenu)
 		return
-	case 7:
+	case 6:
 		s.screen = scrSettings
 	}
 	s.render()

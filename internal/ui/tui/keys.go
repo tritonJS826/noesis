@@ -30,7 +30,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case scrMenu:
 		return m.menuKeys(msg)
 	case scrImport:
-		return m.importKeys(msg)
+		return m.syncKeys(msg)
 	case scrSync:
 		return m.syncKeys(msg)
 	case scrFormats:
@@ -76,7 +76,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // ─── main menu ───────────────────────────────────────────────────────────────
 
-const menuItems = 7 // 0..7
+const menuItems = 6 // 0..6
 
 func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 	switch vimNav(msg.String()) {
@@ -94,31 +94,26 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 		m.resetErr = ""
 	case "enter":
 		switch m.cursor {
-		case 0: // import
-			m.screen = scrImport
-			m.importCursor = 0
-			m.cursor = 0
-			m.pickResult = ""
-			m.pickErr = ""
-		case 1: // synchronize with folder
+		case 0: // synchronize
 			m.screen = scrSync
-			m.cursor = 0
+			m.syncCursor = 0
 			m.syncItems = nil
 			m.syncChecked = nil
+			m.syncSource = m.importSource // keep the last used source type
 			return m.runSyncDiff()
-		case 2: // data processing — pairs → open pair list
+		case 1: // data processing — pairs → open pair list
 			m.openProcessList("pair")
-		case 3: // data processing — one by one → open single list
+		case 2: // data processing — one by one → open single list
 			m.openProcessList("single")
-		case 4: // export for obsidian → choose a template
+		case 3: // export for obsidian → choose a template
 			m.openExportTemplates()
-		case 5: // work with data
+		case 4: // work with data
 			m.screen = scrData
 			m.dataCursor = 0
 			m.cursor = 0
-		case 6: // evaluate note uniqueness
+		case 5: // evaluate note uniqueness
 			m.openFilePicker()
-		case 7: // settings
+		case 6: // settings
 			m.screen = scrSettings
 			m.cursor = 0
 		}
@@ -182,21 +177,58 @@ func (m *model) importKeys(msg tea.KeyMsg) tea.Cmd {
 // ─── sync ───────────────────────────────────────────────────────────────────
 
 func (m *model) syncKeys(msg tea.KeyMsg) tea.Cmd {
+	const settingsRows = 3 // source, formats, action
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.syncCursor > 0 {
 			m.syncCursor--
 		}
 	case "down":
-		if m.syncCursor < len(m.syncItems)-1 {
+		maxCursor := settingsRows - 1
+		if len(m.syncItems) > 0 {
+			maxCursor = settingsRows + len(m.syncItems) - 1
+		}
+		if m.syncCursor < maxCursor {
 			m.syncCursor++
 		}
 	case "enter":
-		return m.applySync()
+		switch {
+		case m.syncCursor == 0:
+			// Cycle source type
+			m.syncSource = (m.syncSource + 1) % 3
+			m.importSource = m.syncSource
+			m.syncItems = nil
+			m.syncChecked = nil
+		case m.syncCursor == 1:
+			// Choose formats
+			m.screen = scrFormats
+			m.fmtCursor = 0
+		case m.syncCursor == 2:
+			// Action button
+			if m.syncSource == core.SourceFilesystem {
+				if m.src == "" {
+					m.phaseErr = fmt.Errorf("Not set: SRC")
+					return nil
+				}
+				return m.runSyncDiff()
+			} else {
+				// ZIP or JSON — import directly
+				if m.src == "" {
+					m.phaseErr = fmt.Errorf("Not set: SRC")
+					return nil
+				}
+				m.screen = scrRunning
+				m.phaseErr = nil
+				return runImportCmd(m)
+			}
+		default:
+			// Apply sync changes
+			return m.applySync()
+		}
 	case "s", " ":
-		// toggle current item
-		if len(m.syncItems) > 0 && m.syncCursor < len(m.syncItems) {
-			it := m.syncItems[m.syncCursor]
+		// Toggle current item
+		if m.syncCursor >= settingsRows && len(m.syncItems) > 0 {
+			it := m.syncItems[m.syncCursor-settingsRows]
 			key := syncItemKey(it)
 			if m.syncChecked == nil {
 				m.syncChecked = map[string]bool{}
@@ -219,12 +251,14 @@ func (m *model) syncKeys(msg tea.KeyMsg) tea.Cmd {
 			m.syncChecked[syncItemKey(it)] = !all
 		}
 	case "r", "R":
-		return m.runSyncDiff()
+		if m.syncSource == core.SourceFilesystem {
+			return m.runSyncDiff()
+		}
 	case "esc", "h", "q":
 		m.syncItems = nil
 		m.syncChecked = nil
 		m.screen = scrMenu
-		m.cursor = 1
+		m.cursor = 0
 	}
 	return nil
 }
@@ -335,8 +369,8 @@ func (m *model) formatsKeys(msg tea.KeyMsg) tea.Cmd {
 			m.importFormats = nil
 		}
 	case "esc", "q":
-		m.screen = scrImport
-		m.importCursor = 1
+		m.screen = scrSync
+		m.syncCursor = 1
 	}
 	return nil
 }

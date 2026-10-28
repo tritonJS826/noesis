@@ -122,7 +122,12 @@ type model struct {
 	importFormats core.FormatSet
 	fmtCursor     int
 
-	// work-with-data submenu
+	// sync
+	syncSource  core.ImportSource // source type for sync: folder, zip, json
+	syncCursor  int               // cursor for the sync settings submenu (0=source, 1=formats, 2=action)
+	syncItems   []core.SyncItem
+	syncScroll  int
+	syncChecked map[string]bool // key: "del:<path>" or "new:<path>"
 	dataCursor int
 	pickMode   int // 0 remove, 1 remove+links
 	pickResult string
@@ -147,12 +152,6 @@ type model struct {
 	browseDetailConfirm bool
 	browseDetailOffset  int
 	removeFromDetail    bool
-
-	// sync
-	syncItems   []core.SyncItem
-	syncCursor  int
-	syncScroll  int
-	syncChecked map[string]bool // key: "del:<path>" or "new:<path>"
 
 	// filterTyping is true while a filter/search field is capturing text.
 	// Outside that mode h/j/k/l work as Vim navigation keys.
@@ -216,6 +215,7 @@ func newModel(db *sql.DB) *model {
 		textArea:        ta,
 		importSource:    core.SourceFilesystem,
 		importFormats:   formats,
+		syncSource:      core.SourceFilesystem,
 		browseCols:      [5]bool{true, true, false, true, true},
 	}
 }

@@ -327,7 +327,7 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 			}
 		}
 
-		var extracted, extractedPath, extractErr, extractTool string
+		var extracted, extractErr, extractTool string
 		if IsExtractable(name, mimeType) {
 			text, tool, err := ExtractFileTextWithAudio(ctx, name, mimeType, data, opt.audioOptions())
 			extractTool = tool
@@ -335,23 +335,24 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 				extractErr = err.Error()
 				r.Logf("%s: extraction failed: %v", rel, err)
 			} else if strings.TrimSpace(text) != "" {
-				link, storeErr := writeExtractedFile(db, rel, name, text)
-				if storeErr != nil {
-					// Never lose the extraction when the sidecar file cannot
-					// be written; keep it inline and surface the problem.
-					extracted = text
-					extractErr = "store extracted text: " + storeErr.Error()
-					r.Logf("%s: %s", rel, extractErr)
-				} else {
-					extractedPath = link
-				}
+				extracted = text
 			}
 		}
 
+		// Build the markdown field: original content for text files, extracted
+		// text / transcript for binary files.
+		markdown := ""
+		switch {
+		case IsText(mimeType):
+			markdown = content
+		case extracted != "":
+			markdown = extracted
+		}
+
 		_, err = tx.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type,
-			extracted_text, extracted_path, blob_path, extract_error, extract_tool, imported_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-			rel, f.Abs, name, content, mimeType, extracted, extractedPath, blobPath,
+			markdown, extracted_text, extracted_path, blob_path, extract_error, extract_tool, imported_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			rel, f.Abs, name, content, mimeType, markdown, "", "", blobPath,
 			extractErr, extractTool, time.Now().Format(time.RFC3339))
 		if err != nil {
 			r.Fail("%s: %v", rel, err)

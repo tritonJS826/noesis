@@ -33,7 +33,7 @@ func (m *model) View() string {
 	case scrRunning:
 		return m.viewRunning()
 	case scrImport:
-		return m.viewImport()
+		return m.viewSync()
 	case scrSync:
 		return m.viewSync()
 	case scrFormats:
@@ -82,8 +82,7 @@ func (m *model) viewMenu() string {
 	pairsTotal := n * (n - 1) / 2
 
 	items := []string{
-		"Import",
-		"Synchronize with folder",
+		"Synchronize",
 		"Data processing — pairs",
 		"Data processing — one by one",
 		"Export for Obsidian",
@@ -241,25 +240,55 @@ func (m *model) viewSync() string {
 	w := m.width
 	cw := w - 4
 
+	srcLabel := m.syncSource.String()
+	formatsLabel := m.formatSummary()
+
 	var lines []string
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Synchronize database with source folder"))
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Synchronize — choose source & formats"))
 	lines = append(lines, tuiDim.Width(cw).Render("SRC: "+tuiEmpty(m.src)))
 	lines = append(lines, "")
 
-	if len(m.syncItems) == 0 {
-		lines = append(lines, tuiDim.Width(cw).Render("No differences found — everything is in sync."))
-		lines = append(lines, "")
-		lines = append(lines, tuiDim.Width(cw).Render("r refresh  ·  s run sync  ·  h/ESC back"))
+	// Settings submenu: source type, formats, action
+	settingsItems := []string{
+		"Source: " + srcLabel,
+		"Formats: " + formatsLabel,
+	}
+	if m.syncSource == core.SourceFilesystem {
+		if len(m.syncItems) == 0 && m.syncChecked == nil {
+			settingsItems = append(settingsItems, "Run comparison")
+		} else {
+			settingsItems = append(settingsItems, "Refresh comparison")
+		}
 	} else {
+		settingsItems = append(settingsItems, "Import all")
+	}
+
+	for i, item := range settingsItems {
+		cursor := "  "
+		if m.syncCursor == i {
+			cursor = tuiSel.Render("▸ ")
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(cw).Render(cursor+item))
+	}
+	lines = append(lines, "")
+
+	// Show diff results if available (folder source only).
+	if len(m.syncItems) > 0 {
 		lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("%d differences found", len(m.syncItems))))
-		lines = append(lines, tuiDim.Width(cw).Render("space toggle selected  ·  a select/unselect all"))
+		lines = append(lines, tuiDim.Width(cw).Render("space toggle selected  ·  a select/unselect all  ·  enter apply"))
 		lines = append(lines, "")
 
+		// Items start after the 3 settings rows.
+		itemStart := len(settingsItems)
 		page := m.listRows(1)
 		if page < 1 {
 			page = 10
 		}
-		start, end := listWindow(len(m.syncItems), m.syncCursor, page)
+		sCursor := m.syncCursor - itemStart
+		if sCursor < 0 {
+			sCursor = 0
+		}
+		start, end := listWindow(len(m.syncItems), sCursor, page)
 		start = max(start, m.syncScroll-page/2)
 		end = min(end, m.syncScroll+page+page/2)
 		if start < 0 {
@@ -273,7 +302,7 @@ func (m *model) viewSync() string {
 		for i := start; i < end; i++ {
 			it := m.syncItems[i]
 			cursor := "  "
-			if m.syncCursor == i {
+			if sCursor == i {
 				cursor = tuiSel.Render("▸ ")
 			}
 			key := syncItemKey(it)
@@ -295,9 +324,17 @@ func (m *model) viewSync() string {
 			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(line))
 		}
 		lines = append(lines, "")
-		hint := fmt.Sprintf("%s   ↑↓/jk move  ·  space/s toggle  ·  a all  ·  enter apply  ·  r refresh  ·  h/ESC back",
+		hint := fmt.Sprintf("%s   ↑↓/jk move  ·  space/s toggle  ·  a all  ·  enter apply  ·  h/ESC back",
 			scrollHint(start, end, len(m.syncItems)))
 		lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))
+	} else if m.syncChecked != nil {
+		// We've run diff but found no changes.
+		lines = append(lines, tuiDim.Width(cw).Render("No differences found — everything is in sync."))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("r refresh  ·  s run sync  ·  h/ESC back"))
+	} else {
+		lines = append(lines, tuiDim.Width(cw).Render("SRC can be a folder, a .zip archive or a .json file."))
+		lines = append(lines, tuiDim.Width(cw).Render("↑↓/jk move  ·  enter/l select  ·  h/ESC back"))
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)

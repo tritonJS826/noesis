@@ -19,11 +19,12 @@ CREATE TABLE IF NOT EXISTS notes(
 	file_name   TEXT NOT NULL,          -- filename only
 	content        TEXT NOT NULL DEFAULT '', -- original text, or base64 when binaries are stored in the DB
 	mime_type      TEXT NOT NULL DEFAULT '', -- MIME type (text/markdown, image/png, audio/mpeg…)
-	extracted_text TEXT NOT NULL DEFAULT '', -- legacy inline extracted text (new imports use extracted_path)
-	extracted_path TEXT NOT NULL DEFAULT '', -- link to the extracted .md file (relative to the data dir)
+	markdown       TEXT NOT NULL DEFAULT '', -- human-readable text: original content for text files, extracted text / transcript for binary files
+	extracted_text TEXT NOT NULL DEFAULT '', -- legacy (replaced by markdown)
+	extracted_path TEXT NOT NULL DEFAULT '', -- legacy (replaced by markdown)
 	blob_path      TEXT NOT NULL DEFAULT '', -- link to a materialised binary (zip/json imports)
 	extract_error  TEXT NOT NULL DEFAULT '', -- why extraction failed (empty = no error)
-	extract_tool   TEXT NOT NULL DEFAULT '', -- extractor/transcriber used, e.g. go:docx / ollama:whisper
+	extract_tool   TEXT NOT NULL DEFAULT '', -- extractor/transcriber used, e.g. go:docx / whisper:base
 	links_md       TEXT NOT NULL DEFAULT '', -- obsidian links ([[...]]) as a separate column
 	out_hash       TEXT NOT NULL DEFAULT '', -- hash of the file written in phase 3
 	imported_at    TEXT NOT NULL
@@ -87,6 +88,9 @@ func OpenDB(path string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
+	if err := ensureColumn(db, "notes", "markdown", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
 	if err := ensureColumn(db, "prompts", "type", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
@@ -96,6 +100,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	seedExportTemplates(db)
 	migratePromptPlaceholders(db)
 	migrateNoteStorage(db)
+	migrateToMarkdown(db)
 	return db, nil
 }
 
@@ -389,12 +394,10 @@ func noteDBVars(db *sql.DB, prefix string, id int64) map[string]string {
 	for i, c := range cols {
 		out[prefix+"."+c] = vals[i].String
 	}
-	// Extracted text lives in a linked Markdown file for new imports, so make
-	// ${db.extracted_text} / ${db_b.extracted_text} return the actual text.
-	if extracted := out[prefix+".extracted_text"]; strings.TrimSpace(extracted) == "" {
-		if text := resolveExtractedText(db, "", out[prefix+".extracted_path"]); text != "" {
-			out[prefix+".extracted_text"] = text
-		}
+	// The markdown column is the canonical text representation. Expose it as
+	// ${db.extracted_text} for backward compatibility with older templates.
+	if out[prefix+".extracted_text"] == "" {
+		out[prefix+".extracted_text"] = out[prefix+".markdown"]
 	}
 	return out
 }
@@ -578,16 +581,7 @@ func NoteRecord(db *sql.DB, id int64) ([]NoteField, error) {
 
 	fields := make([]NoteField, 0, len(cols)+1)
 	for i, c := range cols {
-		value := vals[i].String
-		if c == "extracted_text" && strings.TrimSpace(value) == "" {
-			for j, other := range cols {
-				if other == "extracted_path" {
-					value = resolveExtractedText(db, value, vals[j].String)
-					break
-				}
-			}
-		}
-		fields = append(fields, NoteField{Name: c, Value: value})
+		fields = append(fields, NoteField{Name: c, Value: vals[i].String})
 	}
 
 	rows, err := db.Query(`SELECT tag FROM tags WHERE note_id=? ORDER BY tag`, id)
@@ -794,9 +788,9 @@ func LoadProcessOutput(db *sql.DB, noteID int64, processName string) string {
 		return out
 	}
 	if processName == DataExtractionProcess {
-		var inline, link string
-		if db.QueryRow(`SELECT extracted_text, extracted_path FROM notes WHERE id=?`, noteID).Scan(&inline, &link) == nil {
-			return resolveExtractedText(db, inline, link)
+		var md string
+		if db.QueryRow(`SELECT markdown FROM notes WHERE id=?`, noteID).Scan(&md) == nil {
+			return md
 		}
 	}
 	return ""
@@ -828,6 +822,55 @@ func LoadPromptType(db *sql.DB, name string) string {
 		return ptype
 	}
 	return ""
+}
+
+// migrateToMarkdown backfills the markdown column for notes created before the
+// column existed. Text notes get their original content; binary notes get their
+// extracted text (resolved from the legacy sidecar or inline columns).
+func migrateToMarkdown(db *sql.DB) {
+	// Already migrated? Check if any note is missing markdown.
+	var count int
+	if db.QueryRow(`SELECT COUNT(*) FROM notes WHERE markdown='' AND (content<>'' OR extracted_text<>'' OR extracted_path<>'')`).Scan(&count) != nil || count == 0 {
+		return
+	}
+
+	type rec struct {
+		id                        int64
+		content, mime             string
+		extractedText, extractedPath string
+	}
+	rows, err := db.Query(`SELECT id, content, mime_type, extracted_text, extracted_path FROM notes WHERE markdown=''`)
+	if err != nil {
+		return
+	}
+	var recs []rec
+	for rows.Next() {
+		var r rec
+		if rows.Scan(&r.id, &r.content, &r.mime, &r.extractedText, &r.extractedPath) == nil {
+			recs = append(recs, r)
+		}
+	}
+	rows.Close()
+
+	for _, r := range recs {
+		var md string
+		mime := r.mime
+		if mime == "" {
+			// Fall back to extension-based detection.
+			if IsText(mime) || r.content != "" && !strings.HasPrefix(mime, "audio/") && !strings.HasPrefix(mime, "image/") && !strings.HasPrefix(mime, "video/") && !IsDocument(mime) {
+				md = r.content
+			} else {
+				md = resolveExtractedText(db, r.extractedText, r.extractedPath)
+			}
+		} else if IsText(mime) {
+			md = r.content
+		} else {
+			md = resolveExtractedText(db, r.extractedText, r.extractedPath)
+		}
+		if md != "" {
+			_, _ = db.Exec(`UPDATE notes SET markdown=? WHERE id=?`, md, r.id)
+		}
+	}
 }
 
 // ReloadPromptFromFile reads prompts/<name>.txt, saves it to the database and

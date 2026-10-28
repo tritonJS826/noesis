@@ -1078,24 +1078,23 @@ func cleanExtracted(s string) string {
 // ─── re-extraction ──────────────────────────────────────────────────────────
 
 type extractCandidate struct {
-	id       int64
-	path     string
-	name     string
-	abs      string
-	blob     string
-	content  string
-	mime     string
-	text     string
-	textPath string
-	err      string
+	id      int64
+	path    string
+	name    string
+	abs     string
+	blob    string
+	content string
+	mime    string
+	text    string
+	err     string
 }
 
-// ExtractAll re-runs document extraction and audio transcription for every
-// stored note that supports it. Existing extracted text is kept when a
-// re-extraction fails; the error is stored in extract_error.
+// ExtractAll re-runs document extraction, audio transcription, and image
+// description for every stored note that supports it. Existing extracted text
+// is kept when a re-extraction fails; the error is stored in extract_error.
 func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force bool) error {
 	rows, err := db.Query(`SELECT id, file_path, file_name, abs_path, blob_path, content, mime_type,
-		extracted_text, extracted_path, extract_error FROM notes ORDER BY id`)
+		markdown, extract_error FROM notes ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -1103,14 +1102,14 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 	for rows.Next() {
 		var n extractCandidate
 		if err := rows.Scan(&n.id, &n.path, &n.name, &n.abs, &n.blob, &n.content, &n.mime,
-			&n.text, &n.textPath, &n.err); err != nil {
+			&n.text, &n.err); err != nil {
 			rows.Close()
 			return err
 		}
-		if !IsExtractable(n.name, n.mime) {
+		// Include extractable documents/audio AND images (for vision description).
+		if !IsExtractable(n.name, n.mime) && !strings.HasPrefix(n.mime, "image/") {
 			continue
 		}
-		n.text = resolveExtractedText(db, n.text, n.textPath)
 		if !force && n.text != "" && n.err == "" {
 			continue
 		}
@@ -1121,7 +1120,7 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 		return err
 	}
 
-	label := "extract documents & audio"
+	label := "extract documents, images & audio"
 	if c.AudioEngine != "" {
 		label += " (" + AudioEngineLabel(c.AudioEngine) + ")"
 	}
@@ -1145,7 +1144,26 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 			r.Advance(false)
 			continue
 		}
-		text, tool, err := ExtractFileTextWithAudio(ctx, n.name, n.mime, data, c.audioOptions())
+
+		var text, tool string
+		if strings.HasPrefix(n.mime, "image/") && n.mime != "image/svg+xml" {
+			// Describe the image through the configured multimodal model.
+			prompt := LoadPrompt(db, DataExtractionProcess)
+			if strings.TrimSpace(prompt) == "" {
+				prompt = dataExtractionFallback
+			}
+			vars := map[string]string{"FILE_NAME": n.name}
+			vars = mergeVars(vars, noteDBVars(db, "db", n.id))
+			text, err = askOllamaText(ctx, c, expandPrompt(prompt, vars),
+				[]string{base64.StdEncoding.EncodeToString(data)})
+			tool = "ollama:vision"
+		} else if strings.HasPrefix(n.mime, "image/") {
+			// SVG is XML text — no vision model needed.
+			text, tool = string(data), "raw"
+		} else {
+			text, tool, err = ExtractFileTextWithAudio(ctx, n.name, n.mime, data, c.audioOptions())
+		}
+
 		if err != nil {
 			failed++
 			_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool=? WHERE id=?`, err.Error(), tool, n.id)
@@ -1153,15 +1171,15 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 			r.Advance(false)
 			continue
 		}
-		link, storeErr := writeExtractedFile(db, n.path, n.name, text)
-		if storeErr != nil {
+		text = cleanExtracted(text)
+		if strings.TrimSpace(text) == "" {
 			failed++
-			_, _ = db.Exec(`UPDATE notes SET extract_error=? WHERE id=?`, "store extracted text: "+storeErr.Error(), n.id)
-			r.Fail("%s: store extracted text: %v", n.name, storeErr)
+			_, _ = db.Exec(`UPDATE notes SET extract_error=? WHERE id=?`, "no text extracted", n.id)
+			r.Fail("%s: no text extracted", n.name)
 			r.Advance(false)
 			continue
 		}
-		if _, err := db.Exec(`UPDATE notes SET extracted_text='', extracted_path=?, extract_error='', extract_tool=? WHERE id=?`, link, tool, n.id); err != nil {
+		if _, err := db.Exec(`UPDATE notes SET markdown=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id); err != nil {
 			failed++
 			r.Fail("%s: %v", n.name, err)
 			r.Advance(false)

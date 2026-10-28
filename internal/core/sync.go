@@ -195,7 +195,7 @@ func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opt
 				blobPath, _ = writeBlobFile(db, rel, name, data)
 			}
 
-			var extracted, extractedPath, extractErr, extractTool string
+			var extracted, extractErr, extractTool string
 			if IsExtractable(name, mimeType) {
 				text, tool, exErr := ExtractFileTextWithAudio(
 					context.Background(), name, mimeType, data, opts.audioOptions(),
@@ -204,21 +204,26 @@ func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opt
 				if exErr != nil {
 					extractErr = exErr.Error()
 				} else if strings.TrimSpace(text) != "" {
-					if link, sErr := writeExtractedFile(db, rel, name, text); sErr == nil {
-						extractedPath = link
-					} else {
-						extracted = text
-						extractErr = "store extracted text: " + sErr.Error()
-					}
+					extracted = text
 				}
+			}
+
+			// Build the markdown field: original content for text files,
+			// extracted text for binary files.
+			markdown := ""
+			switch {
+			case IsText(mimeType):
+				markdown = content
+			case extracted != "":
+				markdown = extracted
 			}
 
 			now := time.Now().Format(time.RFC3339)
 			if _, exErr := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type,
-				extracted_text, extracted_path, blob_path, extract_error, extract_tool, imported_at)
-				VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+				markdown, extracted_text, extracted_path, blob_path, extract_error, extract_tool, imported_at)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 				rel, f.Abs, name, content, mimeType,
-				extracted, extractedPath, blobPath,
+				markdown, "", "", blobPath,
 				extractErr, extractTool, now,
 			); exErr == nil {
 				imported++

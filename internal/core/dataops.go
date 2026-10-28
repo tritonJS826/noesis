@@ -190,31 +190,31 @@ type NoteContent struct {
 
 func loadNoteContent(db *sql.DB, id int64, maxChars int) (NoteContent, error) {
 	var n NoteContent
-	var extracted, extractedPath string
-	err := db.QueryRow(`SELECT id, file_name, file_path, content, extracted_text, extracted_path, mime_type FROM notes WHERE id=?`, id).
-		Scan(&n.ID, &n.Name, &n.Path, &n.Content, &extracted, &extractedPath, &n.Mime)
+	var markdown string
+	err := db.QueryRow(`SELECT id, file_name, file_path, markdown, mime_type FROM notes WHERE id=?`, id).
+		Scan(&n.ID, &n.Name, &n.Path, &markdown, &n.Mime)
 	if err != nil {
 		return n, err
 	}
-	n.Content = textForModel(n.Content, resolveExtractedText(db, extracted, extractedPath), n.Mime)
+	n.Content = textForModel(markdown, n.Mime)
 	if r := []rune(n.Content); len(r) > maxChars {
 		n.Content = string(r[:maxChars]) + "\n[…truncated…]"
 	}
 	return n, nil
 }
 
-// textForModel returns the content as-is for text notes. For binary documents
-// and audio it returns the extracted text/transcript; when extraction has not
-// produced anything yet it returns a short placeholder so the prompt remains
-// understandable.
-func textForModel(content, extracted, mime string) string {
-	if mime == "" || IsText(mime) {
-		return content
+// textForModel returns the human-readable text for a note. For text notes
+// markdown is the original content; for binary documents, audio and images it
+// is the extracted text / transcript / description. When nothing is available
+// it returns a placeholder so prompts remain understandable.
+func textForModel(markdown, mime string) string {
+	if strings.TrimSpace(markdown) != "" {
+		return markdown
 	}
-	if strings.TrimSpace(extracted) != "" {
-		return extracted
+	if mime != "" && !IsText(mime) {
+		return fmt.Sprintf("[binary file: %s — no extracted text available]", mime)
 	}
-	return fmt.Sprintf("[binary file: %s — no extracted text available]", mime)
+	return ""
 }
 
 // CompareFile evaluates a file's novelty using the legacy Ollama audio backend.
@@ -250,23 +250,29 @@ func CompareFileWithAudio(ctx context.Context, db *sql.DB, path, host, model str
 		}
 	}
 
-	content := textForModel(rawContent, extracted, mimeType)
+	// Build the markdown equivalent for a file not yet in the database.
+	// Text files get their raw content; binary files get extracted text.
+	md := rawContent
+	if !IsText(mimeType) && strings.TrimSpace(extracted) != "" {
+		md = extracted
+	}
+	content := textForModel(md, mimeType)
 	if r := []rune(content); len(r) > maxChars {
 		content = string(r[:maxChars]) + "\n[…truncated…]"
 	}
 
 	var linkedTexts []string
-	rows, err := db.Query(`SELECT file_name, content, extracted_text, extracted_path, mime_type FROM notes ORDER BY file_name`)
+	rows, err := db.Query(`SELECT file_name, markdown, mime_type FROM notes ORDER BY file_name`)
 	if err != nil {
 		return "", err
 	}
 	for rows.Next() {
-		var noteName, c, extractedText, extractedPath, mime string
-		if err := rows.Scan(&noteName, &c, &extractedText, &extractedPath, &mime); err != nil {
+		var noteName, md, mime string
+		if err := rows.Scan(&noteName, &md, &mime); err != nil {
 			rows.Close()
 			return "", err
 		}
-		text := textForModel(c, resolveExtractedText(db, extractedText, extractedPath), mime)
+		text := textForModel(md, mime)
 		if r := []rune(text); len(r) > maxChars {
 			text = string(r[:maxChars]) + "\n[…truncated…]"
 		}
@@ -287,7 +293,8 @@ func CompareFileWithAudio(ctx context.Context, db *sql.DB, path, host, model str
 		"db.file_name":      name,
 		"db.file_path":      path,
 		"db.content":        rawContent,
-		"db.extracted_text": extracted,
+		"db.markdown":       md,
+		"db.extracted_text": md,
 		"db.extract_error":  extractErrText,
 		"db.extract_tool":   extractTool,
 		"db.mime_type":      mimeType,

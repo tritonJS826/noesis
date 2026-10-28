@@ -215,7 +215,7 @@ func TestImportExtractsDocumentsAndAudio(t *testing.T) {
 	type row struct {
 		name, extracted, extractErr, tool string
 	}
-	rows, err := db.Query(`SELECT file_name, extracted_text, extracted_path, extract_error, extract_tool FROM notes ORDER BY file_name`)
+	rows, err := db.Query(`SELECT file_name, markdown, extract_error, extract_tool FROM notes ORDER BY file_name`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,11 +223,9 @@ func TestImportExtractsDocumentsAndAudio(t *testing.T) {
 	got := map[string]row{}
 	for rows.Next() {
 		var r row
-		var inline, link string
-		if err := rows.Scan(&r.name, &inline, &link, &r.extractErr, &r.tool); err != nil {
+		if err := rows.Scan(&r.name, &r.extracted, &r.extractErr, &r.tool); err != nil {
 			t.Fatal(err)
 		}
-		r.extracted = resolveExtractedText(db, inline, link)
 		got[r.name] = r
 	}
 	if r := got["note.docx"]; r.extracted != "Imported document" || r.extractErr != "" || r.tool != "go:docx" {
@@ -304,7 +302,7 @@ func TestTranscribeAudioErrorIsStoredByImport(t *testing.T) {
 		t.Fatalf("import: %v", err)
 	}
 	var extracted, extractErr, tool string
-	if err := db.QueryRow(`SELECT extracted_text, extract_error, extract_tool FROM notes WHERE file_name='voice.wav'`).
+	if err := db.QueryRow(`SELECT markdown, extract_error, extract_tool FROM notes WHERE file_name='voice.wav'`).
 		Scan(&extracted, &extractErr, &tool); err != nil {
 		t.Fatal(err)
 	}

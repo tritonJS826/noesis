@@ -111,18 +111,74 @@ func (s *state) importScreen() fyne.CanvasObject {
 // ─── sync ────────────────────────────────────────────────────────────────────
 
 func (s *state) syncScreen() fyne.CanvasObject {
+	// Source type selector (shared by import and sync)
+	srcSelect := widget.NewSelect(importSourceNames, func(name string) {
+		if v, err := core.ParseImportSource(name); err == nil {
+			s.importSource = v
+			s.syncItems = nil
+			s.syncChecked = nil
+			s.render()
+		}
+	})
+	srcSelect.SetSelected(s.importSource.String())
+
+	browse := widget.NewButton("Browse…", func() {
+		d := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err != nil {
+				dialog.ShowError(err, s.win)
+				return
+			}
+			if uri != nil {
+				s.src.SetText(uri.Path())
+			}
+		}, s.win)
+		d.SetTitleText("Select source folder")
+		if path := strings.TrimSpace(s.src.Text); path != "" {
+			if abs, err := filepath.Abs(path); err == nil {
+				if uri, err := storage.ListerForURI(storage.NewFileURI(abs)); err == nil {
+					d.SetLocation(uri)
+				}
+			}
+		}
+		d.Show()
+	})
+
+	s.formatsLabel.SetText(s.formatsSummary())
+
+	form := widget.NewForm(
+		widget.NewFormItem("Source type", srcSelect),
+		widget.NewFormItem("Source", container.NewBorder(nil, nil, nil, browse, s.src)),
+		widget.NewFormItem("Formats", container.NewBorder(nil, nil, nil, widget.NewButton("Choose formats…", func() {
+			s.screen = scrFormats
+			s.render()
+		}), s.formatsLabel)),
+	)
+
 	if s.src.Text == "" {
 		return container.NewVBox(
-			widget.NewLabel("SRC is not set — go to Settings and set the source folder first."),
-			widget.NewButton("Open Settings", func() {
-				s.screen = scrSettings
-				s.render()
-			}),
+			widget.NewLabel("Synchronize — choose a source and the formats to read."),
+			form,
+			widget.NewLabel("SRC can be a folder, a .zip archive or a .json file."),
 		)
 	}
 
+	// For non-filesystem sources, show an import button directly.
+	if s.importSource != core.SourceFilesystem {
+		return container.NewVBox(
+			widget.NewLabel("Synchronize — choose a source and the formats to read."),
+			form,
+			container.NewHBox(
+				widget.NewButton("Import all", s.startImport),
+				widget.NewLabel("All files from the source will be imported into the database."),
+			),
+		)
+	}
+
+	// Filesystem source: show sync diff interface.
 	if s.syncItems == nil {
 		return container.NewVBox(
+			widget.NewLabel("Synchronize — choose a source and the formats to read."),
+			form,
 			widget.NewLabel("Comparing database with folder: " + s.src.Text + " …"),
 			widget.NewButton("Run comparison", func() {
 				go s.runSyncDiff()
@@ -132,6 +188,8 @@ func (s *state) syncScreen() fyne.CanvasObject {
 
 	if len(s.syncItems) == 0 {
 		return container.NewVBox(
+			widget.NewLabel("Synchronize — choose a source and the formats to read."),
+			form,
 			widget.NewLabel("Everything is in sync — no differences found."),
 			widget.NewLabel("Source: " + s.src.Text),
 			container.NewHBox(
@@ -200,9 +258,9 @@ func (s *state) syncScreen() fyne.CanvasObject {
 	)
 
 	return container.NewBorder(
-		widget.NewLabel("Select files to synchronize — all differences are selected by default."),
+		widget.NewLabel("Synchronize — choose a source and the formats to read."),
 		bottom, nil, nil,
-		scroll,
+		container.NewVBox(form, scroll),
 	)
 }
 

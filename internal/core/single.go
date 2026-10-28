@@ -184,16 +184,15 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 }
 
 type extractDataCandidate struct {
-	id       int64
-	path     string
-	name     string
-	abs      string
-	blob     string
-	content  string
-	mime     string
-	text     string
-	tool     string
-	textPath string
+	id      int64
+	path    string
+	name    string
+	abs     string
+	blob    string
+	content string
+	mime    string
+	text    string
+	tool    string
 }
 
 // ExtractDataForAll turns every imported document, image and audio file into
@@ -203,7 +202,7 @@ type extractDataCandidate struct {
 // "Data extraction" process so they can be inspected from the database browser.
 func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	rows, err := db.Query(`SELECT id, file_path, file_name, abs_path, blob_path, content, mime_type,
-		extracted_text, extracted_path, extract_tool FROM notes ORDER BY id`)
+		markdown, extract_tool FROM notes ORDER BY id`)
 	if err != nil {
 		return err
 	}
@@ -211,7 +210,7 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 	for rows.Next() {
 		var n extractDataCandidate
 		if err := rows.Scan(&n.id, &n.path, &n.name, &n.abs, &n.blob, &n.content, &n.mime,
-			&n.text, &n.textPath, &n.tool); err != nil {
+			&n.text, &n.tool); err != nil {
 			rows.Close()
 			return err
 		}
@@ -219,7 +218,6 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 		if !IsExtractable(n.name, n.mime) && !strings.HasPrefix(n.mime, "image/") {
 			continue
 		}
-		n.text = resolveExtractedText(db, n.text, n.textPath)
 		candidates = append(candidates, n)
 	}
 	rows.Close()
@@ -283,17 +281,10 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 			r.Advance(false)
 			continue
 		}
-		// Store the result as a Markdown file. It is the single source of truth
-		// for both the database browser and export, so sqlite stays small.
-		if extractedNow || n.textPath == "" {
-			link, err := writeExtractedFile(db, n.path, n.name, text)
-			if err != nil {
-				_, _ = db.Exec(`UPDATE notes SET extract_error=? WHERE id=?`, "store extracted text: "+err.Error(), n.id)
-				r.Fail("%s: store extracted text: %v", n.name, err)
-				r.Advance(false)
-				continue
-			}
-			if _, err := db.Exec(`UPDATE notes SET extracted_text='', extracted_path=?, extract_error='', extract_tool=? WHERE id=?`, link, tool, n.id); err != nil {
+		// Store the result directly in the markdown column — it is the single
+		// source of truth for export, LLM prompts and the database browser.
+		if extractedNow {
+			if _, err := db.Exec(`UPDATE notes SET markdown=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id); err != nil {
 				r.Fail("%s: %v", n.name, err)
 				r.Advance(false)
 				continue

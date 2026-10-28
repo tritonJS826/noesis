@@ -196,18 +196,18 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName 
 
 	type rec struct {
 		id                     int64
-		path, content          string
-		extracted, mime, links string
+		path, markdown         string
+		mime, links            string
 		hash                   string
 	}
-	rows, err := db.Query(`SELECT id, file_path, content, extracted_text, mime_type, links_md, out_hash FROM notes ORDER BY id`)
+	rows, err := db.Query(`SELECT id, file_path, markdown, mime_type, links_md, out_hash FROM notes ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	var recs []rec
 	for rows.Next() {
 		var rec rec
-		if err := rows.Scan(&rec.id, &rec.path, &rec.content, &rec.extracted, &rec.mime, &rec.links, &rec.hash); err != nil {
+		if err := rows.Scan(&rec.id, &rec.path, &rec.markdown, &rec.mime, &rec.links, &rec.hash); err != nil {
 			rows.Close()
 			return err
 		}
@@ -233,14 +233,10 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName 
 		}
 		trows.Close()
 
-		// Binary documents (PDF, Office, audio…) are exported as their plain
-		// extracted text instead of the raw base64 payload. Older databases may
-		// lack a mime type, so fall back to the file extension.
-		mime := rec.mime
-		if mime == "" {
-			mime = extMime[strings.ToLower(path.Ext(rec.path))]
-		}
-		content := textForModel(rec.content, rec.extracted, mime)
+		// Use the markdown field — it already contains the human-readable text
+		// for every note type (original content for text files, extracted text
+		// for documents/audio, vision descriptions for images).
+		content := textForModel(rec.markdown, rec.mime)
 		text := renderExport(db, templateName, rec.id, rec.path, content, rec.links, tags)
 		sum := sha256.Sum256([]byte(text))
 		h := hex.EncodeToString(sum[:])

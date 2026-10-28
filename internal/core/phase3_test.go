@@ -30,7 +30,7 @@ func TestExportPath(t *testing.T) {
 func TestPhase3ExportsPlainTextForDocuments(t *testing.T) {
 	db := openTestDB(t)
 	raw := base64.StdEncoding.EncodeToString([]byte("%PDF-1.7 binary payload"))
-	if _, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, extracted_text, imported_at)
+	if _, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
 		VALUES('docs/a.pdf','/x/docs/a.pdf','a.pdf',?,'application/pdf','Hello from the PDF','2024-01-02')`, raw); err != nil {
 		t.Fatal(err)
 	}
