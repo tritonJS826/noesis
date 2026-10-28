@@ -39,6 +39,35 @@ func TestExpandPromptDollarSyntax(t *testing.T) {
 	}
 }
 
+func TestMigratePromptPlaceholders(t *testing.T) {
+	db := openTestDB(t)
+	legacy := "=== {FILE_NAME} ===\n${CONTENT}\n{LINKED_NOTES}\n{\"novelty\":\"high\"}"
+	if err := SavePrompt(db, "legacy", legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveExportTemplate(db, "legacy", "{body}${tags}"); err != nil {
+		t.Fatal(err)
+	}
+
+	migratePromptPlaceholders(db)
+
+	got := LoadPrompt(db, "legacy")
+	want := "=== ${FILE_NAME} ===\n${CONTENT}\n${LINKED_NOTES}\n{\"novelty\":\"high\"}"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := LoadExportTemplate(db, "legacy"); got != "${body}${tags}" {
+		t.Fatalf("template got %q", got)
+	}
+}
+
+func TestExpandPromptDoesNotExpandValues(t *testing.T) {
+	got := expandPrompt("${CONTENT}", map[string]string{"CONTENT": "literal {FILE_NAME}", "FILE_NAME": "a.md"})
+	if got != "literal {FILE_NAME}" {
+		t.Fatalf("inserted value was re-expanded: %q", got)
+	}
+}
+
 func TestNoteDBVars(t *testing.T) {
 	db := openTestDB(t)
 	id := insertNote(t, db)
@@ -110,6 +139,59 @@ func TestDefaultExportTemplateMatchesLegacy(t *testing.T) {
 		if got != want {
 			t.Fatalf("%s:\ngot  %q\nwant %q", c.name, got, want)
 		}
+	}
+}
+
+func TestNoteRecord(t *testing.T) {
+	db := openTestDB(t)
+	id := insertNote(t, db)
+	if _, err := db.Exec(`INSERT INTO tags(note_id, tag) VALUES(?,?), (?,?)`, id, "b", id, "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	fields, err := NoteRecord(db, id)
+	if err != nil {
+		t.Fatalf("note record: %v", err)
+	}
+	got := make(map[string]string, len(fields))
+	for _, f := range fields {
+		got[f.Name] = f.Value
+	}
+	if got["file_name"] != "a.md" || got["file_path"] != "dir/a.md" || got["content"] != "hello" {
+		t.Fatalf("unexpected record: %#v", got)
+	}
+	if got["tags"] != "a, b" {
+		t.Fatalf("unexpected tags: %q", got["tags"])
+	}
+	if len(fields) != len(NotesColumns(db))+1 {
+		t.Fatalf("got %d fields, want %d columns + tags", len(fields), len(NotesColumns(db)))
+	}
+}
+
+func TestOpenDBMigratesLegacyPrompts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SavePrompt(db, "legacy", "=== {FILE_NAME} ===\n{CONTENT}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if got := LoadPrompt(db, "legacy"); got != "=== ${FILE_NAME} ===\n${CONTENT}" {
+		t.Fatalf("legacy prompt was not migrated: %q", got)
+	}
+	if got := LoadPrompt(db, "eval"); strings.Contains(got, "$${") {
+		t.Fatalf("supported placeholder was double-expanded: %q", got)
 	}
 }
 

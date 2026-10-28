@@ -10,6 +10,20 @@ import (
 	"noesis/internal/core"
 )
 
+func vimNav(key string) string {
+	switch key {
+	case "j":
+		return "down"
+	case "k":
+		return "up"
+	case "h":
+		return "esc"
+	case "l":
+		return "enter"
+	}
+	return key
+}
+
 func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch m.screen {
 	case scrMenu:
@@ -44,6 +58,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.exportTemplateDetailKeys(msg)
 	case scrBrowse:
 		return m.browseKeys(msg)
+	case scrBrowseDetail:
+		return m.browseDetailKeys(msg)
 	case scrRunning:
 	}
 	return nil
@@ -54,7 +70,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 const menuItems = 6 // 0..6
 
 func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "q", "ctrl+c":
 		return tea.Quit
 	case "up":
@@ -116,7 +132,7 @@ func (m *model) startPhase(phase core.Phase, needSrc, needOut bool, promptName, 
 // ─── import submenu ─────────────────────────────────────────────────────────
 
 func (m *model) importKeys(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.importCursor > 0 {
 			m.importCursor--
@@ -156,12 +172,12 @@ func (m *model) formatsKeys(msg tea.KeyMsg) tea.Cmd {
 	if page < 1 {
 		page = 10
 	}
-	switch msg.String() {
-	case "up", "k":
+	switch vimNav(msg.String()) {
+	case "up":
 		if m.fmtCursor > 0 {
 			m.fmtCursor--
 		}
-	case "down", "j":
+	case "down":
 		if m.fmtCursor < len(formats)-1 {
 			m.fmtCursor++
 		}
@@ -210,10 +226,10 @@ func (m *model) toggleFormat(ext string) {
 
 // ─── work with data submenu ────────────────────────────────────────────────
 
-const dataItems = 3 // 0..3
+const dataItems = 1 // 0..1
 
 func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.dataCursor > 0 {
 			m.dataCursor--
@@ -226,15 +242,12 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 		switch m.dataCursor {
 		case 0: // browse database
 			m.openBrowse()
-		case 1: // remove file
-			m.openPickData(0)
-		case 2: // remove file + links
-			m.openPickData(1)
-		case 3: // compare file — file system search
+		case 1: // compare file — file system search
 			m.screen = scrFsSearch
 			m.fsFilter = ""
 			m.fsFiles = nil
 			m.cursor = 0
+			m.filterTyping = false
 		}
 	case "esc", "q":
 		m.screen = scrMenu
@@ -254,6 +267,7 @@ func (m *model) openPickData(mode int) {
 	m.fileFilter = ""
 	m.pickResult = ""
 	m.pickErr = ""
+	m.filterTyping = false
 	m.screen = scrPickData
 }
 
@@ -273,6 +287,7 @@ func (m *model) openBrowse() {
 	m.browseResult = ""
 	m.browseErr = ""
 	m.cursor = 0
+	m.filterTyping = false
 	m.screen = scrBrowse
 }
 
@@ -285,11 +300,26 @@ func (m *model) filteredBrowse() []core.NoteDetail {
 	for _, n := range m.browseNotes {
 		if strings.Contains(strings.ToLower(n.FilePath), filter) ||
 			strings.Contains(strings.ToLower(n.FileName), filter) ||
-			strings.Contains(strings.ToLower(n.MimeType), filter) {
+			strings.Contains(strings.ToLower(n.MimeType), filter) ||
+			strings.Contains(strings.ToLower(n.Tags), filter) {
 			out = append(out, n)
 		}
 	}
 	return out
+}
+
+func (m *model) openBrowseDetail(n core.NoteDetail) {
+	fields, err := core.NoteRecord(m.db, n.ID)
+	if err != nil {
+		m.browseErr = err.Error()
+		return
+	}
+	m.browseDetail = fields
+	m.browseDetailID = n.ID
+	m.browseDetailPath = n.FilePath
+	m.browseDetailConfirm = false
+	m.filterTyping = false
+	m.screen = scrBrowseDetail
 }
 
 func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
@@ -307,43 +337,72 @@ func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// Dismiss a removal error on any key; navigation keys keep working.
-	if m.browseErr != "" {
-		m.browseErr = ""
-		switch msg.String() {
-		case "up", "down", "enter", "1", "2", "3", "4", "5", "esc", "q", "backspace":
+	// A previous removal error is dismissed by the next key press.
+	m.browseErr = ""
+
+	key := msg.String()
+	if m.filterTyping {
+		switch key {
+		case "esc":
+			m.filterTyping = false
+		case "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down":
+			if m.cursor < len(m.filteredBrowse())-1 {
+				m.cursor++
+			}
+		case "enter":
+			filtered := m.filteredBrowse()
+			if len(filtered) > 0 && m.cursor < len(filtered) {
+				m.openBrowseDetail(filtered[m.cursor])
+			}
+		case "backspace":
+			r := []rune(m.browseFilter)
+			if len(r) > 0 {
+				m.browseFilter = string(r[:len(r)-1])
+			}
+			m.cursor = 0
+			m.browseResult = ""
 		default:
-			return nil
+			if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+				m.browseFilter += string(msg.Runes[0])
+				m.cursor = 0
+				m.browseResult = ""
+			}
 		}
+		return nil
 	}
 
-	switch msg.String() {
+	switch vimNav(key) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
 		}
 		m.browseResult = ""
-		m.browseErr = ""
 	case "down":
 		if m.cursor < len(m.filteredBrowse())-1 {
 			m.cursor++
 		}
 		m.browseResult = ""
-		m.browseErr = ""
 	case "enter":
+		filtered := m.filteredBrowse()
+		if len(filtered) > 0 && m.cursor < len(filtered) {
+			m.openBrowseDetail(filtered[m.cursor])
+		}
+	case "delete":
 		filtered := m.filteredBrowse()
 		if len(filtered) > 0 && m.cursor < len(filtered) {
 			n := filtered[m.cursor]
 			m.browseConfirmID = n.ID
 			m.browseConfirm = true
-			m.browseErr = ""
 			m.browseResult = fmt.Sprintf("Remove %q — are you sure? (y/N)", n.FilePath)
 		}
-	case "1", "2", "3", "4", "5":
-		idx := int(msg.Runes[0] - '1')
+	case "f1", "f2", "f3", "f4", "f5":
+		idx := int(key[1] - '1')
 		m.browseCols[idx] = !m.browseCols[idx]
 		m.browseResult = ""
-		m.browseErr = ""
 	case "esc", "q":
 		m.screen = scrData
 		m.dataCursor = 0
@@ -354,14 +413,41 @@ func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.cursor = 0
 		m.browseResult = ""
-		m.browseErr = ""
 	default:
+		if key == "/" {
+			m.filterTyping = true
+			return nil
+		}
 		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.filterTyping = true
 			m.browseFilter += string(msg.Runes[0])
 			m.cursor = 0
 			m.browseResult = ""
-			m.browseErr = ""
 		}
+	}
+	return nil
+}
+
+func (m *model) browseDetailKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.browseDetailConfirm {
+		switch msg.String() {
+		case "y", "Y":
+			m.browseDetailConfirm = false
+			m.removeFromDetail = true
+			m.browseResult = ""
+			return removeNoteCmd(m.db, m.browseDetailID, 0)
+		default:
+			m.browseDetailConfirm = false
+		}
+		return nil
+	}
+
+	switch vimNav(msg.String()) {
+	case "d", "delete":
+		m.browseDetailConfirm = true
+	case "esc", "q":
+		m.screen = scrBrowse
+		m.browseDetail = nil
 	}
 	return nil
 }
@@ -487,7 +573,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		return m.promptKeys(msg)
 	}
 	max := 8 // 0..8 (added Reset database)
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -511,7 +597,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *model) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -541,13 +627,45 @@ func (m *model) openFilePicker() {
 	m.fileNotes = notes
 	m.cursor = 0
 	m.fileFilter = ""
+	m.filterTyping = false
 	m.evalReturn = scrMenu
 	m.evalReturnCursor = 5
 	m.screen = scrFilePicker
 }
 
 func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
+	key := msg.String()
+	if m.filterTyping {
+		switch key {
+		case "esc":
+			m.filterTyping = false
+		case "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down":
+			filtered := m.filteredNotes()
+			if m.cursor < len(filtered)-1 {
+				m.cursor++
+			}
+		case "enter":
+			return m.evalSelectedFile()
+		case "backspace":
+			r := []rune(m.fileFilter)
+			if len(r) > 0 {
+				m.fileFilter = string(r[:len(r)-1])
+			}
+			m.cursor = 0
+		default:
+			if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+				m.fileFilter += string(msg.Runes[0])
+				m.cursor = 0
+			}
+		}
+		return nil
+	}
+
+	switch vimNav(key) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -558,19 +676,8 @@ func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor++
 		}
 	case "enter":
-		filtered := m.filteredNotes()
-		if len(filtered) > 0 && m.cursor < len(filtered) {
-			id := filtered[m.cursor].ID
-			linked, _ := core.LinkedNoteIDs(m.db, id)
-			m.evalResult = ""
-			m.evalErr = ""
-			m.evalLoading = true
-			m.evalReturn = scrFilePicker
-			m.evalReturnCursor = m.cursor
-			m.screen = scrEval
-			return evalNoteCmd(m.db, id, m.host, m.modelName, m.maxChars, linked)
-		}
-	case "esc":
+		return m.evalSelectedFile()
+	case "esc", "q":
 		m.screen = scrMenu
 		m.cursor = 5
 	case "backspace":
@@ -580,12 +687,34 @@ func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.cursor = 0
 	default:
+		if key == "/" {
+			m.filterTyping = true
+			return nil
+		}
 		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.filterTyping = true
 			m.fileFilter += string(msg.Runes[0])
 			m.cursor = 0
 		}
 	}
 	return nil
+}
+
+func (m *model) evalSelectedFile() tea.Cmd {
+	filtered := m.filteredNotes()
+	if len(filtered) == 0 || m.cursor >= len(filtered) {
+		return nil
+	}
+	id := filtered[m.cursor].ID
+	linked, _ := core.LinkedNoteIDs(m.db, id)
+	m.evalResult = ""
+	m.evalErr = ""
+	m.evalLoading = true
+	m.evalReturn = scrFilePicker
+	m.evalReturnCursor = m.cursor
+	m.filterTyping = false
+	m.screen = scrEval
+	return evalNoteCmd(m.db, id, m.host, m.modelName, m.maxChars, linked)
 }
 
 func (m *model) filteredNotes() []core.NoteInfo {
@@ -858,7 +987,7 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	max := len(m.processList) // last item is "add new"
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -909,7 +1038,7 @@ func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -980,7 +1109,7 @@ func (m *model) openExportTemplates() {
 
 func (m *model) exportTemplatesKeys(msg tea.KeyMsg) tea.Cmd {
 	max := len(m.templateList) // last item is "add new"
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -1026,7 +1155,7 @@ func (m *model) exportTemplateDetailKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-	switch msg.String() {
+	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -1069,11 +1198,44 @@ func (m *model) openFsSearch() {
 	m.fsFilter = ""
 	m.fsFiles = nil
 	m.cursor = 0
+	m.filterTyping = false
 	m.screen = scrFsSearch
 }
 
 func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
+	key := msg.String()
+	if m.filterTyping {
+		switch key {
+		case "esc":
+			m.filterTyping = false
+		case "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down":
+			if m.cursor < len(m.fsFiles)-1 {
+				m.cursor++
+			}
+		case "enter":
+			return m.compareSelectedFile()
+		case "backspace":
+			r := []rune(m.fsFilter)
+			if len(r) > 0 {
+				m.fsFilter = string(r[:len(r)-1])
+			}
+			m.cursor = 0
+			return fsSearchCmd(m.fsFilter)
+		default:
+			if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+				m.fsFilter += string(msg.Runes[0])
+				m.cursor = 0
+				return fsSearchCmd(m.fsFilter)
+			}
+		}
+		return nil
+	}
+
+	switch vimNav(key) {
 	case "up":
 		if m.cursor > 0 {
 			m.cursor--
@@ -1083,18 +1245,10 @@ func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor++
 		}
 	case "enter":
-		if len(m.fsFiles) > 0 && m.cursor < len(m.fsFiles) {
-			m.evalResult = ""
-			m.evalErr = ""
-			m.evalLoading = true
-			m.evalReturn = scrFsSearch
-			m.evalReturnCursor = m.cursor
-			m.screen = scrEval
-			return compareFileCmd(m.db, m.fsFiles[m.cursor], m.host, m.modelName, m.maxChars)
-		}
-	case "esc":
+		return m.compareSelectedFile()
+	case "esc", "q":
 		m.screen = scrData
-		m.dataCursor = 3
+		m.dataCursor = 1
 	case "backspace":
 		r := []rune(m.fsFilter)
 		if len(r) > 0 {
@@ -1103,13 +1257,33 @@ func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
 		m.cursor = 0
 		return fsSearchCmd(m.fsFilter)
 	default:
+		if key == "/" {
+			m.filterTyping = true
+			return nil
+		}
 		if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+			m.filterTyping = true
 			m.fsFilter += string(msg.Runes[0])
 			m.cursor = 0
 			return fsSearchCmd(m.fsFilter)
 		}
 	}
 	return nil
+}
+
+func (m *model) compareSelectedFile() tea.Cmd {
+	if len(m.fsFiles) == 0 || m.cursor >= len(m.fsFiles) {
+		return nil
+	}
+	path := m.fsFiles[m.cursor]
+	m.evalResult = ""
+	m.evalErr = ""
+	m.evalLoading = true
+	m.evalReturn = scrFsSearch
+	m.evalReturnCursor = m.cursor
+	m.filterTyping = false
+	m.screen = scrEval
+	return compareFileCmd(m.db, path, m.host, m.modelName, m.maxChars)
 }
 
 func fsSearchCmd(filter string) tea.Cmd {

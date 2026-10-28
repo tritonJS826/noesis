@@ -38,6 +38,7 @@ const (
 	scrExportTemplates
 	scrExportTemplateDetail
 	scrBrowse
+	scrBrowseDetail
 )
 
 type ollamaMsg struct {
@@ -117,6 +118,16 @@ type model struct {
 	browseResult     string
 	browseErr        string
 	removeFromBrowse bool
+
+	browseDetail        []core.NoteField
+	browseDetailID      int64
+	browseDetailPath    string
+	browseDetailConfirm bool
+	removeFromDetail    bool
+
+	// filterTyping is true while a filter/search field is capturing text.
+	// Outside that mode h/j/k/l work as Vim navigation keys.
+	filterTyping bool
 
 	comparePath string
 
@@ -361,6 +372,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case removeMsg:
+		if m.removeFromDetail {
+			m.removeFromDetail = false
+			if msg.err != nil {
+				m.browseErr = msg.err.Error()
+				m.browseResult = ""
+			} else {
+				m.browseResult = fmtRemoveResult(msg.removed, msg.scrubbed)
+				m.browseErr = ""
+			}
+			if notes, err := core.ListNotesDetailed(m.db); err == nil {
+				m.browseNotes = notes
+			}
+			if m.cursor >= len(m.filteredBrowse()) && m.cursor > 0 {
+				m.cursor--
+			}
+			m.browseDetail = nil
+			m.browseDetailID = 0
+			m.browseDetailPath = ""
+			m.screen = scrBrowse
+			return m, nil
+		}
 		if m.removeFromBrowse {
 			m.removeFromBrowse = false
 			if msg.err != nil {

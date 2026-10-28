@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -78,6 +79,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	migratePromptNames(db)
 	seedPrompts(db)
 	seedExportTemplates(db)
+	migratePromptPlaceholders(db)
 	return db, nil
 }
 
@@ -102,6 +104,67 @@ func migratePromptNames(db *sql.DB) {
 		return
 	}
 	_, _ = db.Exec(`UPDATE process_output SET process_name=? WHERE process_name=?`, DefaultPairPrompt, "phase2")
+}
+
+// legacyPlaceholder matches the old {KEY} form used by early prompt versions.
+// The optional leading $ lets the migrator skip placeholders that already use
+// the supported ${KEY} syntax.
+var legacyPlaceholder = regexp.MustCompile(`\$?\{([A-Za-z_][A-Za-z0-9_.]*)\}`)
+
+// migratePromptPlaceholders upgrades legacy {KEY} placeholders in stored
+// prompts and export templates to the supported ${KEY} syntax. Only known
+// variable names are changed, so JSON examples inside prompts stay intact.
+func migratePromptPlaceholders(db *sql.DB) {
+	known := map[string]bool{
+		"FILE_NAME": true, "CONTENT": true, "LINKED_NOTES": true,
+		"A_NAME": true, "A_CONTENT": true, "B_NAME": true, "B_CONTENT": true,
+		"frontmatter_block": true, "frontmatter": true, "body": true, "related": true,
+		"links": true, "tags": true, "tags_yaml": true, "tags_inline": true,
+		"name": true, "title": true, "path": true,
+	}
+	if cols, err := noteColumns(db); err == nil {
+		for _, c := range cols {
+			known["db."+c] = true
+			known["db_b."+c] = true
+		}
+	}
+
+	upgrade := func(s string) string {
+		return legacyPlaceholder.ReplaceAllStringFunc(s, func(match string) string {
+			if strings.HasPrefix(match, "$") {
+				return match
+			}
+			key := strings.TrimSuffix(strings.TrimPrefix(match, "{"), "}")
+			if known[key] {
+				return "${" + key + "}"
+			}
+			return match
+		})
+	}
+
+	migrateTable := func(table, textColumn string) {
+		rows, err := db.Query(fmt.Sprintf(`SELECT name, %s FROM %s`, textColumn, table))
+		if err != nil {
+			return
+		}
+		type update struct{ name, text string }
+		var updates []update
+		for rows.Next() {
+			var name, text string
+			if err := rows.Scan(&name, &text); err != nil {
+				continue
+			}
+			if next := upgrade(text); next != text {
+				updates = append(updates, update{name, next})
+			}
+		}
+		rows.Close()
+		for _, u := range updates {
+			_, _ = db.Exec(fmt.Sprintf(`UPDATE %s SET %s=? WHERE name=?`, table, textColumn), u.text, u.name)
+		}
+	}
+	migrateTable("prompts", "prompt")
+	migrateTable("export_templates", "template")
 }
 
 // ensureColumn adds a column to an existing table if it is missing, so that
@@ -206,14 +269,20 @@ func LoadPrompt(db *sql.DB, name string) string {
 	return ""
 }
 
+// promptPlaceholder matches the ${KEY} placeholder syntax used by prompts and
+// export templates.
+var promptPlaceholder = regexp.MustCompile(`\$\{([^{}]+)\}`)
+
 // expandPrompt replaces ${KEY} placeholders in tmpl with values from vars.
 // Unknown placeholders are left untouched so users can spot typos.
 func expandPrompt(tmpl string, vars map[string]string) string {
-	s := tmpl
-	for k, v := range vars {
-		s = strings.ReplaceAll(s, "${"+k+"}", v)
-	}
-	return s
+	return promptPlaceholder.ReplaceAllStringFunc(tmpl, func(match string) string {
+		key := strings.TrimSuffix(strings.TrimPrefix(match, "${"), "}")
+		if v, ok := vars[key]; ok {
+			return v
+		}
+		return match
+	})
 }
 
 // noteColumns returns the column names of the notes table, in schema order.
@@ -410,6 +479,61 @@ func ListNotesDetailed(db *sql.DB) ([]NoteDetail, error) {
 		notes = append(notes, n)
 	}
 	return notes, rows.Err()
+}
+
+// NoteField is one named value of a note, used by the database detail view.
+type NoteField struct {
+	Name  string
+	Value string
+}
+
+// NoteRecord returns every notes-table column of a note (in schema order) plus
+// its tags, so the UI can show the complete record.
+func NoteRecord(db *sql.DB, id int64) ([]NoteField, error) {
+	cols, err := noteColumns(db)
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("notes table has no columns")
+	}
+
+	quoted := make([]string, len(cols))
+	for i, c := range cols {
+		quoted[i] = `"` + strings.ReplaceAll(c, `"`, `""`) + `"`
+	}
+	vals := make([]sql.NullString, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err := db.QueryRow(`SELECT `+strings.Join(quoted, ",")+` FROM notes WHERE id=?`, id).Scan(ptrs...); err != nil {
+		return nil, err
+	}
+
+	fields := make([]NoteField, 0, len(cols)+1)
+	for i, c := range cols {
+		fields = append(fields, NoteField{Name: c, Value: vals[i].String})
+	}
+
+	rows, err := db.Query(`SELECT tag FROM tags WHERE note_id=? ORDER BY tag`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tags []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		tags = append(tags, tag)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	fields = append(fields, NoteField{Name: "tags", Value: strings.Join(tags, ", ")})
+	return fields, nil
 }
 
 // LinkedNoteIDs returns IDs of notes linked from the given note.

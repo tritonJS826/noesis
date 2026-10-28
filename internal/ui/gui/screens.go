@@ -194,8 +194,6 @@ func (s *state) formatsScreen() fyne.CanvasObject {
 func (s *state) dataScreen() fyne.CanvasObject {
 	items := []string{
 		"Browse database",
-		"Remove file",
-		"Remove file + Obsidian links",
 		"Compare file (filesystem search)",
 	}
 	list := widget.NewList(
@@ -208,10 +206,6 @@ func (s *state) dataScreen() fyne.CanvasObject {
 		case 0:
 			s.openBrowse()
 		case 1:
-			s.openNotes(noteRemove, scrData)
-		case 2:
-			s.openNotes(noteRemoveLinks, scrData)
-		case 3:
 			s.openFsSearch()
 		}
 	}
@@ -314,7 +308,8 @@ func (s *state) filteredBrowseNotes() []core.NoteDetail {
 	for _, n := range s.browseNotes {
 		if strings.Contains(strings.ToLower(n.FilePath), filter) ||
 			strings.Contains(strings.ToLower(n.FileName), filter) ||
-			strings.Contains(strings.ToLower(n.MimeType), filter) {
+			strings.Contains(strings.ToLower(n.MimeType), filter) ||
+			strings.Contains(strings.ToLower(n.Tags), filter) {
 			out = append(out, n)
 		}
 	}
@@ -363,7 +358,7 @@ func (s *state) browseRowText(n core.NoteDetail) string {
 
 func (s *state) browseScreen() fyne.CanvasObject {
 	filter := widget.NewEntry()
-	filter.SetPlaceHolder("filter by path or format…")
+	filter.SetPlaceHolder("filter by path, format or tags…")
 	filter.SetText(s.browseFilter)
 
 	list := widget.NewList(
@@ -380,7 +375,7 @@ func (s *state) browseScreen() fyne.CanvasObject {
 		notes := s.filteredBrowseNotes()
 		list.UnselectAll()
 		if id < len(notes) {
-			s.removeBrowseNote(notes[id])
+			s.openBrowseDetail(notes[id])
 		}
 	}
 
@@ -420,8 +415,43 @@ func (s *state) browseScreen() fyne.CanvasObject {
 
 	return container.NewBorder(
 		top,
-		widget.NewLabel("Type to filter by path/format · select a row to remove it · ← Back returns."),
+		widget.NewLabel("Type to filter by path/format/tags · select a row to view the full record · ← Back returns."),
 		nil, nil, list,
+	)
+}
+
+// browseDetailScreen shows every column of a single note and allows removing
+// it from the database.
+func (s *state) browseDetailScreen() fyne.CanvasObject {
+	if len(s.browseDetail) == 0 {
+		return container.NewVBox(widget.NewLabel("No data."))
+	}
+
+	content := container.NewVBox()
+	for _, f := range s.browseDetail {
+		content.Add(widget.NewLabelWithStyle(f.Name, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+		value := widget.NewLabel(f.Value)
+		value.Wrapping = fyne.TextWrapWord
+		value.Selectable = true
+		content.Add(value)
+		content.Add(widget.NewSeparator())
+	}
+	scroll := container.NewVScroll(content)
+	scroll.SetMinSize(fyne.NewSize(720, 420))
+
+	remove := widget.NewButton("Remove from database", s.removeBrowseNote)
+	remove.Importance = widget.DangerImportance
+
+	return container.NewBorder(
+		widget.NewLabel("Full record — column name and value."),
+		container.NewHBox(
+			remove,
+			widget.NewButton("Back", func() {
+				s.screen = scrBrowse
+				s.render()
+			}),
+		),
+		nil, nil, scroll,
 	)
 }
 

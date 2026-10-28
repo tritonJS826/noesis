@@ -41,6 +41,7 @@ const (
 	scrExportTemplates
 	scrExportTemplateDetail
 	scrBrowse
+	scrBrowseDetail
 )
 
 type noteAction int
@@ -112,6 +113,9 @@ type state struct {
 	browseNotes  []core.NoteDetail
 	browseFilter string
 	browseCols   map[string]bool
+	browseDetail []core.NoteField
+	browseNoteID int64
+	browsePath   string
 
 	// filesystem search for compare
 	fsFilter string
@@ -294,6 +298,8 @@ func (s *state) screenTitle() string {
 		return "Export template: " + s.templateName
 	case scrBrowse:
 		return "Browse database"
+	case scrBrowseDetail:
+		return "Note record: " + s.browsePath
 	case scrRunning:
 		return "Processing…"
 	default:
@@ -326,6 +332,8 @@ func (s *state) goBack() {
 		return
 	case scrBrowse:
 		s.screen = scrData
+	case scrBrowseDetail:
+		s.screen = scrBrowse
 	case scrRunning:
 		return
 	default:
@@ -362,6 +370,8 @@ func (s *state) body() fyne.CanvasObject {
 		return s.exportTemplateDetailScreen()
 	case scrBrowse:
 		return s.browseScreen()
+	case scrBrowseDetail:
+		return s.browseDetailScreen()
 	case scrRunning:
 		return s.runningScreen()
 	default:
@@ -450,9 +460,27 @@ func (s *state) reloadBrowse() {
 	}
 }
 
-func (s *state) removeBrowseNote(n core.NoteDetail) {
-	message := fmt.Sprintf("Remove %q from the database?", n.FilePath)
-	dialog.ShowConfirm("Remove file", message, func(ok bool) {
+func (s *state) openBrowseDetail(n core.NoteDetail) {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	fields, err := core.NoteRecord(db, n.ID)
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	s.browseDetail = fields
+	s.browseNoteID = n.ID
+	s.browsePath = n.FilePath
+	s.screen = scrBrowseDetail
+	s.render()
+}
+
+func (s *state) removeBrowseNote() {
+	id := s.browseNoteID
+	message := fmt.Sprintf("Remove %q from the database?", s.browsePath)
+	dialog.ShowConfirm("Remove from database", message, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -460,13 +488,17 @@ func (s *state) removeBrowseNote(n core.NoteDetail) {
 		if db == nil {
 			return
 		}
-		removed, err := core.RemoveNoteByID(db, n.ID)
+		removed, err := core.RemoveNoteByID(db, id)
 		if err != nil {
 			dialog.ShowError(err, s.win)
 			return
 		}
 		s.reloadBrowse()
 		s.refreshStats()
+		s.browseDetail = nil
+		s.browseNoteID = 0
+		s.browsePath = ""
+		s.screen = scrBrowse
 		s.phaseLabel.SetText(fmt.Sprintf("Removed %d note(s)", removed))
 		s.render()
 	}, s.win)
