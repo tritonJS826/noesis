@@ -33,11 +33,12 @@ func TestExtractDataForAllDocuments(t *testing.T) {
 		t.Fatalf("extract: %v", err)
 	}
 
-	var extracted, tool, extractErr string
-	if err := db.QueryRow(`SELECT extracted_text, extract_tool, extract_error FROM notes WHERE id=?`, id).
-		Scan(&extracted, &tool, &extractErr); err != nil {
+	var extracted, tool, extractErr, extractedPath string
+	if err := db.QueryRow(`SELECT extracted_text, extracted_path, extract_tool, extract_error FROM notes WHERE id=?`, id).
+		Scan(&extracted, &extractedPath, &tool, &extractErr); err != nil {
 		t.Fatal(err)
 	}
+	extracted = resolveExtractedText(db, extracted, extractedPath)
 	if !strings.Contains(extracted, "Hello world") || !strings.Contains(extracted, "Second line") {
 		t.Fatalf("unexpected extracted text: %q", extracted)
 	}

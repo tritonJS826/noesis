@@ -28,6 +28,7 @@ type Config struct {
 	TranscribeModel string // legacy Ollama audio transcription model
 	AudioEngine     string // whisper / google / ollama
 	WhisperModel    string
+	BinaryStorage   string // links (default) / db
 	GoogleAPIKey    string
 	SpeechLanguage  string
 	MaxChars        int
@@ -44,6 +45,7 @@ func DefaultConfig() Config {
 		TranscribeModel: DefaultTranscribeModel,
 		AudioEngine:     AudioEngineWhisper,
 		WhisperModel:    DefaultWhisperModel,
+		BinaryStorage:   BinaryStorageLinks,
 		SpeechLanguage:  DefaultSpeechLanguage,
 		MaxChars:        400000,
 		Workers:         2,

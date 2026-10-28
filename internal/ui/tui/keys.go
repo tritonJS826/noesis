@@ -31,6 +31,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.menuKeys(msg)
 	case scrImport:
 		return m.importKeys(msg)
+	case scrSync:
+		return m.syncKeys(msg)
 	case scrFormats:
 		return m.formatsKeys(msg)
 	case scrData:
@@ -74,7 +76,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // ─── main menu ───────────────────────────────────────────────────────────────
 
-const menuItems = 6 // 0..6
+const menuItems = 7 // 0..7
 
 func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 	switch vimNav(msg.String()) {
@@ -98,19 +100,25 @@ func (m *model) menuKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor = 0
 			m.pickResult = ""
 			m.pickErr = ""
-		case 1: // data processing — pairs → open pair list
+		case 1: // synchronize with folder
+			m.screen = scrSync
+			m.cursor = 0
+			m.syncItems = nil
+			m.syncChecked = nil
+			return m.runSyncDiff()
+		case 2: // data processing — pairs → open pair list
 			m.openProcessList("pair")
-		case 2: // data processing — one by one → open single list
+		case 3: // data processing — one by one → open single list
 			m.openProcessList("single")
-		case 3: // export for obsidian → choose a template
+		case 4: // export for obsidian → choose a template
 			m.openExportTemplates()
-		case 4: // work with data
+		case 5: // work with data
 			m.screen = scrData
 			m.dataCursor = 0
 			m.cursor = 0
-		case 5: // evaluate note uniqueness
+		case 6: // evaluate note uniqueness
 			m.openFilePicker()
-		case 6: // settings
+		case 7: // settings
 			m.screen = scrSettings
 			m.cursor = 0
 		}
@@ -169,6 +177,119 @@ func (m *model) importKeys(msg tea.KeyMsg) tea.Cmd {
 		m.cursor = 0
 	}
 	return nil
+}
+
+// ─── sync ───────────────────────────────────────────────────────────────────
+
+func (m *model) syncKeys(msg tea.KeyMsg) tea.Cmd {
+	switch vimNav(msg.String()) {
+	case "up":
+		if m.syncCursor > 0 {
+			m.syncCursor--
+		}
+	case "down":
+		if m.syncCursor < len(m.syncItems)-1 {
+			m.syncCursor++
+		}
+	case "enter":
+		return m.applySync()
+	case "s", " ":
+		// toggle current item
+		if len(m.syncItems) > 0 && m.syncCursor < len(m.syncItems) {
+			it := m.syncItems[m.syncCursor]
+			key := syncItemKey(it)
+			if m.syncChecked == nil {
+				m.syncChecked = map[string]bool{}
+			}
+			m.syncChecked[key] = !m.syncChecked[key]
+		}
+	case "a", "A":
+		// toggle all
+		if m.syncChecked == nil {
+			m.syncChecked = map[string]bool{}
+		}
+		all := true
+		for _, it := range m.syncItems {
+			if !m.syncChecked[syncItemKey(it)] {
+				all = false
+				break
+			}
+		}
+		for _, it := range m.syncItems {
+			m.syncChecked[syncItemKey(it)] = !all
+		}
+	case "r", "R":
+		return m.runSyncDiff()
+	case "esc", "h", "q":
+		m.syncItems = nil
+		m.syncChecked = nil
+		m.screen = scrMenu
+		m.cursor = 1
+	}
+	return nil
+}
+
+func (m *model) runSyncDiff() tea.Cmd {
+	return func() tea.Msg {
+		items, err := core.SyncDiff(m.db, m.src, m.importFormats)
+		return syncDiffMsg{items, err}
+	}
+}
+
+type syncDiffMsg struct {
+	items []core.SyncItem
+	err   error
+}
+
+type syncApplyMsg struct {
+	removed  int
+	imported int
+	err      error
+}
+
+func (m *model) applySync() tea.Cmd {
+	if len(m.syncItems) == 0 {
+		return nil
+	}
+	var removeIDs []int64
+	var newPaths []string
+	for _, it := range m.syncItems {
+		key := syncItemKey(it)
+		if !m.syncChecked[key] {
+			continue
+		}
+		if it.Deleted {
+			if id := core.SyncNoteIDByPath(m.db, it.Path); id != 0 {
+				removeIDs = append(removeIDs, id)
+			}
+		}
+		if it.NewFile {
+			newPaths = append(newPaths, it.Abs)
+		}
+	}
+	if len(removeIDs) == 0 && len(newPaths) == 0 {
+		return nil
+	}
+	m.screen = scrRunning
+	m.phaseErr = nil
+	return func() tea.Msg {
+		m.program.ReleaseTerminal()
+		defer m.program.RestoreTerminal()
+
+		opts := core.ImportOptions{
+			Source:          core.SourceFilesystem,
+			Formats:         m.importFormats,
+			Host:            m.host,
+			TranscribeModel: m.transcribeModel,
+			AudioEngine:     m.audioEngine,
+			WhisperModel:    m.whisperModel,
+			BinaryStorage:   m.binaryStorage,
+			GoogleAPIKey:    m.googleAPIKey,
+			SpeechLanguage:  m.speechLanguage,
+		}
+		removed, imported, err := core.SyncApply(m.db, m.src, removeIDs, newPaths, opts)
+		return syncApplyMsg{removed, imported, err}
+	}
 }
 
 // ─── format selection ───────────────────────────────────────────────────────
@@ -626,7 +747,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.promptViewing != "" {
 		return m.promptKeys(msg)
 	}
-	max := 12 // 0..12 (SRC … EVAL PROMPT + Reset database)
+	max := 13 // 0..13 (SRC … Reset database)
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
@@ -642,7 +763,7 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	case "?":
 		m.screen = scrAudioHelp
 	case "enter":
-		if m.cursor == 12 {
+		if m.cursor == 13 {
 			// Reset database
 			m.confirmReset = true
 		} else {
@@ -708,12 +829,16 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 				m.audioEngine = core.NormalizeAudioEngine(value)
 			case "language":
 				m.speechLanguage = core.NormalizeSpeechLanguage(value)
+			case "binary":
+				m.binaryStorage = core.NormalizeBinaryStorage(value)
 			}
 			m.persistSettings()
 		}
 		m.screen = scrSettings
 		if m.pickerKind == "audio" {
 			m.cursor = 4
+		} else if m.pickerKind == "binary" {
+			m.cursor = 11
 		} else {
 			m.cursor = 7
 		}
@@ -721,6 +846,8 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 		m.screen = scrSettings
 		if m.pickerKind == "audio" {
 			m.cursor = 4
+		} else if m.pickerKind == "binary" {
+			m.cursor = 11
 		} else {
 			m.cursor = 7
 		}
@@ -931,7 +1058,10 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
 		m.editingField = "WORKERS — concurrency (1–100)"
-	case 11: // EVAL PROMPT
+	case 11: // BINARY STORAGE
+		m.openOptionPicker("binary", core.BinaryStorageIDs(), core.BinaryStorageLabels(), m.binaryStorage)
+		return
+	case 12: // EVAL PROMPT
 		m.openEvalPrompt()
 		return
 	}

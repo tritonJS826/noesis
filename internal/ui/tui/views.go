@@ -34,6 +34,8 @@ func (m *model) View() string {
 		return m.viewRunning()
 	case scrImport:
 		return m.viewImport()
+	case scrSync:
+		return m.viewSync()
 	case scrFormats:
 		return m.viewFormats()
 	case scrData:
@@ -81,6 +83,7 @@ func (m *model) viewMenu() string {
 
 	items := []string{
 		"Import",
+		"Synchronize with folder",
 		"Data processing — pairs",
 		"Data processing — one by one",
 		"Export for Obsidian",
@@ -229,6 +232,83 @@ func (m *model) formatSummary() string {
 	}
 	sortStrings(exts)
 	return strings.Join(exts, " ")
+}
+
+func (m *model) viewSync() string {
+	if m.editingField != "" {
+		return m.viewTextEdit()
+	}
+	w := m.width
+	cw := w - 4
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Synchronize database with source folder"))
+	lines = append(lines, tuiDim.Width(cw).Render("SRC: "+tuiEmpty(m.src)))
+	lines = append(lines, "")
+
+	if len(m.syncItems) == 0 {
+		lines = append(lines, tuiDim.Width(cw).Render("No differences found — everything is in sync."))
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("r refresh  ·  s run sync  ·  h/ESC back"))
+	} else {
+		lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("%d differences found", len(m.syncItems))))
+		lines = append(lines, tuiDim.Width(cw).Render("space toggle selected  ·  a select/unselect all"))
+		lines = append(lines, "")
+
+		page := m.listRows(1)
+		if page < 1 {
+			page = 10
+		}
+		start, end := listWindow(len(m.syncItems), m.syncCursor, page)
+		start = max(start, m.syncScroll-page/2)
+		end = min(end, m.syncScroll+page+page/2)
+		if start < 0 {
+			start = 0
+		}
+		if end > len(m.syncItems) {
+			end = len(m.syncItems)
+		}
+		m.syncScroll = start
+
+		for i := start; i < end; i++ {
+			it := m.syncItems[i]
+			cursor := "  "
+			if m.syncCursor == i {
+				cursor = tuiSel.Render("▸ ")
+			}
+			key := syncItemKey(it)
+			checked := m.syncChecked[key]
+			mark := "[ ]"
+			if checked {
+				mark = tuiSel.Render("[✓]")
+			}
+			prefix := "+"
+			if it.Deleted {
+				prefix = tuiRed.Render("−")
+			}
+			name := it.Name
+			if len(name) > cw-12 {
+				rs := []rune(name)
+				name = string(rs[:cw-15]) + "…"
+			}
+			line := fmt.Sprintf("%s%s %s %s", cursor, mark, prefix, name)
+			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(line))
+		}
+		lines = append(lines, "")
+		hint := fmt.Sprintf("%s   ↑↓/jk move  ·  space/s toggle  ·  a all  ·  enter apply  ·  r refresh  ·  h/ESC back",
+			scrollHint(start, end, len(m.syncItems)))
+		lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func syncItemKey(it core.SyncItem) string {
+	if it.Deleted {
+		return "del:" + it.Path
+	}
+	return "new:" + it.Path
 }
 
 func (m *model) viewFormats() string {
@@ -556,7 +636,7 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "AUDIO", "WHISPER", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "EVAL PROMPT", "Reset database"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "AUDIO", "WHISPER", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
 	googleKey := "(not set)"
 	if strings.TrimSpace(m.googleAPIKey) != "" {
 		googleKey = "(set)"
@@ -564,7 +644,8 @@ func (m *model) viewSettings() string {
 	vals := []string{m.src, m.out, m.dbPath, m.modelName,
 		core.AudioEngineLabel(m.audioEngine), m.whisperSummary(), googleKey,
 		core.SpeechLanguageLabel(m.speechLanguage), m.host,
-		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), "edit…", ""}
+		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers),
+		core.BinaryStorageLabel(m.binaryStorage), "edit…", ""}
 
 	var lines []string
 	for i, k := range keys {
@@ -574,7 +655,7 @@ func (m *model) viewSettings() string {
 		}
 		style := lipgloss.NewStyle().Width(cw)
 		line := fmt.Sprintf("%s%-12s: %s", cursor, k, vals[i])
-		if i == 12 {
+		if i == 13 {
 			if m.cursor == i {
 				line = cursor + tuiRed.Render(k)
 			} else {

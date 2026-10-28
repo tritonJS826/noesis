@@ -23,6 +23,7 @@ type screen int
 const (
 	scrMenu screen = iota
 	scrImport
+	scrSync
 	scrFormats
 	scrData
 	scrPickData
@@ -69,9 +70,9 @@ type model struct {
 	cursor  int
 
 	src, out, dbPath, modelName, host, transcribeModel string
-	audioEngine, whisperModel, googleAPIKey            string
-	speechLanguage                                     string
-	maxChars, workers                                  int
+	audioEngine, whisperModel, googleAPIKey, binaryStorage string
+	speechLanguage                                        string
+	maxChars, workers                                     int
 
 	ollamaModels []string
 	ollamaOK     bool
@@ -147,6 +148,12 @@ type model struct {
 	browseDetailOffset  int
 	removeFromDetail    bool
 
+	// sync
+	syncItems   []core.SyncItem
+	syncCursor  int
+	syncScroll  int
+	syncChecked map[string]bool // key: "del:<path>" or "new:<path>"
+
 	// filterTyping is true while a filter/search field is capturing text.
 	// Outside that mode h/j/k/l work as Vim navigation keys.
 	filterTyping bool
@@ -201,6 +208,7 @@ func newModel(db *sql.DB) *model {
 		audioEngine:     st.AudioEngine,
 		whisperModel:    st.WhisperModel,
 		googleAPIKey:    st.GoogleAPIKey,
+		binaryStorage:   st.BinaryStorage,
 		speechLanguage:  st.SpeechLanguage,
 		maxChars:        st.MaxChars,
 		workers:         st.Workers,
@@ -227,6 +235,7 @@ func (m *model) persistSettings() {
 		AudioEngine:     m.audioEngine,
 		WhisperModel:    m.whisperModel,
 		GoogleAPIKey:    m.googleAPIKey,
+		BinaryStorage:   m.binaryStorage,
 		SpeechLanguage:  m.speechLanguage,
 		MaxChars:        m.maxChars,
 		Workers:         m.workers,
@@ -277,6 +286,7 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 			TranscribeModel: transcribeModel,
 			AudioEngine:     audioEngine,
 			WhisperModel:    whisperModel,
+			BinaryStorage:   m.binaryStorage,
 			GoogleAPIKey:    googleAPIKey,
 			SpeechLanguage:  speechLanguage,
 			MaxChars:        maxChars,
@@ -304,6 +314,7 @@ func runImportCmd(m *model) tea.Cmd {
 		TranscribeModel: m.transcribeModel,
 		AudioEngine:     m.audioEngine,
 		WhisperModel:    m.whisperModel,
+		BinaryStorage:   m.binaryStorage,
 		GoogleAPIKey:    m.googleAPIKey,
 		SpeechLanguage:  m.speechLanguage,
 	}
@@ -457,6 +468,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case phaseMsg:
 		m.phaseErr = msg.err
+		m.screen = scrMenu
+		return m, nil
+
+	case syncDiffMsg:
+		m.syncItems = msg.items
+		m.syncCursor = 0
+		m.syncChecked = nil
+		if msg.err != nil {
+			m.phaseErr = msg.err
+			m.screen = scrSync
+		}
+		return m, nil
+
+	case syncApplyMsg:
+		m.phaseErr = msg.err
+		m.syncItems = nil
+		m.syncChecked = nil
 		m.screen = scrMenu
 		return m, nil
 

@@ -138,6 +138,17 @@ func deleteNotes(db *sql.DB, notes []NoteInfo) (int, error) {
 	if len(notes) == 0 {
 		return 0, nil
 	}
+	// Remember sidecar files before deleting rows so they can be cleaned up
+	// after a successful commit. Original files linked through abs_path are
+	// deliberately left untouched.
+	var stored []string
+	for _, n := range notes {
+		var extractedPath, blobPath string
+		if db.QueryRow(`SELECT extracted_path, blob_path FROM notes WHERE id=?`, n.ID).Scan(&extractedPath, &blobPath) == nil {
+			stored = append(stored, extractedPath, blobPath)
+		}
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return 0, err
@@ -158,7 +169,13 @@ func deleteNotes(db *sql.DB, notes []NoteInfo) (int, error) {
 			return 0, err
 		}
 	}
-	return len(notes), tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	for _, p := range stored {
+		removeStoredFile(db, p)
+	}
+	return len(notes), nil
 }
 
 // NoteContent holds a note's textual content for prompting (binary content is
@@ -173,13 +190,13 @@ type NoteContent struct {
 
 func loadNoteContent(db *sql.DB, id int64, maxChars int) (NoteContent, error) {
 	var n NoteContent
-	var extracted string
-	err := db.QueryRow(`SELECT id, file_name, file_path, content, extracted_text, mime_type FROM notes WHERE id=?`, id).
-		Scan(&n.ID, &n.Name, &n.Path, &n.Content, &extracted, &n.Mime)
+	var extracted, extractedPath string
+	err := db.QueryRow(`SELECT id, file_name, file_path, content, extracted_text, extracted_path, mime_type FROM notes WHERE id=?`, id).
+		Scan(&n.ID, &n.Name, &n.Path, &n.Content, &extracted, &extractedPath, &n.Mime)
 	if err != nil {
 		return n, err
 	}
-	n.Content = textForModel(n.Content, extracted, n.Mime)
+	n.Content = textForModel(n.Content, resolveExtractedText(db, extracted, extractedPath), n.Mime)
 	if r := []rune(n.Content); len(r) > maxChars {
 		n.Content = string(r[:maxChars]) + "\n[…truncated…]"
 	}
@@ -239,17 +256,17 @@ func CompareFileWithAudio(ctx context.Context, db *sql.DB, path, host, model str
 	}
 
 	var linkedTexts []string
-	rows, err := db.Query(`SELECT file_name, content, extracted_text, mime_type FROM notes ORDER BY file_name`)
+	rows, err := db.Query(`SELECT file_name, content, extracted_text, extracted_path, mime_type FROM notes ORDER BY file_name`)
 	if err != nil {
 		return "", err
 	}
 	for rows.Next() {
-		var noteName, c, extractedText, mime string
-		if err := rows.Scan(&noteName, &c, &extractedText, &mime); err != nil {
+		var noteName, c, extractedText, extractedPath, mime string
+		if err := rows.Scan(&noteName, &c, &extractedText, &extractedPath, &mime); err != nil {
 			rows.Close()
 			return "", err
 		}
-		text := textForModel(c, extractedText, mime)
+		text := textForModel(c, resolveExtractedText(db, extractedText, extractedPath), mime)
 		if r := []rune(text); len(r) > maxChars {
 			text = string(r[:maxChars]) + "\n[…truncated…]"
 		}

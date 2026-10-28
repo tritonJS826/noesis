@@ -17,6 +17,7 @@ func Phase1(ctx context.Context, r Reporter, db *sql.DB, src string) error {
 		TranscribeModel: cfg.TranscribeModel,
 		AudioEngine:     cfg.AudioEngine,
 		WhisperModel:    cfg.WhisperModel,
+		BinaryStorage:   cfg.BinaryStorage,
 		GoogleAPIKey:    cfg.GoogleAPIKey,
 		SpeechLanguage:  cfg.SpeechLanguage,
 	})

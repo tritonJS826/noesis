@@ -1078,33 +1078,39 @@ func cleanExtracted(s string) string {
 // ─── re-extraction ──────────────────────────────────────────────────────────
 
 type extractCandidate struct {
-	id      int64
-	name    string
-	abs     string
-	content string
-	mime    string
-	text    string
-	err     string
+	id       int64
+	path     string
+	name     string
+	abs      string
+	blob     string
+	content  string
+	mime     string
+	text     string
+	textPath string
+	err      string
 }
 
 // ExtractAll re-runs document extraction and audio transcription for every
 // stored note that supports it. Existing extracted text is kept when a
 // re-extraction fails; the error is stored in extract_error.
 func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force bool) error {
-	rows, err := db.Query(`SELECT id, file_name, abs_path, content, mime_type, extracted_text, extract_error FROM notes ORDER BY id`)
+	rows, err := db.Query(`SELECT id, file_path, file_name, abs_path, blob_path, content, mime_type,
+		extracted_text, extracted_path, extract_error FROM notes ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	var candidates []extractCandidate
 	for rows.Next() {
 		var n extractCandidate
-		if err := rows.Scan(&n.id, &n.name, &n.abs, &n.content, &n.mime, &n.text, &n.err); err != nil {
+		if err := rows.Scan(&n.id, &n.path, &n.name, &n.abs, &n.blob, &n.content, &n.mime,
+			&n.text, &n.textPath, &n.err); err != nil {
 			rows.Close()
 			return err
 		}
 		if !IsExtractable(n.name, n.mime) {
 			continue
 		}
+		n.text = resolveExtractedText(db, n.text, n.textPath)
 		if !force && n.text != "" && n.err == "" {
 			continue
 		}
@@ -1131,7 +1137,7 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 			return nil
 		}
 		r.SetCurrent(n.name)
-		data, err := noteBytes(n.abs, n.content, n.mime)
+		data, err := noteBytes(db, n.abs, n.blob, n.content, n.mime)
 		if err != nil {
 			failed++
 			_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool='' WHERE id=?`, err.Error(), n.id)
@@ -1147,12 +1153,21 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 			r.Advance(false)
 			continue
 		}
-		if _, err := db.Exec(`UPDATE notes SET extracted_text=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id); err != nil {
+		link, storeErr := writeExtractedFile(db, n.path, n.name, text)
+		if storeErr != nil {
+			failed++
+			_, _ = db.Exec(`UPDATE notes SET extract_error=? WHERE id=?`, "store extracted text: "+storeErr.Error(), n.id)
+			r.Fail("%s: store extracted text: %v", n.name, storeErr)
+			r.Advance(false)
+			continue
+		}
+		if _, err := db.Exec(`UPDATE notes SET extracted_text='', extracted_path=?, extract_error='', extract_tool=? WHERE id=?`, link, tool, n.id); err != nil {
 			failed++
 			r.Fail("%s: %v", n.name, err)
 			r.Advance(false)
 			continue
 		}
+		_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, n.id, DataExtractionProcess)
 		ok++
 		r.Logf("%s: extracted with %s", n.name, tool)
 		r.Advance(false)
@@ -1161,14 +1176,27 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, force boo
 	return nil
 }
 
-func noteBytes(abs, content, mimeType string) ([]byte, error) {
-	if abs != "" {
-		if data, err := os.ReadFile(abs); err == nil {
+// noteBytes returns the original bytes for a note. Filesystem imports link to
+// the original file (abs), archive/JSON imports link to a materialised blob, and
+// legacy databases may still hold base64 content inline.
+func noteBytes(db *sql.DB, abs, blob, content, mimeType string) ([]byte, error) {
+	paths := []string{abs}
+	if p := storedPath(db, blob); p != "" {
+		paths = append(paths, p)
+	}
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if data, err := os.ReadFile(p); err == nil {
 			return data, nil
 		}
 	}
 	if IsText(mimeType) {
 		return []byte(content), nil
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("no source file or inline content for %s", mimeType)
 	}
 	data, err := base64.StdEncoding.DecodeString(content)
 	if err != nil {

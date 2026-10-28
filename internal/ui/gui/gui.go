@@ -28,6 +28,7 @@ type screen int
 const (
 	scrMenu screen = iota
 	scrImport
+	scrSync
 	scrFormats
 	scrData
 	scrNotes
@@ -56,6 +57,7 @@ const (
 // menuItems is the main menu shown on the start screen.
 var menuItems = []string{
 	"Import",
+	"Synchronize with folder",
 	"Data processing — pairs",
 	"Data processing — one by one",
 	"Export for Obsidian",
@@ -116,6 +118,10 @@ type state struct {
 	// import
 	importSource  core.ImportSource
 	importFormats core.FormatSet
+
+	// sync
+	syncItems   []core.SyncItem
+	syncChecked map[string]bool
 
 	// notes (remove / evaluate)
 	noteAction noteAction
@@ -288,6 +294,8 @@ func (s *state) screenTitle() string {
 	switch s.screen {
 	case scrImport:
 		return "Import — choose source & formats"
+	case scrSync:
+		return "Synchronize with folder"
 	case scrFormats:
 		return "Select formats to import"
 	case scrData:
@@ -341,7 +349,7 @@ func (s *state) screenTitle() string {
 
 func (s *state) goBack() {
 	switch s.screen {
-	case scrImport, scrData, scrSettings, scrProcessList:
+	case scrImport, scrSync, scrData, scrSettings, scrProcessList:
 		s.noteFilter = ""
 		s.screen = scrMenu
 	case scrWhisper:
@@ -380,6 +388,8 @@ func (s *state) body() fyne.CanvasObject {
 	switch s.screen {
 	case scrImport:
 		return s.importScreen()
+	case scrSync:
+		return s.syncScreen()
 	case scrFormats:
 		return s.formatsScreen()
 	case scrData:
@@ -420,20 +430,22 @@ func (s *state) activateMenu(id int) {
 	case 0:
 		s.screen = scrImport
 	case 1:
+		s.screen = scrSync
+	case 2:
 		s.openProcessList("pair")
 		return
-	case 2:
+	case 3:
 		s.openProcessList("single")
 		return
-	case 3:
+	case 4:
 		s.openExportTemplates()
 		return
-	case 4:
-		s.screen = scrData
 	case 5:
+		s.screen = scrData
+	case 6:
 		s.openNotes(noteEval, scrMenu)
 		return
-	case 6:
+	case 7:
 		s.screen = scrSettings
 	}
 	s.render()
@@ -963,6 +975,7 @@ func (s *state) startImport() {
 		TranscribeModel: cfg.TranscribeModel,
 		AudioEngine:     cfg.AudioEngine,
 		WhisperModel:    cfg.WhisperModel,
+		BinaryStorage:   cfg.BinaryStorage,
 		GoogleAPIKey:    cfg.GoogleAPIKey,
 		SpeechLanguage:  cfg.SpeechLanguage,
 	}
@@ -977,6 +990,91 @@ func (s *state) startImport() {
 		defer cancel()
 		err := core.Import(ctx, &guiReporter{s: s}, db, src, opts)
 		s.finishRun(err)
+	}()
+}
+
+func (s *state) runSyncDiff() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	formats := s.importFormats
+	if formats == nil {
+		formats = make(core.FormatSet)
+		for _, e := range core.DefaultImportFormats() {
+			formats[e] = true
+		}
+	}
+	go func() {
+		items, err := core.SyncDiff(db, strings.TrimSpace(s.src.Text), formats)
+		s.mu.Lock()
+		if err != nil {
+			dialog.ShowError(err, s.win)
+		} else {
+			s.syncItems = items
+			s.syncChecked = nil
+		}
+		s.mu.Unlock()
+		s.render()
+	}()
+}
+
+func (s *state) applySync() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	var removeIDs []int64
+	var newPaths []string
+	for _, it := range s.syncItems {
+		key := syncItemGUIKey(it)
+		if !s.syncChecked[key] {
+			continue
+		}
+		if it.Deleted {
+			if id := core.SyncNoteIDByPath(db, it.Path); id != 0 {
+				removeIDs = append(removeIDs, id)
+			}
+		}
+		if it.NewFile {
+			newPaths = append(newPaths, it.Abs)
+		}
+	}
+	if len(removeIDs) == 0 && len(newPaths) == 0 {
+		return
+	}
+	cfg, _, _, _, err := s.readConfigRaw()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	opts := core.ImportOptions{
+		Source:          core.SourceFilesystem,
+		Formats:         s.importFormats,
+		Host:            cfg.Host,
+		TranscribeModel: cfg.TranscribeModel,
+		AudioEngine:     cfg.AudioEngine,
+		WhisperModel:    cfg.WhisperModel,
+		BinaryStorage:   cfg.BinaryStorage,
+		GoogleAPIKey:    cfg.GoogleAPIKey,
+		SpeechLanguage:  cfg.SpeechLanguage,
+	}
+	s.beginRun("Syncing…")
+	go func() {
+		_, cancel := s.runContext()
+		defer cancel()
+		removed, imported, err := core.SyncApply(db, strings.TrimSpace(s.src.Text), removeIDs, newPaths, opts)
+		s.mu.Lock()
+		if err != nil {
+			s.phaseLabel.SetText("Sync error: " + err.Error())
+		} else {
+			s.phaseLabel.SetText(fmt.Sprintf("Sync done — removed %d, imported %d", removed, imported))
+		}
+		s.syncItems = nil
+		s.syncChecked = nil
+		s.running = false
+		s.mu.Unlock()
+		s.render()
 	}()
 }
 
@@ -1131,6 +1229,7 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 		WhisperModel:    core.NormalizeWhisperModel(s.whisperModel.Selected),
 		GoogleAPIKey:    strings.TrimSpace(s.googleKey.Text),
 		SpeechLanguage:  core.NormalizeSpeechLanguage(s.speechLanguage.Selected),
+		BinaryStorage:   core.BinaryStorageLinks,
 		MaxChars:        maxChars,
 		Workers:         workers,
 	}

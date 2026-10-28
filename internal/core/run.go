@@ -28,6 +28,7 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 			TranscribeModel: c.TranscribeModel,
 			AudioEngine:     c.AudioEngine,
 			WhisperModel:    c.WhisperModel,
+			BinaryStorage:   c.BinaryStorage,
 			GoogleAPIKey:    c.GoogleAPIKey,
 			SpeechLanguage:  c.SpeechLanguage,
 		})

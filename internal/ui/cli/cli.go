@@ -43,6 +43,7 @@ func Run(args []string) error {
 	whisperModel := fs.String("whisper-model", def.WhisperModel, "whisper.cpp model; download it first in the TUI/GUI settings")
 	googleKey := fs.String("google-key", def.GoogleAPIKey, "Google Speech-to-Text API key (requires ffmpeg)")
 	speechLanguage := fs.String("speech-language", def.SpeechLanguage, "language code for Google transcription, e.g. ru-RU")
+	binaryStorage := fs.String("binary-storage", def.BinaryStorage, "binary storage: links (default, smaller db) or db (base64)")
 	maxChars := fs.Int("maxchars", def.MaxChars, "max characters per note sent to ollama")
 	workers := fs.Int("workers", def.Workers, "concurrent ollama requests (1-100)")
 	phaseName := fs.String("phase", "all", "phase to run: import, extract, pairs, single, export, all")
@@ -110,6 +111,9 @@ func Run(args []string) error {
 	if !seen["speech-language"] {
 		*speechLanguage = saved.SpeechLanguage
 	}
+	if !seen["binary-storage"] {
+		*binaryStorage = saved.BinaryStorage
+	}
 	if !seen["maxchars"] {
 		*maxChars = saved.MaxChars
 	}
@@ -125,6 +129,7 @@ func Run(args []string) error {
 		WhisperModel:    core.NormalizeWhisperModel(*whisperModel),
 		GoogleAPIKey:    *googleKey,
 		SpeechLanguage:  core.NormalizeSpeechLanguage(*speechLanguage),
+		BinaryStorage:   core.NormalizeBinaryStorage(*binaryStorage),
 		MaxChars:        *maxChars,
 		Workers:         *workers,
 		PromptName:      *promptName,
@@ -203,6 +208,7 @@ func Run(args []string) error {
 			TranscribeModel: cfg.TranscribeModel,
 			AudioEngine:     cfg.AudioEngine,
 			WhisperModel:    cfg.WhisperModel,
+			BinaryStorage:   cfg.BinaryStorage,
 			GoogleAPIKey:    cfg.GoogleAPIKey,
 			SpeechLanguage:  cfg.SpeechLanguage,
 		}

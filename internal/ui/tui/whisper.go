@@ -201,6 +201,8 @@ func (m *model) viewOptionPicker() string {
 	title := "Choose audio backend"
 	if m.pickerKind == "language" {
 		title = "Choose speech language (Google)"
+	} else if m.pickerKind == "binary" {
+		title = "Binary storage mode"
 	}
 	var lines []string
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render(title))
@@ -216,6 +218,12 @@ func (m *model) viewOptionPicker() string {
 	lines = append(lines, "")
 	if m.pickerKind == "language" {
 		for _, l := range wrapText("Google needs a specific language. Local Whisper always auto-detects.", cw) {
+			lines = append(lines, tuiDim.MaxWidth(cw).Render(l))
+		}
+		lines = append(lines, "")
+	}
+	if m.pickerKind == "binary" {
+		for _, l := range wrapText("Links: binaries stay on disk and only paths are stored. Database (base64): files are embedded in sqlite.", cw) {
 			lines = append(lines, tuiDim.MaxWidth(cw).Render(l))
 		}
 		lines = append(lines, "")

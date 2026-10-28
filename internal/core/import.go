@@ -223,6 +223,7 @@ type ImportOptions struct {
 	TranscribeModel string // Ollama transcription model (legacy)
 	AudioEngine     string
 	WhisperModel    string
+	BinaryStorage   string // links (default) or db
 	GoogleAPIKey    string
 	SpeechLanguage  string
 }
@@ -267,6 +268,7 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 	}
 	r.SetPhase(label, 0, len(files))
 	r.Logf("found files: %d", len(files))
+	binaryMode := NormalizeBinaryStorage(opt.BinaryStorage)
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -308,26 +310,49 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 
 		name := filepath.Base(rel)
 		mimeType := mimeFor(name, data)
-		content := string(data)
-		if !IsText(mimeType) {
+		content, blobPath := "", ""
+		switch {
+		case IsText(mimeType):
+			content = string(data)
+		case binaryMode == BinaryStorageDB:
 			content = base64.StdEncoding.EncodeToString(data)
+		case f.Abs == "":
+			// Archive/JSON sources have no original file to link to. Keep the
+			// binary in the sidecar directory instead of sqlite.
+			blobPath, err = writeBlobFile(db, rel, name, data)
+			if err != nil {
+				r.Fail("%s: store binary: %v", rel, err)
+				r.Advance(true)
+				continue
+			}
 		}
 
-		var extracted, extractErr, extractTool string
+		var extracted, extractedPath, extractErr, extractTool string
 		if IsExtractable(name, mimeType) {
 			text, tool, err := ExtractFileTextWithAudio(ctx, name, mimeType, data, opt.audioOptions())
 			extractTool = tool
 			if err != nil {
 				extractErr = err.Error()
 				r.Logf("%s: extraction failed: %v", rel, err)
-			} else {
-				extracted = text
+			} else if strings.TrimSpace(text) != "" {
+				link, storeErr := writeExtractedFile(db, rel, name, text)
+				if storeErr != nil {
+					// Never lose the extraction when the sidecar file cannot
+					// be written; keep it inline and surface the problem.
+					extracted = text
+					extractErr = "store extracted text: " + storeErr.Error()
+					r.Logf("%s: %s", rel, extractErr)
+				} else {
+					extractedPath = link
+				}
 			}
 		}
 
 		_, err = tx.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type,
-			extracted_text, extract_error, extract_tool, imported_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			rel, f.Abs, name, content, mimeType, extracted, extractErr, extractTool, time.Now().Format(time.RFC3339))
+			extracted_text, extracted_path, blob_path, extract_error, extract_tool, imported_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			rel, f.Abs, name, content, mimeType, extracted, extractedPath, blobPath,
+			extractErr, extractTool, time.Now().Format(time.RFC3339))
 		if err != nil {
 			r.Fail("%s: %v", rel, err)
 			r.Advance(true)

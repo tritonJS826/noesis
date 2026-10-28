@@ -17,9 +17,11 @@ CREATE TABLE IF NOT EXISTS notes(
 	file_path   TEXT NOT NULL UNIQUE,   -- path relative to source folder
 	abs_path    TEXT NOT NULL,          -- absolute path at import time
 	file_name   TEXT NOT NULL,          -- filename only
-	content        TEXT NOT NULL,          -- original text, or base64 for binary formats
+	content        TEXT NOT NULL DEFAULT '', -- original text, or base64 when binaries are stored in the DB
 	mime_type      TEXT NOT NULL DEFAULT '', -- MIME type (text/markdown, image/png, audio/mpeg…)
-	extracted_text TEXT NOT NULL DEFAULT '', -- text extracted from documents/audio
+	extracted_text TEXT NOT NULL DEFAULT '', -- legacy inline extracted text (new imports use extracted_path)
+	extracted_path TEXT NOT NULL DEFAULT '', -- link to the extracted .md file (relative to the data dir)
+	blob_path      TEXT NOT NULL DEFAULT '', -- link to a materialised binary (zip/json imports)
 	extract_error  TEXT NOT NULL DEFAULT '', -- why extraction failed (empty = no error)
 	extract_tool   TEXT NOT NULL DEFAULT '', -- extractor/transcriber used, e.g. go:docx / ollama:whisper
 	links_md       TEXT NOT NULL DEFAULT '', -- obsidian links ([[...]]) as a separate column
@@ -80,7 +82,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	if err := ensureColumn(db, "notes", "mime_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
-	for _, col := range []string{"extracted_text", "extract_error", "extract_tool"} {
+	for _, col := range []string{"extracted_text", "extracted_path", "blob_path", "extract_error", "extract_tool"} {
 		if err := ensureColumn(db, "notes", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return nil, err
 		}
@@ -93,6 +95,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	migrateExportTemplateNames(db)
 	seedExportTemplates(db)
 	migratePromptPlaceholders(db)
+	migrateNoteStorage(db)
 	return db, nil
 }
 
@@ -246,6 +249,9 @@ func ResetDB(db *sql.DB, path string) (*sql.DB, error) {
 	_ = os.Remove(path)
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")
+	if dir := dataDirForDBPath(path); dir != "" {
+		_ = os.RemoveAll(dir)
+	}
 	return OpenDB(path)
 }
 
@@ -382,6 +388,13 @@ func noteDBVars(db *sql.DB, prefix string, id int64) map[string]string {
 	out := make(map[string]string, len(cols))
 	for i, c := range cols {
 		out[prefix+"."+c] = vals[i].String
+	}
+	// Extracted text lives in a linked Markdown file for new imports, so make
+	// ${db.extracted_text} / ${db_b.extracted_text} return the actual text.
+	if extracted := out[prefix+".extracted_text"]; strings.TrimSpace(extracted) == "" {
+		if text := resolveExtractedText(db, "", out[prefix+".extracted_path"]); text != "" {
+			out[prefix+".extracted_text"] = text
+		}
 	}
 	return out
 }
@@ -565,7 +578,16 @@ func NoteRecord(db *sql.DB, id int64) ([]NoteField, error) {
 
 	fields := make([]NoteField, 0, len(cols)+1)
 	for i, c := range cols {
-		fields = append(fields, NoteField{Name: c, Value: vals[i].String})
+		value := vals[i].String
+		if c == "extracted_text" && strings.TrimSpace(value) == "" {
+			for j, other := range cols {
+				if other == "extracted_path" {
+					value = resolveExtractedText(db, value, vals[j].String)
+					break
+				}
+			}
+		}
+		fields = append(fields, NoteField{Name: c, Value: value})
 	}
 
 	rows, err := db.Query(`SELECT tag FROM tags WHERE note_id=? ORDER BY tag`, id)
@@ -763,11 +785,19 @@ func SaveProcessOutput(db *sql.DB, noteID int64, processName, output string) err
 	return err
 }
 
-// LoadProcessOutput returns the stored output for a note and process.
+// LoadProcessOutput returns the stored output for a note and process. The
+// built-in "Data extraction" process no longer duplicates the extracted text in
+// sqlite: when there is no row, the linked Markdown file is read instead.
 func LoadProcessOutput(db *sql.DB, noteID int64, processName string) string {
 	var out string
 	if db.QueryRow(`SELECT output FROM process_output WHERE note_id=? AND process_name=?`, noteID, processName).Scan(&out) == nil {
 		return out
+	}
+	if processName == DataExtractionProcess {
+		var inline, link string
+		if db.QueryRow(`SELECT extracted_text, extracted_path FROM notes WHERE id=?`, noteID).Scan(&inline, &link) == nil {
+			return resolveExtractedText(db, inline, link)
+		}
 	}
 	return ""
 }

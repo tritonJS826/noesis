@@ -184,13 +184,16 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 }
 
 type extractDataCandidate struct {
-	id      int64
-	name    string
-	abs     string
-	content string
-	mime    string
-	text    string
-	tool    string
+	id       int64
+	path     string
+	name     string
+	abs      string
+	blob     string
+	content  string
+	mime     string
+	text     string
+	tool     string
+	textPath string
 }
 
 // ExtractDataForAll turns every imported document, image and audio file into
@@ -199,14 +202,16 @@ type extractDataCandidate struct {
 // the extracted_text column and to the process output of the built-in
 // "Data extraction" process so they can be inspected from the database browser.
 func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
-	rows, err := db.Query(`SELECT id, file_name, abs_path, content, mime_type, extracted_text, extract_tool FROM notes ORDER BY id`)
+	rows, err := db.Query(`SELECT id, file_path, file_name, abs_path, blob_path, content, mime_type,
+		extracted_text, extracted_path, extract_tool FROM notes ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	var candidates []extractDataCandidate
 	for rows.Next() {
 		var n extractDataCandidate
-		if err := rows.Scan(&n.id, &n.name, &n.abs, &n.content, &n.mime, &n.text, &n.tool); err != nil {
+		if err := rows.Scan(&n.id, &n.path, &n.name, &n.abs, &n.blob, &n.content, &n.mime,
+			&n.text, &n.textPath, &n.tool); err != nil {
 			rows.Close()
 			return err
 		}
@@ -214,6 +219,7 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 		if !IsExtractable(n.name, n.mime) && !strings.HasPrefix(n.mime, "image/") {
 			continue
 		}
+		n.text = resolveExtractedText(db, n.text, n.textPath)
 		candidates = append(candidates, n)
 	}
 	rows.Close()
@@ -235,8 +241,9 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 		r.SetCurrent(n.name)
 
 		text, tool := n.text, n.tool
+		extractedNow := false
 		if strings.TrimSpace(text) == "" {
-			data, err := noteBytes(n.abs, n.content, n.mime)
+			data, err := noteBytes(db, n.abs, n.blob, n.content, n.mime)
 			if err != nil {
 				_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool='' WHERE id=?`, err.Error(), n.id)
 				r.Fail("%s: %v", n.name, err)
@@ -267,11 +274,7 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 				continue
 			}
 			text = cleanExtracted(text)
-			if _, err := db.Exec(`UPDATE notes SET extracted_text=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id); err != nil {
-				r.Fail("%s: %v", n.name, err)
-				r.Advance(false)
-				continue
-			}
+			extractedNow = true
 		}
 
 		if strings.TrimSpace(text) == "" {
@@ -280,10 +283,22 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 			r.Advance(false)
 			continue
 		}
-		if err := SaveProcessOutput(db, n.id, DataExtractionProcess, text); err != nil {
-			r.Fail("%s: %v", n.name, err)
-			r.Advance(false)
-			continue
+		// Store the result as a Markdown file. It is the single source of truth
+		// for both the database browser and export, so sqlite stays small.
+		if extractedNow || n.textPath == "" {
+			link, err := writeExtractedFile(db, n.path, n.name, text)
+			if err != nil {
+				_, _ = db.Exec(`UPDATE notes SET extract_error=? WHERE id=?`, "store extracted text: "+err.Error(), n.id)
+				r.Fail("%s: store extracted text: %v", n.name, err)
+				r.Advance(false)
+				continue
+			}
+			if _, err := db.Exec(`UPDATE notes SET extracted_text='', extracted_path=?, extract_error='', extract_tool=? WHERE id=?`, link, tool, n.id); err != nil {
+				r.Fail("%s: %v", n.name, err)
+				r.Advance(false)
+				continue
+			}
+			_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, n.id, DataExtractionProcess)
 		}
 		done++
 		r.Advance(false)

@@ -108,6 +108,111 @@ func (s *state) importScreen() fyne.CanvasObject {
 	)
 }
 
+// ─── sync ────────────────────────────────────────────────────────────────────
+
+func (s *state) syncScreen() fyne.CanvasObject {
+	if s.src.Text == "" {
+		return container.NewVBox(
+			widget.NewLabel("SRC is not set — go to Settings and set the source folder first."),
+			widget.NewButton("Open Settings", func() {
+				s.screen = scrSettings
+				s.render()
+			}),
+		)
+	}
+
+	if s.syncItems == nil {
+		return container.NewVBox(
+			widget.NewLabel("Comparing database with folder: " + s.src.Text + " …"),
+			widget.NewButton("Run comparison", func() {
+				go s.runSyncDiff()
+			}),
+		)
+	}
+
+	if len(s.syncItems) == 0 {
+		return container.NewVBox(
+			widget.NewLabel("Everything is in sync — no differences found."),
+			widget.NewLabel("Source: " + s.src.Text),
+			container.NewHBox(
+				widget.NewButton("Refresh", func() {
+					go s.runSyncDiff()
+				}),
+				widget.NewButton("Back", func() {
+					s.syncItems = nil
+					s.syncChecked = nil
+					s.screen = scrMenu
+					s.render()
+				}),
+			),
+		)
+	}
+
+	if s.syncChecked == nil {
+		s.syncChecked = map[string]bool{}
+		for _, it := range s.syncItems {
+			key := syncItemGUIKey(it)
+			s.syncChecked[key] = true
+		}
+	}
+
+	list := container.NewVBox()
+	for _, it := range s.syncItems {
+		it := it
+		key := syncItemGUIKey(it)
+		prefix := "+"
+		labelText := it.Name
+		if it.Deleted {
+			prefix = "− "
+			labelText = "DELETED: " + it.Name
+		}
+		check := widget.NewCheck(prefix+" "+labelText, func(on bool) {
+			s.syncChecked[key] = on
+		})
+		check.SetChecked(s.syncChecked[key])
+		list.Add(check)
+	}
+
+	scroll := container.NewVScroll(list)
+	scroll.SetMinSize(fyne.NewSize(620, 380))
+
+	status := widget.NewLabel(fmt.Sprintf("%d differences — check the ones you want to process.", len(s.syncItems)))
+	bottom := container.NewVBox(
+		status,
+		widget.NewLabel("Checked deleted files will be removed from the database. New files will be imported."),
+		container.NewHBox(
+			widget.NewButton("Apply", func() { go s.applySync() }),
+			widget.NewButton("Select all / none", func() {
+				all := true
+				for _, it := range s.syncItems {
+					if !s.syncChecked[syncItemGUIKey(it)] {
+						all = false
+						break
+					}
+				}
+				for _, it := range s.syncItems {
+					s.syncChecked[syncItemGUIKey(it)] = !all
+				}
+				s.render()
+			}),
+			widget.NewButton("Refresh", func() { go s.runSyncDiff() }),
+		),
+	)
+
+	return container.NewBorder(
+		widget.NewLabel("Select files to synchronize — all differences are selected by default."),
+		bottom, nil, nil,
+		scroll,
+	)
+}
+
+func syncItemGUIKey(it core.SyncItem) string {
+	if it.Deleted {
+		return "del:" + it.Path
+	}
+	return "new:" + it.Path
+}
+
 func (s *state) formatsSummary() string {
 	if s.importFormats == nil {
 		return "all"

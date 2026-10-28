@@ -17,6 +17,7 @@ type AppSettings struct {
 	TranscribeModel string
 	AudioEngine     string
 	WhisperModel    string
+	BinaryStorage   string
 	GoogleAPIKey    string
 	SpeechLanguage  string
 	MaxChars        int
@@ -34,6 +35,7 @@ func DefaultAppSettings() AppSettings {
 		TranscribeModel: c.TranscribeModel,
 		AudioEngine:     c.AudioEngine,
 		WhisperModel:    c.WhisperModel,
+		BinaryStorage:   c.BinaryStorage,
 		GoogleAPIKey:    c.GoogleAPIKey,
 		SpeechLanguage:  c.SpeechLanguage,
 		MaxChars:        c.MaxChars,
@@ -75,6 +77,9 @@ func LoadAppSettings(db *sql.DB) AppSettings {
 	}
 	if v, ok := get("whisper_model"); ok {
 		s.WhisperModel = NormalizeWhisperModel(v)
+	}
+	if v, ok := get("binary_storage"); ok {
+		s.BinaryStorage = NormalizeBinaryStorage(v)
 	}
 	if v, ok := get("google_api_key"); ok {
 		s.GoogleAPIKey = v
@@ -128,6 +133,7 @@ func (s AppSettings) Save(db *sql.DB) error {
 		{"transcribe_model", s.TranscribeModel, def.TranscribeModel},
 		{"audio_engine", s.AudioEngine, def.AudioEngine},
 		{"whisper_model", s.WhisperModel, def.WhisperModel},
+		{"binary_storage", NormalizeBinaryStorage(s.BinaryStorage), def.BinaryStorage},
 		{"google_api_key", s.GoogleAPIKey, def.GoogleAPIKey},
 		{"speech_language", s.SpeechLanguage, def.SpeechLanguage},
 		{"maxchars", strconv.Itoa(s.MaxChars), strconv.Itoa(def.MaxChars)},
