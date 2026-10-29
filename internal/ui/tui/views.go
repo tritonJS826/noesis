@@ -281,31 +281,38 @@ func (m *model) viewSync() string {
 	}
 	lines = append(lines, "")
 
+	// fixedAbove = title + SRC + blank + settings rows + blank. These stay
+	// visible: the diff list below is windowed to whatever space is left so the
+	// sync settings can always be adjusted.
+	fixedAbove := len(lines)
+
 	// Show diff results if available (folder source only).
 	if len(m.syncItems) > 0 {
 		lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("%d differences found", len(m.syncItems))))
 		lines = append(lines, tuiDim.Width(cw).Render("space toggle selected  ·  a select/unselect all  ·  enter apply"))
 		lines = append(lines, "")
+		const listHeader, listFooter = 3, 2 // header lines above, blank+hint below
 
-		// Items start after the 3 settings rows.
-		itemStart := len(settingsItems)
-		page := m.listRows(1)
-		if page < 1 {
-			page = 10
+		// Rows available for the diff list after the fixed chrome.
+		page := m.listRows(fixedAbove + listHeader + listFooter)
+		if m.height <= 0 {
+			// Size not known yet (first frame): show everything.
+			page = len(m.syncItems)
 		}
+		if page < 1 {
+			page = 1
+		}
+
+		// Diff items start after the settings rows.
+		itemStart := len(settingsItems)
 		sCursor := m.syncCursor - itemStart
 		if sCursor < 0 {
 			sCursor = 0
 		}
+		if sCursor >= len(m.syncItems) {
+			sCursor = len(m.syncItems) - 1
+		}
 		start, end := listWindow(len(m.syncItems), sCursor, page)
-		start = max(start, m.syncScroll-page/2)
-		end = min(end, m.syncScroll+page+page/2)
-		if start < 0 {
-			start = 0
-		}
-		if end > len(m.syncItems) {
-			end = len(m.syncItems)
-		}
 		m.syncScroll = start
 
 		for i := start; i < end; i++ {

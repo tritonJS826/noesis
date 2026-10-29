@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ledongthuc/pdf"
@@ -70,7 +71,7 @@ func IsExtractable(name, mimeType string) bool {
 }
 
 var audioExtensions = map[string]bool{
-	"mp3": true, "wav": true, "ogg": true, "m4a": true, "flac": true,
+	"mp3": true, "wav": true, "ogg": true, "m4a": true, "flac": true, "opus": true,
 }
 
 // ExtractFileText extracts text from a document or transcribes an audio file
@@ -1124,57 +1125,82 @@ func ExtractAll(ctx context.Context, r Reporter, db *sql.DB, c Config, filter Ex
 		return err
 	}
 
+	workers := normalizedWorkers(c.Workers)
 	label := "extract documents, images & audio"
 	if c.AudioEngine != "" {
 		label += " (" + AudioEngineLabel(c.AudioEngine) + ")"
 	}
+	label += fmt.Sprintf(" ×%d", workers)
 	r.SetPhase(label, 0, len(candidates))
 	if len(candidates) == 0 {
 		r.Logf("nothing to extract")
 		return nil
 	}
 
+	var mu sync.Mutex
 	ok, failed := 0, 0
-	for _, n := range candidates {
-		if ctx.Err() != nil {
-			return nil
-		}
+	err = runConcurrent(ctx, workers, candidates, func(n extractCandidate) error {
 		r.SetCurrent(n.name)
 		data, err := noteBytes(db, n.abs, n.blob, n.content, n.mime)
 		if err != nil {
-			failed++
+			saveMu.Lock()
 			_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool='' WHERE id=?`, err.Error(), n.id)
+			saveMu.Unlock()
+			mu.Lock()
+			failed++
+			mu.Unlock()
 			r.Fail("%s: %v", n.name, err)
 			r.Advance(false)
-			continue
+			return nil
 		}
 
 		text, tool, err := ExtractNoteText(ctx, c, db, n.name, n.mime, data, n.id)
 		if err != nil {
-			failed++
+			saveMu.Lock()
 			_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool=? WHERE id=?`, err.Error(), tool, n.id)
+			saveMu.Unlock()
+			mu.Lock()
+			failed++
+			mu.Unlock()
 			r.Fail("%s: %v", n.name, err)
 			r.Advance(false)
-			continue
+			return nil
 		}
 		text = cleanExtracted(text)
 		if strings.TrimSpace(text) == "" {
-			failed++
+			saveMu.Lock()
 			_, _ = db.Exec(`UPDATE notes SET extract_error=? WHERE id=?`, "no text extracted", n.id)
+			saveMu.Unlock()
+			mu.Lock()
+			failed++
+			mu.Unlock()
 			r.Fail("%s: no text extracted", n.name)
 			r.Advance(false)
-			continue
+			return nil
 		}
-		if _, err := db.Exec(`UPDATE notes SET markdown=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id); err != nil {
+		saveMu.Lock()
+		_, writeErr := db.Exec(`UPDATE notes SET markdown=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id)
+		if writeErr == nil {
+			_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, n.id, DataExtractionProcess)
+		}
+		saveMu.Unlock()
+		if writeErr != nil {
+			mu.Lock()
 			failed++
-			r.Fail("%s: %v", n.name, err)
+			mu.Unlock()
+			r.Fail("%s: %v", n.name, writeErr)
 			r.Advance(false)
-			continue
+			return nil
 		}
-		_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, n.id, DataExtractionProcess)
+		mu.Lock()
 		ok++
+		mu.Unlock()
 		r.Logf("%s: extracted with %s", n.name, tool)
 		r.Advance(false)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	r.Logf("extraction: ok — %d, failed — %d", ok, failed)
 	return nil

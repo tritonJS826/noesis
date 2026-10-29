@@ -102,6 +102,7 @@ var formatCatalog = []FormatInfo{
 	{"ogg", "audio/ogg", "audio"},
 	{"m4a", "audio/mp4", "audio"},
 	{"flac", "audio/flac", "audio"},
+	{"opus", "audio/opus", "audio"},
 	// video
 	{"mp4", "video/mp4", "video"},
 	{"webm", "video/webm", "video"},
@@ -138,7 +139,7 @@ func DefaultImportFormats() []string {
 		"md", "txt", "csv", "json", "yaml", "xml", "html", "log", "mdx",
 		"pdf", "docx", "pptx", "xlsx", "odt", "odp", "ods",
 		"doc", "ppt", "xls", "rtf", "epub",
-		"mp3", "wav", "ogg", "m4a", "flac",
+		"mp3", "wav", "ogg", "m4a", "flac", "opus",
 		"png", "jpg", "jpeg", "webp", "avif", "gif", "bmp", "svg",
 	}
 }

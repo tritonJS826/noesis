@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -131,9 +132,9 @@ func idArgs(notes []NoteInfo) []any {
 	return args
 }
 
-// deleteNotes removes the given notes along with their tags, pairs and links
-// rows. The callers decide whether to also scrub the references from other
-// notes' links_md.
+// deleteNotes removes the given notes along with their tags, pairs, links and
+// process output rows. The callers decide whether to also scrub the references
+// from other notes' links_md.
 func deleteNotes(db *sql.DB, notes []NoteInfo) (int, error) {
 	if len(notes) == 0 {
 		return 0, nil
@@ -163,6 +164,9 @@ func deleteNotes(db *sql.DB, notes []NoteInfo) (int, error) {
 			return 0, err
 		}
 		if _, err := tx.Exec(`DELETE FROM links WHERE src_id=? OR dst_id=?`, n.ID, n.ID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM process_output WHERE note_id=?`, n.ID); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`DELETE FROM notes WHERE id=?`, n.ID); err != nil {
@@ -390,6 +394,11 @@ func TagSingle(ctx context.Context, db *sql.DB, c Config, id int64) (int, error)
 		return 0, fmt.Errorf("invalid JSON from model: %w", err)
 	}
 
+	// Serialise the writes: sqlite allows a single writer, and TagSingle may run
+	// concurrently under the worker pool.
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
 	// Save process output for this note
 	if promptName != "" {
 		_ = SaveProcessOutput(db, id, promptName, stripCodeFences(out.Response))
@@ -447,28 +456,36 @@ func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 		promptName = DefaultSinglePrompt
 	}
 
-	r.SetPhase("tags one-by-one ("+c.Model+")", 0, len(ids))
+	workers := normalizedWorkers(c.Workers)
+	r.SetPhase(fmt.Sprintf("tags one-by-one (%s, ×%d)", c.Model, workers), 0, len(ids))
 	if len(ids) == 0 {
 		r.Logf("all notes already tagged")
 		return nil
 	}
-	for _, id := range ids {
-		if ctx.Err() != nil {
-			return nil
-		}
+
+	var mu sync.Mutex
+	done := 0
+	err = runConcurrent(ctx, workers, ids, func(id int64) error {
 		n, _ := loadNoteContent(db, id, c.MaxChars)
 		r.SetCurrent(n.Name)
 		added, err := TagSingle(ctx, db, c, id)
 		if err != nil {
 			r.Fail("%s: %v", n.Name, err)
 			r.Advance(false)
-			continue
+			return nil
 		}
 		r.AddRun(added, 0)
 		r.Advance(false)
+		mu.Lock()
+		done++
+		mu.Unlock()
 		r.Logf("%s: +%d tags", n.Name, added)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	r.Logf("one-by-one: tagged — %d", len(ids))
+	r.Logf("one-by-one: tagged — %d", done)
 	return nil
 }
 

@@ -111,6 +111,39 @@ func TestExtractFormatSet(t *testing.T) {
 	}
 }
 
+func TestOpusAudioFormat(t *testing.T) {
+	found := false
+	for _, f := range KnownFormats() {
+		if f.Ext == "opus" {
+			found = true
+			if f.Kind != "audio" {
+				t.Fatalf("opus kind = %q, want audio", f.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("opus missing from KnownFormats")
+	}
+	if !IsAudio("audio/opus") {
+		t.Fatal("audio/opus should be audio")
+	}
+	if !IsExtractable("voice.opus", "audio/opus") {
+		t.Fatal("opus should be extractable")
+	}
+	if !CanExtract("voice.opus", "audio/opus") {
+		t.Fatal("opus should be extractable")
+	}
+	def := false
+	for _, e := range DefaultImportFormats() {
+		if e == "opus" {
+			def = true
+		}
+	}
+	if !def {
+		t.Fatal("opus missing from DefaultImportFormats")
+	}
+}
+
 func TestExtractableFormatsExcludeText(t *testing.T) {
 	for _, f := range ExtractableFormats() {
 		if f.Kind == "text" || f.Kind == "video" {

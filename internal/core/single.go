@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -137,22 +138,21 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 		return err
 	}
 
-	r.SetPhase("single: "+promptName+" ("+c.Model+")", 0, len(ids))
+	workers := normalizedWorkers(c.Workers)
+	r.SetPhase(fmt.Sprintf("single: %s (%s, ×%d)", promptName, c.Model, workers), 0, len(ids))
 	if len(ids) == 0 {
 		r.Logf("no notes")
 		return nil
 	}
 
+	var mu sync.Mutex
 	done := 0
-	for _, id := range ids {
-		if ctx.Err() != nil {
-			return nil
-		}
+	err = runConcurrent(ctx, workers, ids, func(id int64) error {
 		n, err := loadNote(db, id, c.MaxChars)
 		if err != nil {
 			r.Fail("note %d: %v", id, err)
 			r.Advance(false)
-			continue
+			return nil
 		}
 		vars := map[string]string{
 			"FILE_NAME":    n.Name,
@@ -167,7 +167,7 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 		if err != nil {
 			r.Fail("%s: %v", n.Name, err)
 			r.Advance(false)
-			continue
+			return nil
 		}
 		if promptName == DefaultSummaryProcess {
 			out = limitRunes(out, SummaryMaxChars)
@@ -175,18 +175,32 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 		if out == "" {
 			r.Fail("%s: empty answer", n.Name)
 			r.Advance(false)
-			continue
+			return nil
 		}
-		if err := SaveProcessOutput(db, id, promptName, out); err != nil {
-			r.Fail("%s: %v", n.Name, err)
+
+		// Serialise the writes: sqlite allows a single writer.
+		saveMu.Lock()
+		saveErr := SaveProcessOutput(db, id, promptName, out)
+		added := 0
+		if saveErr == nil {
+			added = saveTagsFromOutput(db, id, out)
+		}
+		saveMu.Unlock()
+		if saveErr != nil {
+			r.Fail("%s: %v", n.Name, saveErr)
 			r.Advance(false)
-			continue
+			return nil
 		}
-		added := saveTagsFromOutput(db, id, out)
 		r.AddRun(added, 0)
 		r.Advance(false)
+		mu.Lock()
 		done++
+		mu.Unlock()
 		r.Logf("%s: %d chars", n.Name, len([]rune(out)))
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	r.Logf("single process %q: processed — %d", promptName, done)
 	return nil
@@ -234,17 +248,16 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 		return err
 	}
 
-	r.SetPhase("data extraction (docs, images, audio)", 0, len(candidates))
+	workers := normalizedWorkers(c.Workers)
+	r.SetPhase(fmt.Sprintf("data extraction (docs, images, audio, ×%d)", workers), 0, len(candidates))
 	if len(candidates) == 0 {
 		r.Logf("nothing to extract")
 		return nil
 	}
 
+	var mu sync.Mutex
 	done := 0
-	for _, n := range candidates {
-		if ctx.Err() != nil {
-			return nil
-		}
+	err = runConcurrent(ctx, workers, candidates, func(n extractDataCandidate) error {
 		r.SetCurrent(n.name)
 
 		text, tool := n.text, n.tool
@@ -252,42 +265,59 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 		if strings.TrimSpace(text) == "" {
 			data, err := noteBytes(db, n.abs, n.blob, n.content, n.mime)
 			if err != nil {
+				saveMu.Lock()
 				_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool='' WHERE id=?`, err.Error(), n.id)
+				saveMu.Unlock()
 				r.Fail("%s: %v", n.name, err)
 				r.Advance(false)
-				continue
+				return nil
 			}
 
 			text, tool, err = ExtractNoteText(ctx, c, db, n.name, n.mime, data, n.id)
 			if err != nil {
+				saveMu.Lock()
 				_, _ = db.Exec(`UPDATE notes SET extract_error=?, extract_tool=? WHERE id=?`, err.Error(), tool, n.id)
+				saveMu.Unlock()
 				r.Fail("%s: %v", n.name, err)
 				r.Advance(false)
-				continue
+				return nil
 			}
 			text = cleanExtracted(text)
 			extractedNow = true
 		}
 
 		if strings.TrimSpace(text) == "" {
+			saveMu.Lock()
 			_, _ = db.Exec(`UPDATE notes SET extract_error=? WHERE id=?`, "no text extracted", n.id)
+			saveMu.Unlock()
 			r.Fail("%s: no text extracted", n.name)
 			r.Advance(false)
-			continue
+			return nil
 		}
 		// Store the result directly in the markdown column — it is the single
 		// source of truth for export, LLM prompts and the database browser.
 		if extractedNow {
-			if _, err := db.Exec(`UPDATE notes SET markdown=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id); err != nil {
-				r.Fail("%s: %v", n.name, err)
-				r.Advance(false)
-				continue
+			saveMu.Lock()
+			_, writeErr := db.Exec(`UPDATE notes SET markdown=?, extract_error='', extract_tool=? WHERE id=?`, text, tool, n.id)
+			if writeErr == nil {
+				_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, n.id, DataExtractionProcess)
 			}
-			_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, n.id, DataExtractionProcess)
+			saveMu.Unlock()
+			if writeErr != nil {
+				r.Fail("%s: %v", n.name, writeErr)
+				r.Advance(false)
+				return nil
+			}
 		}
+		mu.Lock()
 		done++
+		mu.Unlock()
 		r.Advance(false)
 		r.Logf("%s: %d chars", n.name, len([]rune(text)))
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	r.Logf("data extraction: processed — %d", done)
 	return nil
