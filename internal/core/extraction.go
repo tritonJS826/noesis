@@ -38,9 +38,19 @@ func ExtractNoteText(ctx context.Context, c Config, db *sql.DB, name, mimeType s
 		if noteID != 0 {
 			vars = mergeVars(vars, noteDBVars(db, "db", noteID))
 		}
+		// Ollama cannot identify every image format (e.g. AVIF), so non-PNG/JPEG
+		// images are transcoded to PNG first — see image.go for the rationale.
+		imgData, converted, err := visionImage(ctx, name, mimeType, data)
+		if err != nil {
+			return "", "ollama:vision", err
+		}
+		tool = "ollama:vision"
+		if converted {
+			tool += "+png"
+		}
 		text, err = askOllamaTextModel(ctx, c, c.visionModel(), expandPrompt(prompt, vars),
-			[]string{base64.StdEncoding.EncodeToString(data)})
-		return text, "ollama:vision", err
+			[]string{base64.StdEncoding.EncodeToString(imgData)})
+		return text, tool, err
 	case strings.HasPrefix(mimeType, "image/"):
 		// SVG and other XML-based images need no vision model.
 		return string(data), "raw", nil
