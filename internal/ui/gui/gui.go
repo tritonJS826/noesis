@@ -88,6 +88,8 @@ type state struct {
 	maxChars, workers                          *widget.Entry
 	audioEngine                                *widget.Select
 	whisperModel                               *widget.Select
+	whisperBackend                             *widget.Select
+	whisperDevice                              *widget.Entry
 	googleKey                                  *widget.Entry
 	speechLanguage                             *widget.Select
 	formatsLabel                               *widget.Label
@@ -203,6 +205,8 @@ func newState(db *sql.DB, dbPath string) *state {
 	st := core.LoadAppSettings(db)
 	s.audioEngine = widget.NewSelect(core.AudioEngineLabels(), nil)
 	s.whisperModel = widget.NewSelect(core.WhisperModelNames(), nil)
+	s.whisperBackend = widget.NewSelect(core.WhisperBackendLabels(), nil)
+	s.whisperDevice = widget.NewEntry()
 	s.googleKey = widget.NewEntry()
 	s.googleKey.Password = true
 	s.speechLanguage = widget.NewSelect(core.SpeechLanguageLabels(), nil)
@@ -216,12 +220,15 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.workers.SetText(strconv.Itoa(st.Workers))
 	s.audioEngine.SetSelected(core.AudioEngineLabel(st.AudioEngine))
 	s.whisperModel.SetSelected(core.NormalizeWhisperModel(st.WhisperModel))
+	s.whisperBackend.SetSelected(core.WhisperBackendLabel(st.WhisperBackend))
+	s.whisperDevice.SetText(strconv.Itoa(st.WhisperDevice))
 	s.googleKey.SetText(st.GoogleAPIKey)
 	s.speechLanguage.SetSelected(core.SpeechLanguageLabel(st.SpeechLanguage))
 	s.audioEngine.OnChanged = func(string) { s.persistSettings() }
 	s.whisperModel.OnChanged = func(string) { s.persistSettings() }
+	s.whisperBackend.OnChanged = func(string) { s.persistSettings() }
 	s.speechLanguage.OnChanged = func(string) { s.persistSettings() }
-	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.transcribe, s.maxChars, s.workers, s.googleKey} {
+	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.transcribe, s.maxChars, s.workers, s.googleKey, s.whisperDevice} {
 		e.OnSubmitted = func(string) { s.persistSettings() }
 	}
 	s.browseCols = defaultBrowseCols()
@@ -657,6 +664,8 @@ func (s *state) startCompare(path string) {
 		audio := core.AudioOptions{
 			Engine:         cfg.AudioEngine,
 			WhisperModel:   cfg.WhisperModel,
+			WhisperBackend: cfg.WhisperBackend,
+			WhisperDevice:  cfg.WhisperDevice,
 			GoogleAPIKey:   cfg.GoogleAPIKey,
 			SpeechLanguage: cfg.SpeechLanguage,
 			OllamaHost:     cfg.Host,
@@ -1009,17 +1018,20 @@ func (s *state) runSyncDiff() {
 			formats[e] = true
 		}
 	}
+	src := strings.TrimSpace(s.src.Text)
 	go func() {
-		items, err := core.SyncDiff(db, strings.TrimSpace(s.src.Text), formats)
-		s.mu.Lock()
-		if err != nil {
-			dialog.ShowError(err, s.win)
-		} else {
-			s.syncItems = items
-			s.syncChecked = nil
-		}
-		s.mu.Unlock()
-		s.render()
+		items, err := core.SyncDiff(db, src, formats)
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(err, s.win)
+			} else {
+				s.mu.Lock()
+				s.syncItems = items
+				s.syncChecked = nil
+				s.mu.Unlock()
+			}
+			s.render()
+		})
 	}()
 }
 
@@ -1058,21 +1070,16 @@ func (s *state) applySync() {
 		BinaryStorage: cfg.BinaryStorage,
 	}
 	s.beginRun("Syncing…")
+	src := strings.TrimSpace(s.src.Text)
 	go func() {
 		_, cancel := s.runContext()
 		defer cancel()
-		removed, imported, err := core.SyncApply(db, strings.TrimSpace(s.src.Text), removeIDs, newPaths, opts)
+		removed, imported, err := core.SyncApply(db, src, removeIDs, newPaths, opts)
 		s.mu.Lock()
-		if err != nil {
-			s.phaseLabel.SetText("Sync error: " + err.Error())
-		} else {
-			s.phaseLabel.SetText(fmt.Sprintf("Sync done — removed %d, imported %d", removed, imported))
-		}
 		s.syncItems = nil
 		s.syncChecked = nil
-		s.running = false
 		s.mu.Unlock()
-		s.render()
+		s.finishRunMessage(err, fmt.Sprintf("Sync done — removed %d, imported %d", removed, imported))
 	}()
 }
 
@@ -1147,6 +1154,12 @@ func (s *state) runContext() (context.Context, context.CancelFunc) {
 }
 
 func (s *state) finishRun(err error) {
+	s.finishRunMessage(err, "Done")
+}
+
+// finishRunMessage is finishRun with a caller-provided success label, used by
+// sync which reports how many notes were removed/imported.
+func (s *state) finishRunMessage(err error, label string) {
 	s.mu.Lock()
 	s.running = false
 	s.cancel = nil
@@ -1159,7 +1172,7 @@ func (s *state) finishRun(err error) {
 			s.phaseLabel.SetText("Stopped with error")
 			dialog.ShowError(err, s.win)
 		} else {
-			s.phaseLabel.SetText("Done")
+			s.phaseLabel.SetText(label)
 		}
 		s.screen = scrMenu
 		s.render()
@@ -1223,6 +1236,11 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 		workers = 100
 	}
 
+	whisperDevice, err := strconv.Atoi(strings.TrimSpace(s.whisperDevice.Text))
+	if err != nil || whisperDevice < 0 {
+		whisperDevice = core.DefaultWhisperDevice
+	}
+
 	cfg := core.Config{
 		Host:            strings.TrimSpace(s.host.Text),
 		Model:           strings.TrimSpace(s.model.Text),
@@ -1230,6 +1248,8 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 		TranscribeModel: strings.TrimSpace(s.transcribe.Text),
 		AudioEngine:     core.NormalizeAudioEngine(s.audioEngine.Selected),
 		WhisperModel:    core.NormalizeWhisperModel(s.whisperModel.Selected),
+		WhisperBackend:  core.NormalizeWhisperBackend(s.whisperBackend.Selected),
+		WhisperDevice:   whisperDevice,
 		GoogleAPIKey:    strings.TrimSpace(s.googleKey.Text),
 		SpeechLanguage:  core.NormalizeSpeechLanguage(s.speechLanguage.Selected),
 		BinaryStorage:   core.BinaryStorageLinks,
@@ -1253,6 +1273,8 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		TranscribeModel: cfg.TranscribeModel,
 		AudioEngine:     cfg.AudioEngine,
 		WhisperModel:    cfg.WhisperModel,
+		WhisperBackend:  cfg.WhisperBackend,
+		WhisperDevice:   cfg.WhisperDevice,
 		GoogleAPIKey:    cfg.GoogleAPIKey,
 		SpeechLanguage:  cfg.SpeechLanguage,
 		MaxChars:        cfg.MaxChars,

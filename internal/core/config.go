@@ -23,6 +23,21 @@ const (
 // DefaultWhisperModel is the whisper.cpp model selected on first launch.
 const DefaultWhisperModel = "base"
 
+// Whisper GPU backends. "auto" uses a Vulkan runtime when one is available and
+// otherwise falls back to the CPU build; "cpu" always passes -ng; "vulkan"
+// requires a Vulkan-enabled runtime.
+const (
+	WhisperBackendAuto   = "auto"
+	WhisperBackendCPU    = "cpu"
+	WhisperBackendVulkan = "vulkan"
+)
+
+// DefaultWhisperBackend is the GPU policy selected on first launch.
+const DefaultWhisperBackend = WhisperBackendAuto
+
+// DefaultWhisperDevice is the Vulkan device index (0 = default adapter).
+const DefaultWhisperDevice = 0
+
 // DefaultSpeechLanguage is the language used by API backends that require one.
 // Whisper ignores this and auto-detects.
 const DefaultSpeechLanguage = "ru-RU"
@@ -35,6 +50,8 @@ type Config struct {
 	TranscribeModel string // legacy Ollama audio transcription model
 	AudioEngine     string // whisper / google / ollama
 	WhisperModel    string
+	WhisperBackend  string // auto / cpu / vulkan
+	WhisperDevice   int    // Vulkan device index
 	BinaryStorage   string // links (default) / db
 	GoogleAPIKey    string
 	SpeechLanguage  string
@@ -68,6 +85,8 @@ func DefaultConfig() Config {
 		TranscribeModel: DefaultTranscribeModel,
 		AudioEngine:     AudioEngineWhisper,
 		WhisperModel:    DefaultWhisperModel,
+		WhisperBackend:  DefaultWhisperBackend,
+		WhisperDevice:   DefaultWhisperDevice,
 		BinaryStorage:   BinaryStorageLinks,
 		SpeechLanguage:  DefaultSpeechLanguage,
 		MaxChars:        400000,

@@ -235,7 +235,7 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 	if src == "" {
 		return errors.New("specify source: -src FOLDER|ARCHIVE|JSON")
 	}
-	files, err := collectFiles(src, opt.Source)
+	files, err := collectFiles(src, opt.Source, opt.Formats)
 	if err != nil {
 		return err
 	}
@@ -284,12 +284,6 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 				r.Advance(true)
 				continue
 			}
-		}
-
-		if !opt.Formats.Contains(filepath.Ext(rel)) {
-			r.Advance(true)
-			skipped++
-			continue
 		}
 
 		name := filepath.Base(rel)
@@ -348,18 +342,18 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 	return nil
 }
 
-func collectFiles(src string, source ImportSource) ([]importFile, error) {
+func collectFiles(src string, source ImportSource, formats FormatSet) ([]importFile, error) {
 	switch source {
 	case SourceZip:
-		return collectZip(src)
+		return collectZip(src, formats)
 	case SourceJSONArray:
-		return collectJSONArray(src)
+		return collectJSONArray(src, formats)
 	default:
-		return collectFilesystem(src), nil
+		return collectFilesystem(src, formats), nil
 	}
 }
 
-func collectFilesystem(src string) []importFile {
+func collectFilesystem(src string, formats FormatSet) []importFile {
 	abs, err := filepath.Abs(src)
 	if err != nil {
 		return nil
@@ -376,13 +370,17 @@ func collectFilesystem(src string) []importFile {
 			return nil
 		}
 		rel, _ := filepath.Rel(abs, p)
-		files = append(files, importFile{Path: filepath.ToSlash(rel), Abs: p})
+		rel = filepath.ToSlash(rel)
+		if !formats.Contains(filepath.Ext(rel)) {
+			return nil
+		}
+		files = append(files, importFile{Path: rel, Abs: p})
 		return nil
 	})
 	return files
 }
 
-func collectZip(src string) ([]importFile, error) {
+func collectZip(src string, formats FormatSet) ([]importFile, error) {
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return nil, err
@@ -391,6 +389,10 @@ func collectZip(src string) ([]importFile, error) {
 	var files []importFile
 	for _, zf := range r.File {
 		if zf.FileInfo().IsDir() {
+			continue
+		}
+		name := filepath.ToSlash(zf.Name)
+		if !formats.Contains(filepath.Ext(name)) {
 			continue
 		}
 		rc, err := zf.Open()
@@ -402,7 +404,7 @@ func collectZip(src string) ([]importFile, error) {
 		if err != nil {
 			continue
 		}
-		files = append(files, importFile{Path: filepath.ToSlash(zf.Name), Data: data})
+		files = append(files, importFile{Path: name, Data: data})
 	}
 	return files, nil
 }
@@ -415,7 +417,7 @@ type JSONItem struct {
 	Name    string `json:"name"` // fallback when path is empty
 }
 
-func collectJSONArray(src string) ([]importFile, error) {
+func collectJSONArray(src string, formats FormatSet) ([]importFile, error) {
 	raw, err := os.ReadFile(src)
 	if err != nil {
 		return nil, err
@@ -431,6 +433,10 @@ func collectJSONArray(src string) ([]importFile, error) {
 			}
 			if f.Path == "" {
 				f.Path = fmt.Sprintf("item-%03d", i+1)
+			}
+			f.Path = filepath.ToSlash(f.Path)
+			if !formats.Contains(filepath.Ext(f.Path)) {
+				continue
 			}
 			switch {
 			case it.Data != "":
@@ -451,6 +457,9 @@ func collectJSONArray(src string) ([]importFile, error) {
 		return nil, fmt.Errorf("json array source: %w", err)
 	}
 	for _, p := range paths {
+		if !formats.Contains(filepath.Ext(p)) {
+			continue
+		}
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			continue

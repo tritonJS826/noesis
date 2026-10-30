@@ -43,6 +43,8 @@ func Run(args []string) error {
 	transcribeModel := fs.String("transcribe-model", def.TranscribeModel, "legacy ollama audio transcription model")
 	audioEngine := fs.String("audio", def.AudioEngine, "audio backend: whisper, google or ollama (legacy)")
 	whisperModel := fs.String("whisper-model", def.WhisperModel, "whisper.cpp model; download it first in the TUI/GUI settings")
+	whisperBackend := fs.String("whisper-backend", def.WhisperBackend, "whisper GPU backend: auto, cpu or vulkan")
+	whisperDevice := fs.Int("whisper-device", def.WhisperDevice, "Vulkan device index (0 = default adapter)")
 	googleKey := fs.String("google-key", def.GoogleAPIKey, "Google Speech-to-Text API key (requires ffmpeg)")
 	speechLanguage := fs.String("speech-language", def.SpeechLanguage, "language code for Google transcription, e.g. ru-RU")
 	binaryStorage := fs.String("binary-storage", def.BinaryStorage, "binary storage: links (default, smaller db) or db (base64)")
@@ -76,6 +78,9 @@ func Run(args []string) error {
 	}
 	if *workers > 100 {
 		*workers = 100
+	}
+	if *whisperDevice < 0 {
+		*whisperDevice = 0
 	}
 
 	db, err := core.OpenDB(*dbPath)
@@ -113,6 +118,12 @@ func Run(args []string) error {
 	if !seen["whisper-model"] {
 		*whisperModel = saved.WhisperModel
 	}
+	if !seen["whisper-backend"] {
+		*whisperBackend = saved.WhisperBackend
+	}
+	if !seen["whisper-device"] {
+		*whisperDevice = saved.WhisperDevice
+	}
 	if !seen["google-key"] {
 		*googleKey = saved.GoogleAPIKey
 	}
@@ -136,6 +147,8 @@ func Run(args []string) error {
 		TranscribeModel: *transcribeModel,
 		AudioEngine:     core.NormalizeAudioEngine(*audioEngine),
 		WhisperModel:    core.NormalizeWhisperModel(*whisperModel),
+		WhisperBackend:  core.NormalizeWhisperBackend(*whisperBackend),
+		WhisperDevice:   *whisperDevice,
 		GoogleAPIKey:    *googleKey,
 		SpeechLanguage:  core.NormalizeSpeechLanguage(*speechLanguage),
 		BinaryStorage:   core.NormalizeBinaryStorage(*binaryStorage),
@@ -175,6 +188,8 @@ func Run(args []string) error {
 		audio := core.AudioOptions{
 			Engine:         cfg.AudioEngine,
 			WhisperModel:   cfg.WhisperModel,
+			WhisperBackend: cfg.WhisperBackend,
+			WhisperDevice:  cfg.WhisperDevice,
 			GoogleAPIKey:   cfg.GoogleAPIKey,
 			SpeechLanguage: cfg.SpeechLanguage,
 			OllamaHost:     cfg.Host,
@@ -275,11 +290,28 @@ func printFormatStats(db *sql.DB) {
 		fmt.Println("no files imported yet")
 		return
 	}
-	total, extracted := 0, 0
+	total, text, textWithText, binary, extracted, failed := 0, 0, 0, 0, 0, 0
 	for _, st := range stats {
-		fmt.Printf("%6d/%-6d .%-10s extracted\n", st.Extracted, st.Total, st.Ext)
+		fmt.Printf("%-22s %s\n", st.Name(), st.Label())
 		total += st.Total
-		extracted += st.Extracted
+		if st.Kind == "text" {
+			text += st.Total
+			textWithText += st.Extracted
+		} else {
+			binary += st.Total
+			extracted += st.Extracted
+		}
+		failed += st.Failed
 	}
-	fmt.Printf("total: %d/%d extracted over %d format(s)\n", extracted, total, len(stats))
+	fmt.Printf("total: %d notes over %d format(s)\n", total, len(stats))
+	if text > 0 {
+		fmt.Printf("text: %d imported · %d with text (no extraction needed)\n", text, textWithText)
+	}
+	if binary > 0 {
+		fmt.Printf("binary: %d/%d extracted", extracted, binary)
+		if failed > 0 {
+			fmt.Printf(" · %d failed", failed)
+		}
+		fmt.Println()
+	}
 }

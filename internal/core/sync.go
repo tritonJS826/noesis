@@ -137,24 +137,39 @@ func SyncDiff(db *sql.DB, src string, formats FormatSet) ([]SyncItem, error) {
 // selected new files. The caller is responsible for providing only the IDs that
 // the user explicitly chose.
 func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opts ImportOptions) (removed int, imported int, err error) {
-	// Remove selected notes and scrub their links.
+	absSrc, absErr := filepath.Abs(src)
+	if absErr != nil {
+		return 0, 0, fmt.Errorf("resolve source folder: %w", absErr)
+	}
+
+	// Remove selected notes and scrub their links. The returned removed count
+	// is the number of notes, not the number of other notes whose links were
+	// scrubbed (that is shown separately by RemoveNoteAndLinksByID's callers).
 	for _, id := range removeIDs {
-		n, s, rerr := RemoveNoteAndLinksByID(db, id)
+		n, _, rerr := RemoveNoteAndLinksByID(db, id)
 		if rerr != nil {
-			err = rerr // return the first error after finishing
+			if err == nil {
+				err = rerr
+			}
 			continue
 		}
-		removed += n + s
+		removed += n
 	}
 
 	if len(newPaths) > 0 {
 		// Build a minimal set of import files from the given paths.
 		var files []importFile
 		for _, p := range newPaths {
-			abs, _ := filepath.Abs(p)
-			rel, _ := filepath.Rel(src, p)
-			if rel == "" {
-				rel = filepath.Base(p)
+			abs, aerr := filepath.Abs(p)
+			if aerr != nil {
+				if err == nil {
+					err = aerr
+				}
+				continue
+			}
+			rel, rerr := filepath.Rel(absSrc, abs)
+			if rerr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				rel = filepath.Base(abs)
 			}
 			files = append(files, importFile{
 				Path: filepath.ToSlash(rel),
@@ -168,15 +183,18 @@ func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opt
 
 		for _, f := range files {
 			rel := filepath.ToSlash(f.Path)
+			if !opts.Formats.Contains(filepath.Ext(rel)) {
+				continue
+			}
 			var one int
 			if db.QueryRow(`SELECT 1 FROM notes WHERE file_path=?`, rel).Scan(&one) == nil {
 				continue
 			}
 			data, rerr := os.ReadFile(f.Abs)
 			if rerr != nil {
-				continue
-			}
-			if !opts.Formats.Contains(filepath.Ext(rel)) {
+				if err == nil {
+					err = fmt.Errorf("%s: %w", rel, rerr)
+				}
 				continue
 			}
 
@@ -191,7 +209,14 @@ func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opt
 			case binaryMode == BinaryStorageDB:
 				content = base64.StdEncoding.EncodeToString(data)
 			case f.Abs == "":
-				blobPath, _ = writeBlobFile(db, rel, name, data)
+				stored, berr := writeBlobFile(db, rel, name, data)
+				if berr != nil {
+					if err == nil {
+						err = fmt.Errorf("%s: store binary: %w", rel, berr)
+					}
+					continue
+				}
+				blobPath = stored
 			}
 
 			// Importing only stores files: documents, images and audio are
@@ -209,7 +234,11 @@ func SyncApply(db *sql.DB, src string, removeIDs []int64, newPaths []string, opt
 				rel, f.Abs, name, content, mimeType,
 				markdown, "", "", blobPath,
 				"", "", now,
-			); exErr == nil {
+			); exErr != nil {
+				if err == nil {
+					err = fmt.Errorf("%s: %w", rel, exErr)
+				}
+			} else {
 				imported++
 			}
 		}

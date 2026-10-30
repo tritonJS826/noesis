@@ -873,6 +873,8 @@ const (
 	setVision
 	setAudio
 	setWhisper
+	setWhisperGPU
+	setWhisperDevice
 	setGoogle
 	setLang
 	setHost
@@ -983,24 +985,32 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 				m.speechLanguage = core.NormalizeSpeechLanguage(value)
 			case "binary":
 				m.binaryStorage = core.NormalizeBinaryStorage(value)
+			case "whisper_gpu":
+				m.whisperBackend = core.NormalizeWhisperBackend(value)
 			}
 			m.persistSettings()
 		}
 		m.screen = scrSettings
-		if m.pickerKind == "audio" {
+		switch m.pickerKind {
+		case "audio":
 			m.cursor = setAudio
-		} else if m.pickerKind == "binary" {
+		case "binary":
 			m.cursor = setBinary
-		} else {
+		case "whisper_gpu":
+			m.cursor = setWhisperGPU
+		default:
 			m.cursor = setLang
 		}
 	case "esc":
 		m.screen = scrSettings
-		if m.pickerKind == "audio" {
+		switch m.pickerKind {
+		case "audio":
 			m.cursor = setAudio
-		} else if m.pickerKind == "binary" {
+		case "binary":
 			m.cursor = setBinary
-		} else {
+		case "whisper_gpu":
+			m.cursor = setWhisperGPU
+		default:
 			m.cursor = setLang
 		}
 	case "?":
@@ -1194,6 +1204,13 @@ func (m *model) startEdit() {
 	case setWhisper:
 		m.openWhisperScreen()
 		return
+	case setWhisperGPU:
+		m.openOptionPicker("whisper_gpu", core.WhisperBackendIDs(), core.WhisperBackendLabels(), m.whisperBackend)
+		return
+	case setWhisperDevice:
+		m.textInput.SetValue(fmt.Sprintf("%d", m.whisperDevice))
+		m.textInput.Focus()
+		m.editingField = "VULKAN DEVICE — device index (0 = default)"
 	case setGoogle:
 		m.textInput.SetValue(m.googleAPIKey)
 		m.textInput.EchoMode = textinput.EchoPassword
@@ -1338,6 +1355,10 @@ func (m *model) saveField() {
 		}
 		if m.workers > 100 {
 			m.workers = 100
+		}
+	case setWhisperDevice:
+		if n, _ := fmt.Sscanf(val, "%d", &m.whisperDevice); n != 1 || m.whisperDevice < 0 {
+			m.whisperDevice = core.DefaultWhisperDevice
 		}
 	}
 	m.persistSettings()

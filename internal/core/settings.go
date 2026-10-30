@@ -73,6 +73,8 @@ type AppSettings struct {
 	TranscribeModel string
 	AudioEngine     string
 	WhisperModel    string
+	WhisperBackend  string
+	WhisperDevice   int
 	BinaryStorage   string
 	GoogleAPIKey    string
 	SpeechLanguage  string
@@ -96,6 +98,8 @@ func DefaultAppSettings() AppSettings {
 		TranscribeModel: c.TranscribeModel,
 		AudioEngine:     c.AudioEngine,
 		WhisperModel:    c.WhisperModel,
+		WhisperBackend:  c.WhisperBackend,
+		WhisperDevice:   c.WhisperDevice,
 		BinaryStorage:   c.BinaryStorage,
 		GoogleAPIKey:    c.GoogleAPIKey,
 		SpeechLanguage:  c.SpeechLanguage,
@@ -141,6 +145,14 @@ func LoadAppSettings(db *sql.DB) AppSettings {
 	}
 	if v, ok := get("whisper_model"); ok {
 		s.WhisperModel = NormalizeWhisperModel(v)
+	}
+	if v, ok := get("whisper_backend"); ok {
+		s.WhisperBackend = NormalizeWhisperBackend(v)
+	}
+	if v, ok := get("whisper_device"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			s.WhisperDevice = n
+		}
 	}
 	if v, ok := get("binary_storage"); ok {
 		s.BinaryStorage = NormalizeBinaryStorage(v)
@@ -201,6 +213,8 @@ func (s AppSettings) Save(db *sql.DB) error {
 		{"transcribe_model", s.TranscribeModel, def.TranscribeModel},
 		{"audio_engine", s.AudioEngine, def.AudioEngine},
 		{"whisper_model", s.WhisperModel, def.WhisperModel},
+		{"whisper_backend", NormalizeWhisperBackend(s.WhisperBackend), NormalizeWhisperBackend(def.WhisperBackend)},
+		{"whisper_device", strconv.Itoa(s.WhisperDevice), strconv.Itoa(def.WhisperDevice)},
 		{"binary_storage", NormalizeBinaryStorage(s.BinaryStorage), def.BinaryStorage},
 		{"google_api_key", s.GoogleAPIKey, def.GoogleAPIKey},
 		{"speech_language", s.SpeechLanguage, def.SpeechLanguage},

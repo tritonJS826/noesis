@@ -18,6 +18,7 @@ func TestLoadFormatStats(t *testing.T) {
 	add("sub/c.MP3", "c.MP3", "")
 	add("d.md", "d.md", "hello")
 	add("sub/e.MD", "e.MD", "world")
+	add("empty.txt", "empty.txt", "")
 	add("README", "README", "no extension")
 
 	stats := LoadFormatStats(db)
@@ -25,17 +26,26 @@ func TestLoadFormatStats(t *testing.T) {
 	for _, st := range stats {
 		got[st.Ext] = st
 	}
-	if got["mp3"].Total != 3 || got["mp3"].Extracted != 1 {
+	if got["mp3"].Total != 3 || got["mp3"].Extracted != 1 || got["mp3"].Ready != 1 {
 		t.Fatalf("mp3 = %#v", got["mp3"])
 	}
-	if got["md"].Total != 2 || got["md"].Extracted != 2 {
+	if got["mp3"].Kind != "audio" || got["mp3"].Label() != "1/3 .mp3 extracted" {
+		t.Fatalf("mp3 label = %q (%s)", got["mp3"].Label(), got["mp3"].Kind)
+	}
+	if got["md"].Total != 2 || got["md"].Extracted != 2 || got["md"].Ready != 2 {
 		t.Fatalf("md = %#v", got["md"])
 	}
-	if got["(none)"].Total != 1 || got["(none)"].Extracted != 1 {
+	if got["txt"].Total != 1 || got["txt"].Extracted != 0 || got["txt"].Ready != 1 || got["txt"].Kind != "text" {
+		t.Fatalf("txt = %#v", got["txt"])
+	}
+	if got["txt"].Label() != "1 .txt imported · 0 with text" {
+		t.Fatalf("txt label = %q", got["txt"].Label())
+	}
+	if got["(none)"].Total != 1 || got["(none)"].Extracted != 1 || got["(none)"].Ready != 1 {
 		t.Fatalf("(none) = %#v", got["(none)"])
 	}
-	// Results are ordered by extension: "(none)" < md < mp3.
-	if len(stats) != 3 || stats[0].Ext != "(none)" || stats[1].Ext != "md" || stats[2].Ext != "mp3" {
+	// Results are ordered by extension: "(none)" < md < mp3 < txt.
+	if len(stats) != 4 || stats[0].Ext != "(none)" || stats[1].Ext != "md" || stats[2].Ext != "mp3" || stats[3].Ext != "txt" {
 		t.Fatalf("order = %#v", stats)
 	}
 }

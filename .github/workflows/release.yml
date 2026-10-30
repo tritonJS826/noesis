@@ -84,9 +84,113 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Build a Vulkan-enabled whisper.cpp runtime and publish it as a release
+  # asset. The app downloads these archives into its cache as "runtime-vulkan"
+  # when the user selects the Vulkan backend (see internal/core/whisper.go).
+  whisper-vulkan:
+    name: Whisper Vulkan runtime (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            asset: noesis-whisper-vulkan-linux-amd64.tar.gz
+            archive_kind: tar
+          - os: windows-latest
+            platform: windows
+            asset: noesis-whisper-vulkan-windows-amd64.zip
+            archive_kind: zip
+
+    steps:
+      - name: Check out whisper.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: b5454
+          path: whisper.cpp
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          cache: true
+          stripdown: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure (Linux)
+        if: matrix.archive_kind == 'tar'
+        shell: bash
+        working-directory: whisper.cpp
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_VULKAN=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+
+      - name: Configure (Windows)
+        if: matrix.archive_kind == 'zip'
+        shell: bash
+        working-directory: whisper.cpp
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_VULKAN=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+
+      - name: Build
+        shell: bash
+        working-directory: whisper.cpp
+        run: cmake --build build --config Release --target whisper-cli
+
+      - name: Stage runtime (Linux)
+        if: matrix.archive_kind == 'tar'
+        shell: bash
+        working-directory: whisper.cpp
+        run: |
+          set -euo pipefail
+          stage="stage/noesis-whisper-vulkan"
+          mkdir -p "$stage"
+          # Every CMake target (the CLI and all shared libraries) is written to
+          # build/bin. Copy it wholesale so .so symlinks such as libggml.so.0
+          # (needed by the dynamic loader) are preserved. LD_LIBRARY_PATH is set
+          # to this directory at run time.
+          cp -a build/bin/. "$stage/"
+          test -f "$stage/whisper-cli"
+          ls -l "$stage"
+          tar -C stage -czf "$asset" noesis-whisper-vulkan
+          ls -l "$asset"
+        env:
+          asset: ${{ matrix.asset }}
+
+      - name: Stage runtime (Windows)
+        if: matrix.archive_kind == 'zip'
+        shell: pwsh
+        working-directory: whisper.cpp
+        run: |
+          $stage = "stage/noesis-whisper-vulkan"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path "build/bin/Release/*" -Destination $stage -Recurse -Force
+          if (-not (Test-Path "$stage/whisper-cli.exe")) { throw "whisper-cli.exe missing" }
+          Get-ChildItem $stage
+          Compress-Archive -Path $stage -DestinationPath "${{ matrix.asset }}" -Force
+          Get-ChildItem "${{ matrix.asset }}"
+
+      - name: Upload Vulkan runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: noesis-whisper-vulkan-${{ matrix.platform }}-amd64
+          path: whisper.cpp/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, whisper-vulkan]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts

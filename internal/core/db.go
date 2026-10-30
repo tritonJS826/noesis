@@ -432,21 +432,51 @@ type Stats struct {
 	Notes, Tagged, TagAssign, UniqTags, Links, PairsDone, Written int
 }
 
-// FormatStat summarises how many notes of one file extension are stored and how
-// many of them have extracted text (a non-empty markdown column).
+// FormatStat summarises how many notes of one file extension are stored, how
+// many already contain text, and how many failed extraction. Kind is the
+// format-catalog kind (text, image, audio, video or document).
 type FormatStat struct {
 	Ext       string
+	Kind      string
 	Total     int
-	Extracted int
+	Ready     int // imported text, or binary files with extracted text
+	Extracted int // notes with a non-empty markdown column
+	Failed    int // notes with an extraction error
 }
 
-// LoadFormatStats groups the notes table by file extension and counts how many
-// notes have markdown (extracted text). Results are ordered by extension.
+// Name returns the extension with a leading dot. Notes without an extension are
+// shown as "(no extension)".
+func (s FormatStat) Name() string {
+	if s.Ext == "(none)" {
+		return "(no extension)"
+	}
+	return "." + s.Ext
+}
+
+// Label is the human-readable per-format summary shared by the CLI, TUI and GUI.
+// Plain text is ready as soon as it is imported; documents, audio and images
+// report extraction progress instead.
+func (s FormatStat) Label() string {
+	if s.Kind == "text" {
+		if s.Extracted < s.Total {
+			return fmt.Sprintf("%d %s imported · %d with text", s.Total, s.Name(), s.Extracted)
+		}
+		return fmt.Sprintf("%d %s ready", s.Total, s.Name())
+	}
+	label := fmt.Sprintf("%d/%d %s extracted", s.Extracted, s.Total, s.Name())
+	if s.Failed > 0 {
+		label += fmt.Sprintf(" · %d failed", s.Failed)
+	}
+	return label
+}
+
+// LoadFormatStats groups the notes table by file extension and counts imported
+// and extracted notes. Results are ordered by extension.
 func LoadFormatStats(db *sql.DB) []FormatStat {
 	if db == nil {
 		return nil
 	}
-	rows, err := db.Query(`SELECT file_name, markdown FROM notes`)
+	rows, err := db.Query(`SELECT file_name, mime_type, markdown, extract_error FROM notes`)
 	if err != nil {
 		return nil
 	}
@@ -455,8 +485,8 @@ func LoadFormatStats(db *sql.DB) []FormatStat {
 	byExt := map[string]int{}
 	var out []FormatStat
 	for rows.Next() {
-		var name, markdown string
-		if err := rows.Scan(&name, &markdown); err != nil {
+		var name, mimeType, markdown, extractError string
+		if err := rows.Scan(&name, &mimeType, &markdown, &extractError); err != nil {
 			return out
 		}
 		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
@@ -467,15 +497,45 @@ func LoadFormatStats(db *sql.DB) []FormatStat {
 		if !ok {
 			i = len(out)
 			byExt[ext] = i
-			out = append(out, FormatStat{Ext: ext})
+			kind := formatKind(ext, mimeType)
+			out = append(out, FormatStat{Ext: ext, Kind: kind})
 		}
 		out[i].Total++
-		if strings.TrimSpace(markdown) != "" {
+		hasText := strings.TrimSpace(markdown) != ""
+		if hasText {
 			out[i].Extracted++
+		}
+		if out[i].Kind == "text" || hasText {
+			out[i].Ready++
+		}
+		if strings.TrimSpace(extractError) != "" {
+			out[i].Failed++
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Ext < out[j].Ext })
 	return out
+}
+
+// formatKind resolves the catalog kind for an extension, falling back to the
+// stored MIME type for formats that are not in the catalog.
+func formatKind(ext, mimeType string) string {
+	for _, f := range formatCatalog {
+		if f.Ext == ext {
+			return f.Kind
+		}
+	}
+	switch {
+	case mimeType == "" || IsText(mimeType):
+		return "text"
+	case strings.HasPrefix(mimeType, "image/"):
+		return "image"
+	case strings.HasPrefix(mimeType, "audio/"):
+		return "audio"
+	case strings.HasPrefix(mimeType, "video/"):
+		return "video"
+	default:
+		return "document"
+	}
 }
 
 // LoadStats returns aggregate counters used by the UI.
@@ -486,7 +546,7 @@ func LoadStats(db *sql.DB) Stats {
 	q(`SELECT COUNT(DISTINCT note_id) FROM tags`, &s.Tagged)
 	q(`SELECT COUNT(*) FROM tags`, &s.TagAssign)
 	q(`SELECT COUNT(DISTINCT tag) FROM tags`, &s.UniqTags)
-	q(`SELECT COUNT(*)/2 FROM links`, &s.Links)
+	q(`SELECT COUNT(*) FROM (SELECT MIN(src_id, dst_id), MAX(src_id, dst_id) FROM links GROUP BY 1, 2)`, &s.Links)
 	q(`SELECT COUNT(*) FROM pairs`, &s.PairsDone)
 	q(`SELECT COUNT(*) FROM notes WHERE out_hash<>''`, &s.Written)
 	return s
@@ -882,8 +942,8 @@ func migrateToMarkdown(db *sql.DB) {
 	}
 
 	type rec struct {
-		id                        int64
-		content, mime             string
+		id                           int64
+		content, mime                string
 		extractedText, extractedPath string
 	}
 	rows, err := db.Query(`SELECT id, content, mime_type, extracted_text, extracted_path FROM notes WHERE markdown=''`)

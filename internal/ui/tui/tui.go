@@ -74,6 +74,8 @@ type model struct {
 	visionModel                                            string
 	audioEngine, whisperModel, googleAPIKey, binaryStorage string
 	speechLanguage                                         string
+	whisperBackend                                         string
+	whisperDevice                                          int
 	maxChars, workers                                      int
 
 	ollamaModels []string
@@ -218,6 +220,8 @@ func newModel(db *sql.DB) *model {
 		visionModel:     st.VisionModel,
 		audioEngine:     st.AudioEngine,
 		whisperModel:    st.WhisperModel,
+		whisperBackend:  st.WhisperBackend,
+		whisperDevice:   st.WhisperDevice,
 		googleAPIKey:    st.GoogleAPIKey,
 		binaryStorage:   st.BinaryStorage,
 		speechLanguage:  st.SpeechLanguage,
@@ -247,6 +251,8 @@ func (m *model) persistSettings() {
 		TranscribeModel: m.transcribeModel,
 		AudioEngine:     m.audioEngine,
 		WhisperModel:    m.whisperModel,
+		WhisperBackend:  m.whisperBackend,
+		WhisperDevice:   m.whisperDevice,
 		GoogleAPIKey:    m.googleAPIKey,
 		BinaryStorage:   m.binaryStorage,
 		SpeechLanguage:  m.speechLanguage,
@@ -261,6 +267,8 @@ func (m *model) audioOptions() core.AudioOptions {
 	return core.AudioOptions{
 		Engine:         m.audioEngine,
 		WhisperModel:   m.whisperModel,
+		WhisperBackend: m.whisperBackend,
+		WhisperDevice:  m.whisperDevice,
 		GoogleAPIKey:   m.googleAPIKey,
 		SpeechLanguage: m.speechLanguage,
 		OllamaHost:     m.host,
@@ -291,6 +299,7 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 	visionModel := m.visionModel
 	extractFilter, extractFormats := m.extractFilter, m.extractFormats
 	audioEngine, whisperModel, googleAPIKey, speechLanguage := m.audioEngine, m.whisperModel, m.googleAPIKey, m.speechLanguage
+	whisperBackend, whisperDevice := m.whisperBackend, m.whisperDevice
 	maxChars, workers := m.maxChars, m.workers
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
@@ -303,6 +312,8 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 			TranscribeModel: transcribeModel,
 			AudioEngine:     audioEngine,
 			WhisperModel:    whisperModel,
+			WhisperBackend:  whisperBackend,
+			WhisperDevice:   whisperDevice,
 			BinaryStorage:   m.binaryStorage,
 			GoogleAPIKey:    googleAPIKey,
 			SpeechLanguage:  speechLanguage,
@@ -470,8 +481,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.whisperModel = core.NormalizeWhisperModel(msg.model)
 				m.persistSettings()
-				if core.WhisperRuntimeInstalled() {
-					m.whisperStatus = fmt.Sprintf("%s is downloaded and selected.", m.whisperModel)
+				if core.WhisperRuntimeInstalledFor(m.whisperBackend) {
+					m.whisperStatus = fmt.Sprintf("%s is downloaded and selected (%s).", m.whisperModel, core.WhisperBackendLabel(m.whisperBackend))
 				} else {
 					m.whisperStatus = fmt.Sprintf("%s is downloaded. Install whisper-cli to use it — see the instructions above.", m.whisperModel)
 				}

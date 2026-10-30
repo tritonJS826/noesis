@@ -178,7 +178,7 @@ func (m *model) viewMenu() string {
 	for _, sl := range statsLines {
 		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(sl))
 	}
-	parts = append(parts, sep("Formats (extracted/total)"))
+	parts = append(parts, sep("Formats"))
 	if len(formatLines) == 0 {
 		parts = append(parts, tuiDim.Width(cw).Render("no files imported yet"))
 	}
@@ -758,7 +758,7 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "AUDIO", "WHISPER", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
 	googleKey := "(not set)"
 	if strings.TrimSpace(m.googleAPIKey) != "" {
 		googleKey = "(set)"
@@ -768,7 +768,8 @@ func (m *model) viewSettings() string {
 		vision = "(= MODEL)"
 	}
 	vals := []string{m.src, m.out, m.dbPath, m.modelName, vision,
-		core.AudioEngineLabel(m.audioEngine), m.whisperSummary(), googleKey,
+		core.AudioEngineLabel(m.audioEngine), m.whisperSummary(),
+		core.WhisperBackendLabel(m.whisperBackend), fmt.Sprintf("%d", m.whisperDevice), googleKey,
 		core.SpeechLanguageLabel(m.speechLanguage), m.host,
 		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers),
 		core.BinaryStorageLabel(m.binaryStorage), "edit…", ""}
@@ -1211,15 +1212,15 @@ func (m *model) exportVarsHint() string {
 	return strings.Join(parts, "  ")
 }
 
-// formatStatsLines packs the per-format extraction counters into lines no wider
-// than width, e.g. "3/20 .mp3 extracted  ·  89/89 .md extracted".
+// formatStatsLines packs the per-format import/extraction counters into lines
+// no wider than width, e.g. "3/20 .mp3 extracted  ·  89 .md ready".
 func formatStatsLines(stats []core.FormatStat, width int) []string {
 	if len(stats) == 0 {
 		return nil
 	}
 	entries := make([]string, len(stats))
 	for i, st := range stats {
-		entries[i] = fmt.Sprintf("%d/%d .%s extracted", st.Extracted, st.Total, st.Ext)
+		entries[i] = st.Label()
 	}
 	var lines []string
 	line := ""

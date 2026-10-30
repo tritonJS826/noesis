@@ -31,15 +31,17 @@ type Progress struct {
 	db  *sql.DB
 	tty bool
 
-	mu      sync.Mutex
-	phase   string
-	current string
-	done    int
-	total   int
-	ran     int // processed in this phase run (for ETA)
-	started time.Time
-	errs    int
-	logs    []string
+	mu        sync.Mutex
+	phase     string
+	current   string
+	done      int
+	total     int
+	ran       int // processed (not skipped) in this phase run
+	startDone int // already completed when the phase started
+	started   time.Time
+	workStart time.Time // first real item; excludes phase preparation
+	errs      int
+	logs      []string
 
 	runTags   int           // new tags in this phase run
 	runLinks  int           // new links in this phase run
@@ -61,6 +63,7 @@ func New(db *sql.DB) *Progress {
 func (p *Progress) SetPhase(name string, done, total int) {
 	p.mu.Lock()
 	p.phase, p.done, p.total, p.ran, p.started, p.current = name, done, total, 0, time.Now(), ""
+	p.startDone, p.workStart = done, time.Time{}
 	p.runTags, p.runLinks, p.lastDur, p.lastTags, p.lastLinks = 0, 0, 0, 0, 0
 	p.curStart = time.Now()
 	p.mu.Unlock()
@@ -68,6 +71,9 @@ func (p *Progress) SetPhase(name string, done, total int) {
 
 func (p *Progress) SetCurrent(s string) {
 	p.mu.Lock()
+	if p.workStart.IsZero() {
+		p.workStart = time.Now()
+	}
 	p.current = s
 	p.curStart = time.Now()
 	p.mu.Unlock()
@@ -85,6 +91,9 @@ func (p *Progress) AddRun(tags, links int) {
 
 func (p *Progress) Advance(skipped bool) {
 	p.mu.Lock()
+	if p.workStart.IsZero() {
+		p.workStart = time.Now()
+	}
 	p.done++
 	if !skipped {
 		p.ran++
@@ -119,6 +128,28 @@ func bar(done, total, w int) string {
 	return cGreen + strings.Repeat("█", f) + cDim + strings.Repeat("░", w-f) + cReset
 }
 
+// progressTiming formats ETA, throughput and average duration. The average is
+// based on jobs completed in the current run (done-startDone), not on the total
+// number of jobs in the phase. Skipped jobs count as completed because they
+// still consume wall-clock time and the remaining-work estimate must match the
+// progress bar.
+func progressTiming(done, total, startDone int, elapsed time.Duration) (eta, speed, avg string) {
+	eta, speed, avg = "—", "—", "—"
+	completed := done - startDone
+	if completed <= 0 || elapsed <= 0 {
+		return eta, speed, avg
+	}
+	per := elapsed / time.Duration(completed)
+	avg = per.Round(10 * time.Millisecond).String()
+	speed = fmt.Sprintf("%.1f", float64(completed)/elapsed.Minutes())
+	if total > done {
+		eta = (per * time.Duration(total-done)).Round(time.Second).String()
+	} else {
+		eta = "0s"
+	}
+	return eta, speed, avg
+}
+
 func (p *Progress) render() string {
 	s := core.LoadStats(p.db)
 	p.mu.Lock()
@@ -149,18 +180,12 @@ func (p *Progress) render() string {
 	if p.total > 0 {
 		pct = p.done * 100 / p.total
 	}
-	elapsed := time.Since(p.started)
-	eta, speed, avg := "—", "—", "—"
-	if p.ran > 0 && elapsed > 0 {
-		per := elapsed / time.Duration(p.ran)
-		avg = per.Round(10 * time.Millisecond).String()
-		speed = fmt.Sprintf("%.1f", float64(p.ran)/elapsed.Minutes())
-		if p.total > p.done {
-			eta = (per * time.Duration(p.total-p.done)).Round(time.Second).String()
-		} else {
-			eta = "0s"
-		}
+	start := p.started
+	if !p.workStart.IsZero() {
+		start = p.workStart
 	}
+	elapsed := time.Since(start)
+	eta, speed, avg := progressTiming(p.done, p.total, p.startDone, elapsed)
 	w(" %s %s%3d%%%s  %s%d%s / %d", bar(p.done, p.total, 36), cBold, pct, cReset, cBold, p.done, cReset, p.total)
 	w(" Elapsed %s  ·  remaining ~%s  ·  %s items/min  ·  avg %s/item",
 		elapsed.Round(time.Second), eta, speed, avg)

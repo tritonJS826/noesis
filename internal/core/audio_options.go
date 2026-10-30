@@ -9,6 +9,8 @@ import (
 type AudioOptions struct {
 	Engine         string // whisper / google / ollama
 	WhisperModel   string
+	WhisperBackend string // auto / cpu / vulkan
+	WhisperDevice  int    // Vulkan device index
 	GoogleAPIKey   string
 	SpeechLanguage string
 	OllamaHost     string
@@ -19,6 +21,8 @@ func (c Config) audioOptions() AudioOptions {
 	return AudioOptions{
 		Engine:         c.AudioEngine,
 		WhisperModel:   c.WhisperModel,
+		WhisperBackend: c.WhisperBackend,
+		WhisperDevice:  c.WhisperDevice,
 		GoogleAPIKey:   c.GoogleAPIKey,
 		SpeechLanguage: c.SpeechLanguage,
 		OllamaHost:     c.Host,
@@ -32,9 +36,49 @@ func (o AudioOptions) Transcribe(ctx context.Context, name string, data []byte) 
 	case AudioEngineGoogle:
 		return TranscribeGoogle(ctx, o.GoogleAPIKey, o.SpeechLanguage, name, data)
 	case AudioEngineWhisper:
-		return TranscribeWhisper(ctx, o.WhisperModel, name, data)
+		return TranscribeWhisperWithOptions(ctx, o.WhisperModel, o.WhisperBackend, o.WhisperDevice, name, data)
 	default:
 		return TranscribeAudio(ctx, o.OllamaHost, o.OllamaModel, name, data)
+	}
+}
+
+// WhisperBackendIDs returns canonical backend IDs in display order.
+func WhisperBackendIDs() []string {
+	return []string{WhisperBackendAuto, WhisperBackendCPU, WhisperBackendVulkan}
+}
+
+// WhisperBackendLabels returns labels matching WhisperBackendIDs.
+func WhisperBackendLabels() []string {
+	return []string{"Auto (Vulkan when available)", "CPU only", "Vulkan (GPU)"}
+}
+
+// WhisperBackendLabel returns the human-readable label for a backend ID.
+func WhisperBackendLabel(v string) string {
+	v = NormalizeWhisperBackend(v)
+	for i, id := range WhisperBackendIDs() {
+		if id == v {
+			return WhisperBackendLabels()[i]
+		}
+	}
+	return v
+}
+
+// NormalizeWhisperBackend accepts IDs or labels and falls back to auto.
+func NormalizeWhisperBackend(v string) string {
+	raw := strings.TrimSpace(v)
+	for i, label := range WhisperBackendLabels() {
+		if strings.EqualFold(raw, label) {
+			return WhisperBackendIDs()[i]
+		}
+	}
+	v = strings.ToLower(raw)
+	switch v {
+	case WhisperBackendCPU, "cpu-only", "no-gpu", "nongpu":
+		return WhisperBackendCPU
+	case WhisperBackendVulkan, "gpu", "vk":
+		return WhisperBackendVulkan
+	default:
+		return WhisperBackendAuto
 	}
 }
 

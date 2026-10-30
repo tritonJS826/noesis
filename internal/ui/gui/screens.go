@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -59,8 +60,8 @@ func (s *state) menuScreen() fyne.CanvasObject {
 	)
 }
 
-// formatStatsSummary renders the per-extension extraction counters shown on the
-// start screen, e.g. "3/20 .mp3 extracted · 89/89 .md extracted".
+// formatStatsSummary renders the per-extension import/extraction counters
+// shown on the start screen, e.g. "3/20 .mp3 extracted · 89 .md ready".
 func (s *state) formatStatsSummary() string {
 	db := s.currentDB()
 	if db == nil {
@@ -72,9 +73,9 @@ func (s *state) formatStatsSummary() string {
 	}
 	parts := make([]string, len(stats))
 	for i, st := range stats {
-		parts[i] = fmt.Sprintf("%d/%d .%s extracted", st.Extracted, st.Total, st.Ext)
+		parts[i] = st.Label()
 	}
-	return "Formats (extracted/total): " + strings.Join(parts, "  ·  ")
+	return "Formats: " + strings.Join(parts, "  ·  ")
 }
 
 // ─── import ─────────────────────────────────────────────────────────────────
@@ -202,7 +203,7 @@ func (s *state) syncScreen() fyne.CanvasObject {
 			form,
 			widget.NewLabel("Comparing database with folder: "+s.src.Text+" …"),
 			widget.NewButton("Run comparison", func() {
-				go s.runSyncDiff()
+				s.runSyncDiff()
 			}),
 		)
 	}
@@ -215,7 +216,7 @@ func (s *state) syncScreen() fyne.CanvasObject {
 			widget.NewLabel("Source: "+s.src.Text),
 			container.NewHBox(
 				widget.NewButton("Refresh", func() {
-					go s.runSyncDiff()
+					s.runSyncDiff()
 				}),
 				widget.NewButton("Back", func() {
 					s.syncItems = nil
@@ -274,7 +275,7 @@ func (s *state) syncScreen() fyne.CanvasObject {
 				}
 				s.render()
 			}),
-			widget.NewButton("Refresh", func() { go s.runSyncDiff() }),
+			widget.NewButton("Refresh", func() { s.runSyncDiff() }),
 		),
 	)
 
@@ -366,6 +367,11 @@ func (s *state) formatsScreen() fyne.CanvasObject {
 			widget.NewLabel("Everything checked = import every known format."),
 			status,
 			container.NewHBox(toggleAll, widget.NewButton("Done", func() {
+				// Restore the canonical "all formats" value so formats added in
+				// future releases are selected automatically.
+				if len(s.importFormats) == len(formats) {
+					s.importFormats = nil
+				}
 				s.persistSettings()
 				s.screen = scrImport
 				s.render()
@@ -853,6 +859,8 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewFormItem("VISION MODEL", s.vision),
 		widget.NewFormItem("AUDIO", s.audioEngine),
 		widget.NewFormItem("WHISPER MODEL", whisperRow),
+		widget.NewFormItem("WHISPER GPU", s.whisperBackend),
+		widget.NewFormItem("GPU DEVICE", s.whisperDevice),
 		widget.NewFormItem("GOOGLE API KEY", s.googleKey),
 		widget.NewFormItem("SPEECH LANGUAGE", s.speechLanguage),
 		widget.NewFormItem("HOST", s.host),
@@ -860,7 +868,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewFormItem("WORKERS", s.workers),
 	)
 
-	audioHint := wrappedLabel("Local Whisper runs offline after downloading a model and auto-detects the language. Google Speech-to-Text needs an API key (stored in the database) and ffmpeg.")
+	audioHint := wrappedLabel("Local Whisper runs offline after downloading a model and auto-detects the language. GPU acceleration is automatic: noesis uses Vulkan when your graphics driver supports it (Linux/Windows), Apple Metal on macOS, and falls back to the CPU otherwise — no extra setup. Google Speech-to-Text needs an API key (stored in the database) and ffmpeg.")
 	ffmpegHelp := fyne.CanvasObject(wrappedLabel("ffmpeg: installed."))
 	if !core.FFmpegAvailable() {
 		ffmpegHelp = container.NewVBox(
@@ -872,8 +880,9 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 	audioHelp := container.NewVBox(
 		widget.NewLabelWithStyle("Audio setup help", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		wrappedLabel("Local Whisper: "+core.LocalWhisperSetupNote()),
+		wrappedLabel("GPU acceleration needs no setup: noesis downloads the right whisper.cpp runtime and picks the GPU automatically when available. Keep your graphics driver up to date. Choose CPU only if the GPU driver crashes; device 0 is usually the default adapter."),
 		container.NewHBox(
-			docsLink("whisper.cpp installation guide", core.WhisperCPPBuildURL),
+			docsLink("whisper.cpp project", core.WhisperCPPBuildURL),
 			docsLink("Homebrew formula (macOS)", core.WhisperCPPHomebrewURL),
 		),
 		widget.NewSeparator(),
@@ -908,15 +917,35 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 
 // ─── whisper manager ────────────────────────────────────────────────────────
 
+func (s *state) selectedWhisperBackend() string {
+	return core.NormalizeWhisperBackend(s.whisperBackend.Selected)
+}
+
+func (s *state) whisperDeviceValue() int {
+	device, err := strconv.Atoi(strings.TrimSpace(s.whisperDevice.Text))
+	if err != nil || device < 0 {
+		return core.DefaultWhisperDevice
+	}
+	return device
+}
+
 func (s *state) whisperModelStatus() string {
 	name := core.NormalizeWhisperModel(s.whisperModel.Selected)
 	if !core.WhisperModelInstalled(name) {
 		return "Not downloaded — use Manage… to download it."
 	}
-	if !core.WhisperRuntimeInstalled() {
+	backend := s.selectedWhisperBackend()
+	info := core.WhisperRuntimeInfoFor(backend)
+	if info.Path == "" {
+		if backend == core.WhisperBackendVulkan {
+			return "Model downloaded; Vulkan runtime not installed — use Manage…"
+		}
 		return "Model downloaded; runtime not installed — use Manage…"
 	}
-	return "Downloaded and ready."
+	if backend == core.WhisperBackendVulkan && info.Backend == core.WhisperBackendCPU {
+		return "Model downloaded; the selected runtime is CPU-only — install Vulkan in Manage…"
+	}
+	return "Downloaded and ready (" + info.Label() + ")."
 }
 
 func (s *state) openWhisperManager() {
@@ -930,8 +959,8 @@ func (s *state) openWhisperManager() {
 func (s *state) useWhisperModel(name string) {
 	s.whisperModel.SetSelected(core.NormalizeWhisperModel(name))
 	s.persistSettings()
-	if core.WhisperRuntimeInstalled() {
-		s.whisperStatus = name + " selected."
+	if core.WhisperRuntimeInstalledFor(s.selectedWhisperBackend()) {
+		s.whisperStatus = name + " selected (" + core.WhisperBackendLabel(s.selectedWhisperBackend()) + ")."
 	} else {
 		s.whisperStatus = name + " selected. Install whisper-cli to use it — see the instructions above."
 	}
@@ -956,10 +985,15 @@ func (s *state) deleteWhisperModel(name string) {
 }
 
 func (s *state) startWhisperDownload(model string) {
+	s.startWhisperDownloadFor(model, s.selectedWhisperBackend())
+}
+
+func (s *state) startWhisperDownloadFor(model, backend string) {
 	if s.whisperBusy {
 		return
 	}
-	if model == "" && !core.WhisperRuntimeInstalled() && !core.WhisperRuntimeAutoInstallSupported() {
+	backend = core.NormalizeWhisperBackend(backend)
+	if model == "" && !core.WhisperRuntimeInstallSupportedFor(backend) {
 		s.whisperErr = core.WhisperRuntimeInstallInstructions()
 		s.whisperStatus = ""
 		s.render()
@@ -971,6 +1005,9 @@ func (s *state) startWhisperDownload(model string) {
 	s.whisperStatus = ""
 	if model == "" {
 		s.whisperStage = "runtime"
+		if backend == core.WhisperBackendVulkan {
+			s.whisperStage = "Vulkan runtime"
+		}
 	} else {
 		s.whisperStage = "model " + model
 	}
@@ -996,12 +1033,12 @@ func (s *state) startWhisperDownload(model string) {
 			})
 		}
 
-		if !core.WhisperRuntimeInstalled() && core.WhisperRuntimeAutoInstallSupported() {
+		if core.WhisperRuntimeNeedsInstall(backend) {
 			updateProgress("runtime", 0, 0)
-			if err := core.EnsureWhisperRuntime(ctx, func(done, total int64) {
+			if err := core.EnsureWhisperRuntimeFor(ctx, backend, func(done, total int64) {
 				updateProgress("runtime", done, total)
 			}); err != nil {
-				fyne.Do(func() { s.finishWhisperDownload(model, err) })
+				fyne.Do(func() { s.finishWhisperDownload(model, backend, err) })
 				return
 			}
 		}
@@ -1010,15 +1047,15 @@ func (s *state) startWhisperDownload(model string) {
 			if err := core.DownloadWhisperModel(ctx, model, func(done, total int64) {
 				updateProgress("model "+model, done, total)
 			}); err != nil {
-				fyne.Do(func() { s.finishWhisperDownload(model, err) })
+				fyne.Do(func() { s.finishWhisperDownload(model, backend, err) })
 				return
 			}
 		}
-		fyne.Do(func() { s.finishWhisperDownload(model, nil) })
+		fyne.Do(func() { s.finishWhisperDownload(model, backend, nil) })
 	}()
 }
 
-func (s *state) finishWhisperDownload(model string, err error) {
+func (s *state) finishWhisperDownload(model, backend string, err error) {
 	s.whisperBusy = false
 	s.whisperProgress = 0
 	if err != nil {
@@ -1028,14 +1065,18 @@ func (s *state) finishWhisperDownload(model string, err error) {
 		s.whisperErr = ""
 		s.whisperModels = core.WhisperModels()
 		if model == "" {
-			s.whisperStatus = "whisper.cpp runtime installed."
+			if backend == core.WhisperBackendVulkan {
+				s.whisperStatus = "Vulkan whisper.cpp runtime installed."
+			} else {
+				s.whisperStatus = "whisper.cpp runtime installed."
+			}
 		} else {
 			s.whisperModel.SetSelected(core.NormalizeWhisperModel(model))
 			s.persistSettings()
-			if core.WhisperRuntimeInstalled() {
-				s.whisperStatus = model + " downloaded and selected."
+			if core.WhisperRuntimeInstalledFor(backend) {
+				s.whisperStatus = model + " downloaded and selected (" + core.WhisperBackendLabel(backend) + ")."
 			} else {
-				s.whisperStatus = model + " downloaded. Install whisper-cli to use it — see the instructions above."
+				s.whisperStatus = model + " downloaded. Install a " + core.WhisperBackendLabel(backend) + " runtime in Manage…."
 			}
 		}
 	}
@@ -1043,28 +1084,35 @@ func (s *state) finishWhisperDownload(model string, err error) {
 }
 
 func (s *state) whisperScreen() fyne.CanvasObject {
+	policy := s.selectedWhisperBackend()
+	info := core.WhisperRuntimeInfoFor(policy)
 	status := widget.NewLabel("")
 	status.Wrapping = fyne.TextWrapWord
-	if path := core.WhisperRuntimePath(); path != "" {
-		status.SetText("Runtime installed: " + path)
-	} else {
-		status.SetText("Runtime not installed.")
+	text := fmt.Sprintf("GPU policy: %s · device %d\nRuntime: %s", core.WhisperBackendLabel(policy), s.whisperDeviceValue(), info.Label())
+	if info.Path != "" {
+		text += "\n" + info.Path
 	}
+	status.SetText(text)
 
 	rows := container.NewVBox()
 	rows.Add(status)
-	if !core.WhisperRuntimeInstalled() {
-		rows.Add(wrappedLabel(core.LocalWhisperSetupNote()))
+	rows.Add(wrappedLabel(core.LocalWhisperSetupNote()))
+	if info.Path == "" || (policy == core.WhisperBackendVulkan && info.Backend == core.WhisperBackendCPU) {
+		rows.Add(wrappedLabel(core.WhisperRuntimeInstallInstructions()))
 		rows.Add(container.NewHBox(
 			docsLink("whisper.cpp installation guide", core.WhisperCPPBuildURL),
 			docsLink("Homebrew formula (macOS)", core.WhisperCPPHomebrewURL),
 			docsLink("Download builds", core.WhisperCPPReleasesURL),
 		))
-		if core.WhisperRuntimeAutoInstallSupported() {
-			rows.Add(widget.NewButton("Install whisper.cpp runtime", func() {
-				s.startWhisperDownload("")
-			}))
+	}
+	if core.WhisperRuntimeNeedsInstall(policy) && core.WhisperRuntimeInstallSupportedFor(policy) {
+		label := "Download runtime"
+		if policy == core.WhisperBackendVulkan {
+			label = "Download Vulkan runtime"
 		}
+		rows.Add(widget.NewButton(label, func() {
+			s.startWhisperDownloadFor("", policy)
+		}))
 	}
 	rows.Add(widget.NewSeparator())
 

@@ -170,24 +170,233 @@ func DeleteWhisperModel(name string) error {
 
 const whisperRuntimeRelease = "b5454"
 
-// WhisperRuntimePath returns the whisper-cli binary path, or "" when no
-// runtime is available. A system-wide whisper-cli is preferred.
-func WhisperRuntimePath() string {
-	if p := findExecutable("whisper-cli"); p != "" {
-		return p
+const (
+	whisperRuntimeDirName         = "runtime"
+	whisperVulkanRuntimeDirName   = "runtime-vulkan"
+	whisperVulkanReleaseAssetBase = "https://github.com/tritonJS826/noesis/releases/latest/download/"
+)
+
+// WhisperRuntimeInfo describes a discovered whisper-cli runtime and whether it
+// contains a Vulkan backend.
+type WhisperRuntimeInfo struct {
+	Path    string
+	Dir     string
+	Backend string // auto / cpu / vulkan / unknown
+	Vulkan  bool
+	System  bool
+	Cached  bool
+}
+
+// Label is the human-readable backend description used by the UIs.
+func (i WhisperRuntimeInfo) Label() string {
+	if i.Path == "" {
+		return "not installed"
 	}
+	switch i.Backend {
+	case WhisperBackendVulkan:
+		return "Vulkan"
+	case WhisperBackendCPU:
+		return "CPU"
+	default:
+		if i.System {
+			return "system build (backend unknown)"
+		}
+		return "unknown"
+	}
+}
+
+// WhisperRuntimePath returns the whisper-cli binary for the default auto
+// policy, or "" when no runtime is available.
+func WhisperRuntimePath() string {
+	return WhisperRuntimePathFor(WhisperBackendAuto)
+}
+
+// WhisperRuntimePathFor returns the whisper-cli binary for a specific backend
+// policy. A Vulkan request never silently falls back to a known CPU-only build.
+func WhisperRuntimePathFor(backend string) string {
+	backend = NormalizeWhisperBackend(backend)
+	system := findExecutable("whisper-cli")
 	dir, err := WhisperDataDir()
 	if err != nil {
-		return ""
+		return system
 	}
-	if p := findWhisperBinary(filepath.Join(dir, "runtime")); p != "" {
-		return p
+	vulkanBin := findWhisperBinary(filepath.Join(dir, whisperVulkanRuntimeDirName))
+	cpuBin := findWhisperBinary(filepath.Join(dir, whisperRuntimeDirName))
+
+	switch backend {
+	case WhisperBackendVulkan:
+		if vulkanBin != "" {
+			return vulkanBin
+		}
+		if system != "" && whisperDirHasVulkan(filepath.Dir(system)) {
+			return system
+		}
+		return ""
+	case WhisperBackendCPU:
+		if system != "" {
+			return system
+		}
+		return cpuBin
+	default:
+		if vulkanBin != "" {
+			return vulkanBin
+		}
+		if system != "" {
+			return system
+		}
+		return cpuBin
+	}
+}
+
+// WhisperRuntimeInstalled reports whether whisper-cli can be used with auto
+// backend selection.
+func WhisperRuntimeInstalled() bool { return WhisperRuntimeInstalledFor(WhisperBackendAuto) }
+
+// WhisperRuntimeInstalledFor reports whether a runtime satisfying the backend
+// policy is available.
+func WhisperRuntimeInstalledFor(backend string) bool {
+	return WhisperRuntimePathFor(backend) != ""
+}
+
+// WhisperRuntimeInfoFor returns information about the runtime selected by the
+// given backend policy.
+func WhisperRuntimeInfoFor(backend string) WhisperRuntimeInfo {
+	return WhisperRuntimeInfoForPath(WhisperRuntimePathFor(backend))
+}
+
+// WhisperRuntimeInfoForPath inspects a whisper-cli binary and its directory.
+func WhisperRuntimeInfoForPath(path string) WhisperRuntimeInfo {
+	if path == "" {
+		return WhisperRuntimeInfo{}
+	}
+	info := WhisperRuntimeInfo{Path: path, Dir: filepath.Dir(path)}
+	info.Cached = isCachedWhisperBinary(path)
+	info.System = !info.Cached
+	info.Vulkan = whisperDirHasVulkan(info.Dir)
+	switch {
+	case info.Vulkan:
+		info.Backend = WhisperBackendVulkan
+	case info.Cached:
+		info.Backend = WhisperBackendCPU
+	default:
+		info.Backend = "unknown"
+	}
+	return info
+}
+
+// whisperDirHasVulkan reports whether a runtime directory contains the ggml
+// Vulkan backend library.
+func whisperDirHasVulkan(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		name := strings.ToLower(e.Name())
+		if strings.HasPrefix(name, "libggml-vulkan") ||
+			strings.HasPrefix(name, "ggml-vulkan") {
+			return true
+		}
+	}
+	return false
+}
+
+// WhisperVulkanRuntimeInstalled reports whether a Vulkan-enabled runtime is
+// ready to use.
+func WhisperVulkanRuntimeInstalled() bool {
+	return WhisperRuntimeInstalledFor(WhisperBackendVulkan)
+}
+
+// WhisperVulkanInstallSupported reports whether noesis publishes a Vulkan
+// runtime asset for this platform.
+func WhisperVulkanInstallSupported() bool {
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "linux/amd64", "windows/amd64":
+		return true
+	default:
+		return false
+	}
+}
+
+// VulkanLikelyAvailable reports whether this machine appears to have a Vulkan
+// loader installed. It is a cheap, best-effort probe: the driver may still be
+// missing or too old, in which case transcription transparently falls back to
+// the CPU. Users never have to install a Vulkan SDK.
+func VulkanLikelyAvailable() bool {
+	if !WhisperVulkanInstallSupported() {
+		return false
+	}
+	return findVulkanLoader() != ""
+}
+
+// WhisperRuntimeInstallSupportedFor reports whether the automatic runtime
+// download can satisfy the given backend policy.
+func WhisperRuntimeInstallSupportedFor(backend string) bool {
+	switch NormalizeWhisperBackend(backend) {
+	case WhisperBackendVulkan:
+		return WhisperVulkanInstallSupported()
+	case WhisperBackendCPU:
+		return WhisperRuntimeAutoInstallSupported()
+	default:
+		return WhisperRuntimeAutoInstallSupported() || WhisperVulkanInstallSupported()
+	}
+}
+
+// WhisperRuntimeNeedsInstall reports whether the automatic installer still has
+// work to do for the backend policy. Under "auto" this is true while a
+// Vulkan-capable machine has no Vulkan runtime yet, so the installer can
+// upgrade a system or CPU build to GPU acceleration without any user action.
+func WhisperRuntimeNeedsInstall(backend string) bool {
+	backend = NormalizeWhisperBackend(backend)
+	if backend == WhisperBackendAuto {
+		if !WhisperVulkanRuntimeInstalled() && WhisperVulkanInstallSupported() && VulkanLikelyAvailable() {
+			return true
+		}
+		return !WhisperRuntimeInstalledFor(WhisperBackendAuto)
+	}
+	return !WhisperRuntimeInstalledFor(backend)
+}
+
+// findVulkanLoader returns the path of the Vulkan loader library when it can be
+// found in the usual system locations.
+func findVulkanLoader() string {
+	if runtime.GOOS == "windows" {
+		if p := findExecutable("vulkan-1.dll"); p != "" {
+			return p
+		}
+		var dirs []string
+		if root := os.Getenv("SystemRoot"); root != "" {
+			dirs = append(dirs, filepath.Join(root, "System32"))
+		}
+		dirs = append(dirs, filepath.SplitList(os.Getenv("PATH"))...)
+		return firstExistingFile(dirs, "vulkan-1.dll")
+	}
+	dirs := filepath.SplitList(os.Getenv("LD_LIBRARY_PATH"))
+	dirs = append(dirs,
+		"/usr/lib/x86_64-linux-gnu",
+		"/lib/x86_64-linux-gnu",
+		"/usr/lib/aarch64-linux-gnu",
+		"/lib/aarch64-linux-gnu",
+		"/usr/lib64", "/usr/lib", "/lib",
+		"/usr/local/lib",
+	)
+	return firstExistingFile(dirs, "libvulkan.so.1", "libvulkan.so")
+}
+
+func firstExistingFile(dirs []string, names ...string) string {
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		for _, name := range names {
+			p := filepath.Join(dir, name)
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				return p
+			}
+		}
 	}
 	return ""
 }
-
-// WhisperRuntimeInstalled reports whether whisper-cli can be used.
-func WhisperRuntimeInstalled() bool { return WhisperRuntimePath() != "" }
 
 func findWhisperBinary(root string) string {
 	var found string
@@ -237,13 +446,69 @@ func whisperRuntimeAsset() (runtimeAsset, error) {
 	}
 }
 
-// EnsureWhisperRuntime downloads and extracts whisper.cpp if no runtime is
-// installed yet.
+func whisperVulkanRuntimeAsset() (runtimeAsset, error) {
+	if u := strings.TrimSpace(os.Getenv("NOESIS_WHISPER_VULKAN_URL")); u != "" {
+		kind := "tar.gz"
+		if strings.HasSuffix(strings.ToLower(u), ".zip") {
+			kind = "zip"
+		}
+		return runtimeAsset{u, kind}, nil
+	}
+	base := whisperVulkanReleaseAssetBase
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "linux/amd64":
+		return runtimeAsset{base + "noesis-whisper-vulkan-linux-amd64.tar.gz", "tar.gz"}, nil
+	case "windows/amd64":
+		return runtimeAsset{base + "noesis-whisper-vulkan-windows-amd64.zip", "zip"}, nil
+	default:
+		return runtimeAsset{}, fmt.Errorf("the Vulkan whisper.cpp runtime is not published for %s/%s. Build whisper.cpp with -DGGML_VULKAN=ON and point NOESIS_WHISPER_VULKAN_URL at the archive, or use the CPU backend. Guide: %s", runtime.GOOS, runtime.GOARCH, WhisperCPPBuildURL)
+	}
+}
+
+// EnsureWhisperRuntime downloads a usable runtime under the default "auto"
+// policy: Vulkan on capable machines, otherwise the CPU build.
 func EnsureWhisperRuntime(ctx context.Context, progress func(done, total int64)) error {
-	if WhisperRuntimeInstalled() {
+	return EnsureWhisperRuntimeFor(ctx, WhisperBackendAuto, progress)
+}
+
+// EnsureWhisperRuntimeFor downloads the runtime required by the backend policy.
+// Under "auto" it upgrades to a Vulkan runtime when the machine looks capable,
+// so GPU acceleration happens without any user action; "auto" always falls back
+// to the CPU. CPU and Vulkan runtimes live in separate directories so switching
+// never re-downloads.
+func EnsureWhisperRuntimeFor(ctx context.Context, backend string, progress func(done, total int64)) error {
+	backend = NormalizeWhisperBackend(backend)
+	if backend == WhisperBackendAuto {
+		if WhisperRuntimeNeedsInstall(WhisperBackendAuto) && VulkanLikelyAvailable() {
+			if err := ensureWhisperRuntime(ctx, WhisperBackendVulkan, progress); err == nil {
+				return nil
+			}
+		}
+		if WhisperRuntimeInstalledFor(WhisperBackendAuto) {
+			return nil
+		}
+		return ensureWhisperRuntime(ctx, WhisperBackendCPU, progress)
+	}
+	if WhisperRuntimeInstalledFor(backend) {
 		return nil
 	}
-	asset, err := whisperRuntimeAsset()
+	return ensureWhisperRuntime(ctx, backend, progress)
+}
+
+// ensureWhisperRuntime downloads exactly the runtime for cpu or vulkan, without
+// the auto-selection logic.
+func ensureWhisperRuntime(ctx context.Context, backend string, progress func(done, total int64)) error {
+	var (
+		asset    runtimeAsset
+		err      error
+		destName = whisperRuntimeDirName
+	)
+	if backend == WhisperBackendVulkan {
+		asset, err = whisperVulkanRuntimeAsset()
+		destName = whisperVulkanRuntimeDirName
+	} else {
+		asset, err = whisperRuntimeAsset()
+	}
 	if err != nil {
 		return err
 	}
@@ -251,18 +516,18 @@ func EnsureWhisperRuntime(ctx context.Context, progress func(done, total int64))
 	if err != nil {
 		return err
 	}
-	archive := filepath.Join(dir, "runtime-download."+asset.Kind)
+	archive := filepath.Join(dir, destName+"-download."+asset.Kind)
 	if err := downloadFile(ctx, asset.URL, archive, progress); err != nil {
-		return fmt.Errorf("download whisper.cpp runtime: %w. %s", err, WhisperRuntimeInstallInstructions())
+		return fmt.Errorf("download whisper.cpp %s runtime: %w. %s", backend, err, WhisperRuntimeInstallInstructions())
 	}
 	defer os.Remove(archive)
-	if err := installWhisperRuntime(archive, asset.Kind, dir); err != nil {
+	if err := installWhisperRuntime(archive, asset.Kind, dir, destName); err != nil {
 		return fmt.Errorf("install whisper.cpp runtime: %w. %s", err, WhisperRuntimeInstallInstructions())
 	}
 	return nil
 }
 
-func installWhisperRuntime(archive, kind, dataDir string) error {
+func installWhisperRuntime(archive, kind, dataDir, destName string) error {
 	tmp, err := os.MkdirTemp(dataDir, "runtime-*")
 	if err != nil {
 		return err
@@ -286,7 +551,10 @@ func installWhisperRuntime(archive, kind, dataDir string) error {
 	}
 	_ = os.Chmod(bin, 0o755)
 
-	runtimeDir := filepath.Join(dataDir, "runtime")
+	if destName == "" {
+		destName = whisperRuntimeDirName
+	}
+	runtimeDir := filepath.Join(dataDir, destName)
 	if err := os.RemoveAll(runtimeDir); err != nil {
 		return err
 	}
@@ -421,14 +689,32 @@ func writeArchiveFile(target string, r io.Reader, mode os.FileMode) error {
 
 // ─── transcription ──────────────────────────────────────────────────────────
 
-// TranscribeWhisper runs whisper.cpp locally with a downloaded model.
+// TranscribeWhisper runs whisper.cpp locally with the auto GPU policy.
 func TranscribeWhisper(ctx context.Context, modelName, name string, data []byte) (string, string, error) {
+	return TranscribeWhisperWithOptions(ctx, modelName, WhisperBackendAuto, DefaultWhisperDevice, name, data)
+}
+
+// TranscribeWhisperWithOptions runs whisper.cpp locally with the selected GPU
+// backend. auto uses a Vulkan runtime when one is installed; cpu passes -ng;
+// vulkan requires a Vulkan-enabled runtime and selects -dev N.
+func TranscribeWhisperWithOptions(ctx context.Context, modelName, backend string, device int, name string, data []byte) (string, string, error) {
 	if len(data) == 0 {
 		return "", "", fmt.Errorf("audio %q is empty", name)
 	}
-	bin := WhisperRuntimePath()
+	backend = NormalizeWhisperBackend(backend)
+	if device < 0 {
+		device = 0
+	}
+	bin := WhisperRuntimePathFor(backend)
 	if bin == "" {
+		if backend == WhisperBackendVulkan {
+			return "", "whisper", fmt.Errorf("Vulkan whisper.cpp runtime is not installed. %s", WhisperVulkanInstallInstructions())
+		}
 		return "", "whisper", fmt.Errorf("local Whisper runtime is not installed. %s", WhisperRuntimeInstallInstructions())
+	}
+	info := WhisperRuntimeInfoForPath(bin)
+	if backend == WhisperBackendVulkan && info.Backend == WhisperBackendCPU {
+		return "", "whisper", fmt.Errorf("the selected whisper.cpp runtime is CPU-only, not Vulkan. %s", WhisperVulkanInstallInstructions())
 	}
 	modelName = NormalizeWhisperModel(modelName)
 	modelPath, err := WhisperModelPath(modelName)
@@ -460,36 +746,72 @@ func TranscribeWhisper(ctx context.Context, modelName, name string, data []byte)
 	if threads > 8 {
 		threads = 8
 	}
-	args := []string{
+	baseArgs := []string{
 		"-m", modelPath,
 		"-f", audioPath,
 		"-l", "auto",
 		"-np", "-nt",
 		"-t", strconv.Itoa(threads),
 	}
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = whisperEnv(bin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return "", "whisper:" + modelName, ctx.Err()
+	tool := "whisper:" + modelName
+	run := func(extra []string) (string, error) {
+		args := append(append([]string{}, baseArgs...), extra...)
+		cmd := exec.CommandContext(ctx, bin, args...)
+		cmd.Env = whisperEnv(bin)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			msg := strings.TrimSpace(stderr.String())
+			if len(msg) > 800 {
+				msg = msg[len(msg)-800:]
+			}
+			if msg == "" {
+				msg = strings.TrimSpace(stdout.String())
+			}
+			return "", fmt.Errorf("whisper: %w: %s", err, msg)
 		}
-		msg := strings.TrimSpace(stderr.String())
-		if len(msg) > 800 {
-			msg = msg[len(msg)-800:]
+		text := cleanExtracted(stdout.String())
+		if text == "" {
+			return "", fmt.Errorf("whisper returned an empty transcript")
 		}
-		if msg == "" {
-			msg = strings.TrimSpace(stdout.String())
-		}
-		return "", "whisper:" + modelName, fmt.Errorf("whisper: %w: %s", err, msg)
+		return text, nil
 	}
-	text := cleanExtracted(stdout.String())
-	if text == "" {
-		return "", "whisper:" + modelName, fmt.Errorf("whisper returned an empty transcript")
+
+	text, err := run(whisperBackendArgs(backend, info, device))
+	// Under "auto", a Vulkan build that cannot initialise the GPU (missing or
+	// too old driver, software-only renderer, out of VRAM, …) is retried once
+	// with the CPU. This keeps GPU acceleration invisible when it works and
+	// silent when it does not.
+	if err != nil && backend == WhisperBackendAuto && info.Vulkan {
+		if cpuText, cpuErr := run([]string{"-ng"}); cpuErr == nil {
+			return cpuText, tool, nil
+		}
 	}
-	return text, "whisper:" + modelName, nil
+	if err != nil {
+		return "", tool, err
+	}
+	return text, tool, nil
+}
+
+// whisperBackendArgs returns the whisper-cli flags for a backend policy.
+func whisperBackendArgs(backend string, info WhisperRuntimeInfo, device int) []string {
+	switch NormalizeWhisperBackend(backend) {
+	case WhisperBackendCPU:
+		return []string{"-ng"}
+	case WhisperBackendVulkan:
+		return []string{"-dev", strconv.Itoa(device)}
+	default:
+		// Auto lets the runtime choose. For a detected Vulkan build, select the
+		// configured device explicitly; CPU-only builds need no flag.
+		if info.Vulkan {
+			return []string{"-dev", strconv.Itoa(device)}
+		}
+		return nil
+	}
 }
 
 func audioForWhisper(ctx context.Context, name string, data []byte) ([]byte, string, error) {
@@ -533,12 +855,14 @@ func isCachedWhisperBinary(bin string) bool {
 	if err != nil {
 		return false
 	}
-	root := filepath.Join(dataDir, "runtime")
-	rel, err := filepath.Rel(root, filepath.Dir(bin))
-	if err != nil {
-		return false
+	for _, name := range []string{whisperRuntimeDirName, whisperVulkanRuntimeDirName} {
+		root := filepath.Join(dataDir, name)
+		rel, err := filepath.Rel(root, filepath.Dir(bin))
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return true
+		}
 	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	return false
 }
 
 func prependEnvPath(name, dir string) string {

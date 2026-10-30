@@ -30,10 +30,10 @@ func (m *model) whisperSummary() string {
 	if !core.WhisperModelInstalled(name) {
 		return name + " (download)"
 	}
-	if !core.WhisperRuntimeInstalled() {
+	if !core.WhisperRuntimeInstalledFor(m.whisperBackend) {
 		return name + " ✓ (runtime missing)"
 	}
-	return name + " ✓"
+	return name + " ✓ (" + core.WhisperBackendLabel(m.whisperBackend) + ")"
 }
 
 func (m *model) openWhisperScreen() {
@@ -91,11 +91,11 @@ func (m *model) whisperKeys(msg tea.KeyMsg) tea.Cmd {
 				m.whisperStatus = fmt.Sprintf("Using %s.", info.Name)
 				return nil
 			}
-			return m.startWhisperDownload(info.Name)
+			return m.startWhisperDownloadFor(info.Name, m.whisperBackend)
 		}
 	case "d":
 		if m.whisperCursor >= 0 && m.whisperCursor < len(m.whisperModels) {
-			return m.startWhisperDownload(m.whisperModels[m.whisperCursor].Name)
+			return m.startWhisperDownloadFor(m.whisperModels[m.whisperCursor].Name, m.whisperBackend)
 		}
 	case "x":
 		if m.whisperCursor >= 0 && m.whisperCursor < len(m.whisperModels) {
@@ -117,16 +117,27 @@ func (m *model) whisperKeys(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 	case "r":
-		if core.WhisperRuntimeInstalled() {
-			m.whisperStatus = "whisper.cpp runtime is already installed."
+		if !core.WhisperRuntimeNeedsInstall(m.whisperBackend) {
+			m.whisperStatus = "whisper.cpp runtime is already installed for " + core.WhisperBackendLabel(m.whisperBackend) + "."
 			return nil
 		}
-		if !core.WhisperRuntimeAutoInstallSupported() {
+		if !core.WhisperRuntimeInstallSupportedFor(m.whisperBackend) {
 			m.whisperErr = ""
-			m.whisperStatus = "Automatic install is not available on this platform. Follow the instructions above."
+			m.whisperStatus = core.WhisperRuntimeInstallInstructions()
 			return nil
 		}
-		return m.startWhisperDownload("")
+		return m.startWhisperDownloadFor("", m.whisperBackend)
+	case "v":
+		if core.WhisperVulkanRuntimeInstalled() {
+			m.whisperStatus = "Vulkan whisper.cpp runtime is already installed."
+			return nil
+		}
+		if !core.WhisperVulkanInstallSupported() {
+			m.whisperErr = ""
+			m.whisperStatus = core.WhisperVulkanInstallInstructions()
+			return nil
+		}
+		return m.startWhisperDownloadFor("", core.WhisperBackendVulkan)
 	case "?":
 		m.screen = scrAudioHelp
 	case "esc", "q":
@@ -136,8 +147,14 @@ func (m *model) whisperKeys(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *model) startWhisperDownload(modelName string) tea.Cmd {
+func (m *model) startWhisperDownloadFor(modelName, backend string) tea.Cmd {
 	if m.whisperBusy {
+		return nil
+	}
+	backend = core.NormalizeWhisperBackend(backend)
+	if modelName == "" && !core.WhisperRuntimeInstallSupportedFor(backend) {
+		m.whisperErr = core.WhisperRuntimeInstallInstructions()
+		m.whisperStatus = ""
 		return nil
 	}
 	p := m.program
@@ -147,6 +164,9 @@ func (m *model) startWhisperDownload(modelName string) tea.Cmd {
 	m.whisperDone, m.whisperTotal = 0, 0
 	if modelName == "" {
 		m.whisperStage = "runtime"
+		if backend == core.WhisperBackendVulkan {
+			m.whisperStage = "Vulkan runtime"
+		}
 	} else {
 		m.whisperStage = "model " + modelName
 	}
@@ -157,10 +177,10 @@ func (m *model) startWhisperDownload(modelName string) tea.Cmd {
 				p.Send(whisperProgressMsg{stage: stage, done: done, total: total})
 			}
 		}
-		if !core.WhisperRuntimeInstalled() && core.WhisperRuntimeAutoInstallSupported() {
+		if core.WhisperRuntimeNeedsInstall(backend) {
 			sendProgress("runtime", 0, 0)
 			lastPct := -1
-			if err := core.EnsureWhisperRuntime(ctx, func(done, total int64) {
+			if err := core.EnsureWhisperRuntimeFor(ctx, backend, func(done, total int64) {
 				pct := -1
 				if total > 0 {
 					pct = int(done * 100 / total)
@@ -247,15 +267,19 @@ func (m *model) viewWhisper() string {
 	var lines []string
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Whisper models"))
 	lines = append(lines, "")
-	if path := core.WhisperRuntimePath(); path != "" {
-		lines = append(lines, tuiGreen.MaxWidth(cw).Render("Runtime: installed"))
-		lines = append(lines, tuiDim.MaxWidth(cw).Render(path))
+	info := core.WhisperRuntimeInfoFor(m.whisperBackend)
+	lines = append(lines, tuiDim.MaxWidth(cw).Render("GPU policy: "+core.WhisperBackendLabel(m.whisperBackend)+fmt.Sprintf("  ·  device %d", m.whisperDevice)))
+	if info.Path != "" {
+		lines = append(lines, tuiGreen.MaxWidth(cw).Render("Runtime: "+info.Label()))
+		lines = append(lines, tuiDim.MaxWidth(cw).Render(info.Path))
 	} else {
 		lines = append(lines, tuiRed.MaxWidth(cw).Render("Runtime: not installed"))
 		for _, l := range wrapText(core.LocalWhisperSetupNote(), cw) {
 			lines = append(lines, tuiDim.MaxWidth(cw).Render(l))
 		}
-		lines = append(lines, tuiDim.MaxWidth(cw).Render("Guide: "+core.WhisperCPPBuildURL))
+		if !core.WhisperRuntimeInstallSupportedFor(m.whisperBackend) {
+			lines = append(lines, tuiDim.MaxWidth(cw).Render("Guide: "+core.WhisperCPPBuildURL))
+		}
 	}
 	lines = append(lines, "")
 
@@ -314,8 +338,11 @@ func (m *model) viewWhisper() string {
 	lines = append(lines, "")
 	hint := "↑↓/jk select  ·  Enter download/use  ·  d download  ·  x delete"
 	extra := "h/ESC back  ·  ? setup help"
-	if !core.WhisperRuntimeInstalled() && core.WhisperRuntimeAutoInstallSupported() {
-		extra = "r install runtime  ·  " + extra
+	if core.WhisperRuntimeNeedsInstall(m.whisperBackend) && core.WhisperRuntimeInstallSupportedFor(m.whisperBackend) {
+		extra = "r download runtime  ·  " + extra
+	}
+	if !core.WhisperVulkanRuntimeInstalled() && core.WhisperVulkanInstallSupported() {
+		extra = "v download Vulkan  ·  " + extra
 	}
 	if len(m.whisperModels) > 0 {
 		extra += "  ·  " + scrollHint(start, end, len(m.whisperModels))

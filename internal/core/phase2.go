@@ -241,6 +241,10 @@ func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	}
 	rows.Close()
 
+	known := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		known[id] = true
+	}
 	done := map[[2]int64]bool{}
 	prow, err := db.Query(`SELECT a_id, b_id FROM pairs`)
 	if err != nil {
@@ -249,7 +253,11 @@ func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	for prow.Next() {
 		var x, y int64
 		_ = prow.Scan(&x, &y)
-		done[[2]int64{x, y}] = true
+		// Ignore stale rows left behind by older databases: counting them would
+		// make the progress bar exceed 100% on the current note set.
+		if known[x] && known[y] && x != y {
+			done[[2]int64{x, y}] = true
+		}
 	}
 	prow.Close()
 
@@ -259,12 +267,7 @@ func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	if workers < 1 {
 		workers = 1
 	}
-	r.SetPhase("2/3 ollama: tags & links ("+c.Model+", ×"+fmt.Sprint(workers)+")", len(done), total)
-	if total == 0 {
-		r.Logf("not enough notes for pair comparison")
-		return nil
-	}
-	r.Logf("total pairs: %d, already done: %d, workers: %d", total, len(done), workers)
+	r.Logf("preparing pairs: total %d, already done: %d, workers: %d", total, len(done), workers)
 
 	// collect all unprocessed pairs
 	type job struct {
@@ -294,6 +297,11 @@ func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 		}
 	}
 	remaining := len(jobs)
+	r.SetPhase("2/3 ollama: tags & links ("+c.Model+", ×"+fmt.Sprint(workers)+")", len(done), total)
+	if total == 0 {
+		r.Logf("not enough notes for pair comparison")
+		return nil
+	}
 	r.Logf("remaining: %d pairs", remaining)
 
 	// worker pool

@@ -9,6 +9,7 @@ const (
 	WhisperCPPBuildURL     = "https://github.com/ggml-org/whisper.cpp#building"
 	WhisperCPPReleasesURL  = "https://github.com/ggml-org/whisper.cpp/releases"
 	WhisperCPPHomebrewURL  = "https://formulae.brew.sh/formula/whisper.cpp"
+	VulkanDriverURL        = "https://vulkan.lunarg.com/sdk/home"
 	GoogleSpeechDocsURL    = "https://cloud.google.com/speech-to-text/docs"
 	GoogleSpeechEnableURL  = "https://console.cloud.google.com/apis/library/speech.googleapis.com"
 	GoogleCredentialsURL   = "https://console.cloud.google.com/apis/credentials"
@@ -22,12 +23,15 @@ func FFmpegAvailable() bool {
 // LocalWhisperSetupNote returns a short platform-specific note for the UI.
 func LocalWhisperSetupNote() string {
 	if runtime.GOOS == "darwin" {
-		return `On macOS install whisper-cli first: run "brew install whisper.cpp", then restart noesis.`
+		if WhisperRuntimeInstalledFor(WhisperBackendAuto) {
+			return "Local Whisper uses the Apple GPU (Metal) automatically; no setup is needed."
+		}
+		return `Install whisper-cli first: run "brew install whisper.cpp", then restart noesis. It then uses the Apple GPU (Metal) automatically.`
 	}
-	if !WhisperRuntimeAutoInstallSupported() {
-		return `Automatic runtime download is not available for this platform. Install whisper-cli manually. Guide: ` + WhisperCPPBuildURL
+	if !WhisperRuntimeInstallSupportedFor(WhisperBackendAuto) {
+		return "Automatic runtime download is not available for this platform. Install whisper-cli manually. Guide: " + WhisperCPPBuildURL
 	}
-	return "The whisper.cpp runtime downloads automatically with the first model."
+	return "No setup needed: noesis downloads the best whisper.cpp runtime automatically (Vulkan GPU when available, otherwise CPU) and switches back to the CPU if the GPU is unusable."
 }
 
 // FFmpegInstallExample returns a one-line install command for the current OS.
@@ -59,12 +63,25 @@ func FFmpegInstallInstructions() string {
 // missing whisper.cpp runtime.
 func WhisperRuntimeInstallInstructions() string {
 	if runtime.GOOS == "darwin" {
-		return `Install whisper-cli with "brew install whisper.cpp", then restart noesis. Guide: ` + WhisperCPPBuildURL
+		return `Install whisper-cli with "brew install whisper.cpp", then restart noesis; it then uses the Apple GPU (Metal) automatically. Guide: ` + WhisperCPPBuildURL
 	}
-	if !WhisperRuntimeAutoInstallSupported() {
+	if !WhisperRuntimeInstallSupportedFor(WhisperBackendAuto) {
 		return `Install whisper-cli manually. Guide: ` + WhisperCPPBuildURL
 	}
-	return `Open Settings → Whisper models and download it automatically, or install whisper-cli manually. Guide: ` + WhisperCPPBuildURL
+	return `Noesis downloads the whisper.cpp runtime automatically when you download a model or transcribe audio. If that failed, check your connection or install whisper-cli manually. Guide: ` + WhisperCPPBuildURL
+}
+
+// WhisperVulkanInstallInstructions returns a user-facing note about the Vulkan
+// runtime. Vulkan is normally chosen and downloaded automatically; this text is
+// only shown when an explicit Vulkan request cannot be satisfied.
+func WhisperVulkanInstallInstructions() string {
+	if runtime.GOOS == "darwin" {
+		return "macOS uses the Apple GPU (Metal) instead of Vulkan; no setup is needed."
+	}
+	if !WhisperVulkanInstallSupported() {
+		return `Vulkan acceleration is not published for this platform, so noesis uses the CPU automatically. Guide: ` + WhisperCPPBuildURL
+	}
+	return `Noesis uses Vulkan automatically when your graphics driver supports it and falls back to the CPU otherwise; no setup is needed. If the automatic download failed, retry, or set NOESIS_WHISPER_VULKAN_URL to a Vulkan whisper.cpp archive. Guide: ` + WhisperCPPBuildURL
 }
 
 // GoogleAPIKeyInstructions returns an actionable error message for a missing
