@@ -6,7 +6,15 @@ import (
 	"encoding/base64"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// visionExtractTimeout bounds the whole image-to-markdown step (decode, PNG
+// transcode and the vision request). Decoding a very large AVIF/WebP in pure Go
+// has no natural deadline, so without this a single image could hold a worker
+// indefinitely — the "endless extraction" symptom. Downscaling keeps normal
+// images far below this limit.
+const visionExtractTimeout = 5 * time.Minute
 
 // isRasterImage reports whether a MIME type is a raster image that needs a
 // vision model. SVG (image/svg+xml) is XML text and is handled without one.
@@ -38,9 +46,12 @@ func ExtractNoteText(ctx context.Context, c Config, db *sql.DB, name, mimeType s
 		if noteID != 0 {
 			vars = mergeVars(vars, noteDBVars(db, "db", noteID))
 		}
+		vctx, cancel := context.WithTimeout(ctx, visionExtractTimeout)
+		defer cancel()
 		// Ollama cannot identify every image format (e.g. AVIF), so non-PNG/JPEG
-		// images are transcoded to PNG first — see image.go for the rationale.
-		imgData, converted, err := visionImage(ctx, name, mimeType, data)
+		// images are transcoded to PNG first, and oversized images are
+		// downscaled — see image.go for the rationale.
+		imgData, converted, err := visionImage(vctx, name, mimeType, data)
 		if err != nil {
 			return "", "ollama:vision", err
 		}
@@ -48,7 +59,7 @@ func ExtractNoteText(ctx context.Context, c Config, db *sql.DB, name, mimeType s
 		if converted {
 			tool += "+png"
 		}
-		text, err = askOllamaTextModel(ctx, c, c.visionModel(), expandPrompt(prompt, vars),
+		text, err = askOllamaTextModel(vctx, c, c.visionModel(), expandPrompt(prompt, vars),
 			[]string{base64.StdEncoding.EncodeToString(imgData)})
 		return text, tool, err
 	case strings.HasPrefix(mimeType, "image/"):

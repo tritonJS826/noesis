@@ -433,6 +433,7 @@ func (m *model) viewData() string {
 		"Compare file (filesystem search)",
 		"Re-extract documents, images & transcribe audio",
 		"Search RAG (semantic)",
+		"★ Evaluate note uniqueness",
 	}
 
 	var lines []string
@@ -1120,29 +1121,15 @@ func (m *model) viewProcessList() string {
 	if m.processType == "single" {
 		label = "One-by-one processes"
 	}
-	evalOffset := 0
-	if m.processHasEval() {
-		evalOffset = 1
-	}
 
 	var lines []string
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render(label))
 	lines = append(lines, "")
 
-	// The single-note menu leads with the built-in uniqueness evaluation.
-	if m.processHasEval() {
-		cursor := "  "
-		if m.cursor == 0 {
-			cursor = tuiSel.Render("▸ ")
-		}
-		lines = append(lines, tuiGreen.MaxWidth(cw).Render(cursor+"★ Evaluate note uniqueness"))
-		lines = append(lines, "")
-	}
-
-	start, end := listWindow(len(m.processList), m.cursor-evalOffset, m.listRows(9))
+	start, end := listWindow(len(m.processList), m.cursor, m.listRows(9))
 	for i := start; i < end; i++ {
 		cursor := "  "
-		if m.cursor-evalOffset == i {
+		if m.cursor == i {
 			cursor = tuiSel.Render("▸ ")
 		}
 		lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+m.processList[i]))
@@ -1150,7 +1137,7 @@ func (m *model) viewProcessList() string {
 
 	// "Add new" row stays visible below the scrolling process list.
 	addCursor := "  "
-	if m.cursor == len(m.processList)+evalOffset {
+	if m.cursor == len(m.processList) {
 		addCursor = tuiSel.Render("▸ ")
 	}
 	lines = append(lines, "")

@@ -131,6 +131,10 @@ type model struct {
 	evalReturn       screen
 	evalReturnCursor int
 
+	// where to return when leaving the note picker (eval entry point)
+	pickerBack       screen
+	pickerBackCursor int
+
 	// import submenu
 	importCursor  int
 	importSource  core.ImportSource

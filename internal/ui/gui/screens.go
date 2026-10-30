@@ -390,6 +390,7 @@ func (s *state) dataScreen() fyne.CanvasObject {
 		"Compare file (filesystem search)",
 		"Re-extract documents, images & transcribe audio",
 		"Search RAG (semantic)",
+		"★ Evaluate note uniqueness",
 	}
 	list := widget.NewList(
 		func() int { return len(items) },
@@ -406,6 +407,8 @@ func (s *state) dataScreen() fyne.CanvasObject {
 			s.openExtract()
 		case 3:
 			s.openRAGSearch()
+		case 4:
+			s.openNotes(noteEval, scrData)
 		}
 	}
 
@@ -1366,12 +1369,8 @@ func (s *state) processNames() []string {
 
 func (s *state) processListScreen() fyne.CanvasObject {
 	names := s.processNames()
-	evalRow := s.processType == "single"
 
-	items := make([]string, 0, len(names)+2)
-	if evalRow {
-		items = append(items, "★ Evaluate note uniqueness")
-	}
+	items := make([]string, 0, len(names)+1)
 	items = append(items, names...)
 	items = append(items, "+ Add new "+s.processType+" process")
 
@@ -1387,13 +1386,6 @@ func (s *state) processListScreen() fyne.CanvasObject {
 	list.OnSelected = func(id widget.ListItemID) {
 		list.UnselectAll()
 		idx := int(id)
-		if evalRow {
-			if idx == 0 {
-				s.openNotes(noteEval, scrProcessList)
-				return
-			}
-			idx--
-		}
 		if idx < len(names) {
 			s.processName = names[idx]
 			s.screen = scrProcessDetail

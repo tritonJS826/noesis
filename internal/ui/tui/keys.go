@@ -386,7 +386,7 @@ func (m *model) toggleFormat(ext string) {
 
 // ─── work with data submenu ────────────────────────────────────────────────
 
-const dataItems = 3 // 0..3
+const dataItems = 4 // 0..4
 
 func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 	switch vimNav(msg.String()) {
@@ -412,6 +412,8 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 			m.openExtract()
 		case 3: // semantic (RAG) search
 			m.openRAGSearch()
+		case 4: // evaluate note uniqueness — pick a note.
+			m.openFilePickerFrom(scrData, 4)
 		}
 	case "esc", "q":
 		m.screen = scrMenu
@@ -1162,8 +1164,8 @@ func (m *model) openFilePickerFrom(back screen, cursor int) {
 	m.cursor = 0
 	m.fileFilter = ""
 	m.filterTyping = false
-	m.evalReturn = back
-	m.evalReturnCursor = cursor
+	m.pickerBack = back
+	m.pickerBackCursor = cursor
 	m.screen = scrFilePicker
 }
 
@@ -1212,8 +1214,8 @@ func (m *model) filePickerKeys(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		return m.evalSelectedFile()
 	case "esc", "q":
-		m.screen = m.evalReturn
-		m.cursor = m.evalReturnCursor
+		m.screen = m.pickerBack
+		m.cursor = m.pickerBackCursor
 	case "backspace":
 		r := []rune(m.fileFilter)
 		if len(r) > 0 {
@@ -1562,13 +1564,8 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 
-	// The single-note menu starts with "Evaluate note uniqueness"; both menus
-	// end with an "Add new" row.
-	evalOffset := 0
-	if m.processHasEval() {
-		evalOffset = 1
-	}
-	max := len(m.processList) + evalOffset // last item is "add new"
+	// Both menus end with an "Add new" row.
+	max := len(m.processList) // last item is "add new"
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.cursor > 0 {
@@ -1580,12 +1577,9 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "enter":
 		switch {
-		case evalOffset == 1 && m.cursor == 0:
-			// Evaluate note uniqueness — choose a note.
-			m.openFilePickerFrom(scrProcessList, 0)
-		case m.cursor-evalOffset < len(m.processList):
+		case m.cursor < len(m.processList):
 			// open process detail
-			m.processName = m.processList[m.cursor-evalOffset]
+			m.processName = m.processList[m.cursor]
 			m.cursor = 0
 			m.processConfirmDelete = false
 			m.screen = scrProcessDetail
@@ -1608,12 +1602,7 @@ func (m *model) processListKeys(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// processHasEval reports whether the current process menu exposes the
-// "Evaluate note uniqueness" action (single-note processes only).
-func (m *model) processHasEval() bool {
-	return m.processType == "single"
-}
-
+// processDetailKeys handles the per-process actions screen.
 func (m *model) processDetailKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.promptViewing != "" {
 		return m.promptDetailKeys(msg)

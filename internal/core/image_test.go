@@ -83,3 +83,36 @@ func TestVisionImageRejectsUndecodableData(t *testing.T) {
 		t.Fatal("expected an error for undecodable data")
 	}
 }
+
+// A multi-megapixel photo must be downscaled before it reaches the vision
+// model; otherwise its token count explodes and the request stalls.
+func TestVisionImageDownscalesOversizedImage(t *testing.T) {
+	big := image.NewRGBA(image.Rect(0, 0, 3000, 2000))
+	for y := 0; y < 2000; y++ {
+		for x := 0; x < 3000; x++ {
+			big.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, big); err != nil {
+		t.Fatal(err)
+	}
+
+	out, converted, err := visionImage(context.Background(), "big.png", "image/png", buf.Bytes())
+	if err != nil {
+		t.Fatalf("visionImage: %v", err)
+	}
+	if !converted {
+		t.Fatal("oversized png should be re-encoded")
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("downscaled output does not decode: %v", err)
+	}
+	if cfg.Width != maxVisionImageDim {
+		t.Fatalf("longest side = %d, want %d", cfg.Width, maxVisionImageDim)
+	}
+	if cfg.Height > maxVisionImageDim {
+		t.Fatalf("height = %d, want <= %d", cfg.Height, maxVisionImageDim)
+	}
+}
