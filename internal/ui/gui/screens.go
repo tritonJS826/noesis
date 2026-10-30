@@ -818,6 +818,10 @@ func (s *state) ragSearchScreen() fyne.CanvasObject {
 	askBtn := widget.NewButton("Ask", func() { s.runRAGSearch(true) })
 	askBtn.Importance = widget.HighImportance
 
+	resultsEntry := s.ragTopKEntry
+	resultsEntry.SetPlaceHolder(strconv.Itoa(s.ragTopK))
+	results := container.NewHBox(widget.NewLabel("Results:"), container.NewGridWrap(fyne.NewSize(60, resultsEntry.MinSize().Height), resultsEntry))
+
 	var feedback fyne.CanvasObject
 	switch {
 	case s.ragBusy:
@@ -858,13 +862,13 @@ func (s *state) ragSearchScreen() fyne.CanvasObject {
 
 	top := container.NewVBox(
 		wrappedLabel(status),
-		container.NewBorder(nil, nil, nil, container.NewHBox(searchBtn, askBtn), query),
+		container.NewBorder(nil, nil, nil, container.NewHBox(results, searchBtn, askBtn), query),
 		feedback,
 	)
 
 	return container.NewBorder(
 		top,
-		wrappedLabel("Search ranks notes by meaning. Ask also answers the question from the top matches. Select a result to open the full note record."),
+		wrappedLabel("Search ranks notes by meaning. Ask also answers the question from the top matches. Set Results to choose how many matches to return. Select a result to open the full note record."),
 		nil, nil, list,
 	)
 }

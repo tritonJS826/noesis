@@ -146,12 +146,13 @@ type state struct {
 	browseBack   screen // where "Back" from the record view returns to
 
 	// semantic (RAG) search
-	ragQuery   string
-	ragResults []core.RAGResult
-	ragAnswer  string
-	ragErr     string
-	ragBusy    bool
-	ragTopK    int
+	ragQuery     string
+	ragResults   []core.RAGResult
+	ragAnswer    string
+	ragErr       string
+	ragBusy      bool
+	ragTopK      int
+	ragTopKEntry *widget.Entry
 
 	// filesystem search for compare
 	fsFilter string
@@ -215,6 +216,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.transcribe = widget.NewEntry()
 	s.maxChars = widget.NewEntry()
 	s.workers = widget.NewEntry()
+	s.ragTopKEntry = widget.NewEntry()
 	st := core.LoadAppSettings(db)
 	s.audioEngine = widget.NewSelect(core.AudioEngineLabels(), nil)
 	s.whisperModel = widget.NewSelect(core.WhisperModelNames(), nil)
@@ -248,6 +250,15 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.browseCols = defaultBrowseCols()
 	s.browseBack = scrBrowse
 	s.ragTopK = core.NormalizeRAGTopK(st.RAGTopK)
+	s.ragTopKEntry.SetText(strconv.Itoa(s.ragTopK))
+	s.ragTopKEntry.OnChanged = func(v string) {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return
+		}
+		s.ragTopK = core.NormalizeRAGTopK(n)
+	}
+	s.ragTopKEntry.OnSubmitted = func(string) { s.persistSettings() }
 	s.ollamaStatus = "checking ollama…"
 
 	s.importSource = core.SourceFilesystem
@@ -745,6 +756,7 @@ func (s *state) openRAGSearch() {
 	s.ragErr = ""
 	s.ragBusy = false
 	s.ragTopK = core.NormalizeRAGTopK(s.ragTopK)
+	s.ragTopKEntry.SetText(strconv.Itoa(s.ragTopK))
 	s.screen = scrRAGSearch
 	s.render()
 }
@@ -760,6 +772,7 @@ func (s *state) runRAGSearch(ask bool) {
 	if query == "" {
 		return
 	}
+	s.persistSettings()
 	db := s.currentDB()
 	if db == nil {
 		return

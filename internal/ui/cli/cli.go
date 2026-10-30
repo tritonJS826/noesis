@@ -66,7 +66,7 @@ func Run(args []string) error {
 	ragIndex := fs.Bool("rag-index", false, "build/refresh the semantic (RAG) vector index and exit")
 	ragSearch := fs.String("rag-search", "", "semantic search query over the RAG index and exit")
 	ragAsk := fs.Bool("rag-ask", false, "with -rag-search: also answer the question with the chat model")
-	ragTopK := fs.Int("rag-topk", 5, "number of RAG chunks to retrieve")
+	ragTopK := fs.Int("rag-topk", core.DefaultRAGTopK(), "number of RAG chunks to retrieve")
 	assumeYes := fs.Bool("yes", false, "auto-approve prompts, e.g. downloading a missing ollama model (default asks)")
 
 	if err := fs.Parse(args); err != nil {

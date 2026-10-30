@@ -31,10 +31,14 @@ import (
 const (
 	ragChunkSize    = 700
 	ragChunkOverlap = 120
-	ragDefaultTopK  = 5
+	ragDefaultTopK  = 20
 	ragMinTopK      = 1
 	ragMaxTopK      = 50
 )
+
+// DefaultRAGTopK is the number of chunks retrieved when the user has not picked
+// a different count.
+func DefaultRAGTopK() int { return ragDefaultTopK }
 
 // NormalizeRAGTopK clamps a requested result count into the supported range.
 func NormalizeRAGTopK(n int) int {
@@ -435,6 +439,7 @@ func RAGSearch(ctx context.Context, db *sql.DB, c Config, query string, topK int
 	if topK <= 0 {
 		topK = ragDefaultTopK
 	}
+	topK = NormalizeRAGTopK(topK)
 	qv, err := EmbedQuery(ctx, c, query)
 	if err != nil {
 		return nil, err
