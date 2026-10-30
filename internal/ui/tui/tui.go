@@ -199,6 +199,8 @@ type model struct {
 	browseDetailConfirm bool
 	browseDetailOffset  int
 	removeFromDetail    bool
+	// browseBack is the screen ESC returns to from the note detail view.
+	browseBack screen
 
 	// filterTyping is true while a filter/search field is capturing text.
 	// Outside that mode h/j/k/l work as Vim navigation keys.
@@ -271,7 +273,8 @@ func newModel(db *sql.DB) *model {
 		importFormats:   formats,
 		syncSource:      core.SourceFilesystem,
 		browseCols:      [5]bool{true, true, false, true, true},
-		ragTopK:         5,
+		browseBack:      scrBrowse,
+		ragTopK:         core.NormalizeRAGTopK(st.RAGTopK),
 	}
 }
 
@@ -298,6 +301,7 @@ func (m *model) persistSettings() {
 		SpeechLanguage:  m.speechLanguage,
 		MaxChars:        m.maxChars,
 		Workers:         m.workers,
+		RAGTopK:         m.ragTopK,
 		Formats:         core.EncodeFormatSelection(m.importFormats),
 	}.Save(m.db)
 }

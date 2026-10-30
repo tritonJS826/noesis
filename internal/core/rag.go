@@ -24,12 +24,28 @@ import (
 // so it can answer from the notes.
 
 // Chunking parameters (in runes). Chunks overlap a little so a passage split
-// across a boundary is still fully contained in at least one chunk.
+// across a boundary is still fully contained in at least one chunk. The size is
+// kept well below the ~512-token context of embedding models: Cyrillic and CJK
+// text tokenises at roughly one token per rune, so a smaller window avoids the
+// silent truncation that a 1000-rune chunk caused.
 const (
-	ragChunkSize    = 1000
-	ragChunkOverlap = 150
+	ragChunkSize    = 700
+	ragChunkOverlap = 120
 	ragDefaultTopK  = 5
+	ragMinTopK      = 1
+	ragMaxTopK      = 50
 )
+
+// NormalizeRAGTopK clamps a requested result count into the supported range.
+func NormalizeRAGTopK(n int) int {
+	if n < ragMinTopK {
+		return ragMinTopK
+	}
+	if n > ragMaxTopK {
+		return ragMaxTopK
+	}
+	return n
+}
 
 // RAGResult is one ranked search hit.
 type RAGResult struct {
@@ -64,6 +80,21 @@ func EmbeddingModelSuggestion(installed []string, model string) string {
 		return ""
 	}
 	return "not installed — run: ollama pull " + model
+}
+
+// embeddingPrompts returns the task prefixes the configured embedding model
+// expects for retrieval. Some models are trained with an instruction prompt
+// (mxbai-embed-large requires it on the query; nomic-embed-text needs one on
+// both the query and the document). Omitting them noticeably degrades ranking.
+// Empty strings mean "no prefix".
+func embeddingPrompts(model string) (queryPrompt, docPrompt string) {
+	switch modelBaseName(strings.ToLower(strings.TrimSpace(model))) {
+	case "mxbai-embed-large":
+		return "Represent this sentence for searching relevant passages: ", ""
+	case "nomic-embed-text":
+		return "search_query: ", "search_document: "
+	}
+	return "", ""
 }
 
 // EmbedText returns the embedding vector of text using the configured
@@ -131,6 +162,26 @@ func postEmbedding(ctx context.Context, url string, body map[string]any) ([]floa
 		return out.Embedding, nil
 	}
 	return nil, fmt.Errorf("no embedding in response")
+}
+
+// EmbedQuery embeds a search query, adding the model's retrieval prompt when it
+// has one. This is what makes "search" rank well with mxbai-embed-large and
+// nomic-embed-text.
+func EmbedQuery(ctx context.Context, c Config, query string) ([]float32, error) {
+	qp, _ := embeddingPrompts(NormalizeEmbeddingModel(c.EmbeddingModel))
+	return EmbedText(ctx, c, qp+strings.TrimSpace(query))
+}
+
+// EmbedDocument embeds one note chunk. title is prepended so a chunk keeps its
+// source context (which helps titles and topics match), and the model's
+// document prompt is applied when it has one.
+func EmbedDocument(ctx context.Context, c Config, title, text string) ([]float32, error) {
+	_, dp := embeddingPrompts(NormalizeEmbeddingModel(c.EmbeddingModel))
+	body := strings.TrimSpace(text)
+	if t := strings.TrimSpace(title); t != "" {
+		body = t + "\n" + body
+	}
+	return EmbedText(ctx, c, dp+body)
 }
 
 // encodeVec serialises a float32 vector as little-endian bytes for sqlite.
@@ -292,7 +343,10 @@ func BuildRAGIndex(ctx context.Context, r Reporter, db *sql.DB, c Config) error 
 			r.Advance(true)
 			return nil
 		}
-		hash := ragIndexHash(model, n.text)
+		_, docPrompt := embeddingPrompts(model)
+		titleText := strings.TrimSpace(n.name)
+		chunker := fmt.Sprintf("chunk=%d/%d", ragChunkSize, ragChunkOverlap)
+		hash := ragIndexHash(model, docPrompt+chunker+"\n"+titleText+"\n"+n.text)
 		var existing string
 		if db.QueryRow(`SELECT hash FROM rag_notes WHERE note_id=? AND model=?`, n.id, model).Scan(&existing) == nil && existing == hash {
 			mu.Lock()
@@ -311,7 +365,7 @@ func BuildRAGIndex(ctx context.Context, r Reporter, db *sql.DB, c Config) error 
 		var cvs []chunkVec
 		for i, piece := range pieces {
 			r.SetCurrent(n.name)
-			vec, err := EmbedText(ctx, c, piece)
+			vec, err := EmbedDocument(ctx, c, n.name, piece)
 			if err != nil {
 				r.Fail("%s: %v", n.name, err)
 				r.Advance(false)
@@ -381,7 +435,7 @@ func RAGSearch(ctx context.Context, db *sql.DB, c Config, query string, topK int
 	if topK <= 0 {
 		topK = ragDefaultTopK
 	}
-	qv, err := EmbedText(ctx, c, query)
+	qv, err := EmbedQuery(ctx, c, query)
 	if err != nil {
 		return nil, err
 	}

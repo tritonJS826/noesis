@@ -81,6 +81,7 @@ type AppSettings struct {
 	SpeechLanguage  string
 	MaxChars        int
 	Workers         int
+	RAGTopK         int
 	// Formats holds the import-format selection as stored in the settings
 	// table. Empty means "not chosen — use DefaultImportFormats"; see
 	// EncodeFormatSelection / DecodeFormatSelection.
@@ -107,6 +108,7 @@ func DefaultAppSettings() AppSettings {
 		SpeechLanguage:  c.SpeechLanguage,
 		MaxChars:        c.MaxChars,
 		Workers:         c.Workers,
+		RAGTopK:         ragDefaultTopK,
 	}
 }
 
@@ -184,6 +186,11 @@ func LoadAppSettings(db *sql.DB) AppSettings {
 			s.Workers = n
 		}
 	}
+	if v, ok := get("rag_topk"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			s.RAGTopK = NormalizeRAGTopK(n)
+		}
+	}
 	return s
 }
 
@@ -226,6 +233,7 @@ func (s AppSettings) Save(db *sql.DB) error {
 		{"import_formats", s.Formats, def.Formats},
 		{"maxchars", strconv.Itoa(s.MaxChars), strconv.Itoa(def.MaxChars)},
 		{"workers", strconv.Itoa(s.Workers), strconv.Itoa(def.Workers)},
+		{"rag_topk", strconv.Itoa(s.RAGTopK), strconv.Itoa(def.RAGTopK)},
 	}
 	for _, it := range items {
 		if err := set(it[0], it[1], it[2]); err != nil {

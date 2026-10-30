@@ -574,7 +574,7 @@ func (m *model) viewRAGSearch() string {
 	}
 
 	if len(m.ragResults) > 0 {
-		lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf("%d result(s)", len(m.ragResults))))
+		lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf("%d result(s)  ·  showing up to %d", len(m.ragResults), m.ragTopK)))
 		start, end := listWindow(len(m.ragResults), m.cursor, m.listRows(8))
 		for i := start; i < end; i++ {
 			r := m.ragResults[i]
@@ -594,7 +594,7 @@ func (m *model) viewRAGSearch() string {
 	}
 
 	lines = append(lines, "")
-	hint := "↑↓/jk move  ·  Enter open note  ·  a ask  ·  / new search  ·  h/ESC back"
+	hint := fmt.Sprintf("↑↓/jk move  ·  Enter open note  ·  a ask  ·  +/- results (%d)  ·  / new search  ·  h/ESC back", m.ragTopK)
 	if m.ragConfirm {
 		hint = "y — download & search  ·  any other key — cancel"
 	} else if m.ragTyping {

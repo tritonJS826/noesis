@@ -434,9 +434,7 @@ func (m *model) openRAGSearch() {
 	m.ragAsk = false
 	m.ragConfirm = false
 	m.ragConfirmModels = nil
-	if m.ragTopK < 1 {
-		m.ragTopK = 5
-	}
+	m.ragTopK = core.NormalizeRAGTopK(m.ragTopK)
 	m.cursor = 0
 	m.screen = scrRAGSearch
 }
@@ -487,6 +485,13 @@ func (m *model) ragSearchKeys(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	switch key {
+	case "+", "=", "]":
+		return m.changeRAGTopK(1)
+	case "-", "_", "[":
+		return m.changeRAGTopK(-1)
+	}
+
 	switch vimNav(key) {
 	case "up":
 		if m.cursor > 0 {
@@ -499,7 +504,7 @@ func (m *model) ragSearchKeys(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		if len(m.ragResults) > 0 && m.cursor < len(m.ragResults) {
 			n := m.ragResults[m.cursor]
-			m.openBrowseDetail(core.NoteDetail{ID: n.NoteID, FileName: n.Name, FilePath: n.Path})
+			m.openBrowseDetail(core.NoteDetail{ID: n.NoteID, FileName: n.Name, FilePath: n.Path}, scrRAGSearch)
 		}
 	case "a", "A":
 		return m.runRAGSearch(true)
@@ -512,6 +517,21 @@ func (m *model) ragSearchKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc", "h", "q":
 		m.screen = scrData
 		m.dataCursor = 3
+	}
+	return nil
+}
+
+// changeRAGTopK adjusts how many results a search returns and re-runs the
+// current search so the change is visible immediately. The choice is persisted.
+func (m *model) changeRAGTopK(delta int) tea.Cmd {
+	next := core.NormalizeRAGTopK(m.ragTopK + delta)
+	if next == m.ragTopK {
+		return nil
+	}
+	m.ragTopK = next
+	m.persistSettings()
+	if strings.TrimSpace(m.ragQuery) != "" {
+		return m.runRAGSearch(m.ragAsk)
 	}
 	return nil
 }
@@ -690,7 +710,7 @@ func (m *model) filteredBrowse() []core.NoteDetail {
 	return out
 }
 
-func (m *model) openBrowseDetail(n core.NoteDetail) {
+func (m *model) openBrowseDetail(n core.NoteDetail, back screen) {
 	fields, err := core.NoteRecord(m.db, n.ID)
 	if err != nil {
 		m.browseErr = err.Error()
@@ -702,6 +722,7 @@ func (m *model) openBrowseDetail(n core.NoteDetail) {
 	m.browseDetailConfirm = false
 	m.browseDetailOffset = 0
 	m.filterTyping = false
+	m.browseBack = back
 	m.screen = scrBrowseDetail
 }
 
@@ -739,7 +760,7 @@ func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 		case "enter":
 			filtered := m.filteredBrowse()
 			if len(filtered) > 0 && m.cursor < len(filtered) {
-				m.openBrowseDetail(filtered[m.cursor])
+				m.openBrowseDetail(filtered[m.cursor], scrBrowse)
 			}
 		case "backspace":
 			r := []rune(m.browseFilter)
@@ -803,7 +824,7 @@ func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		filtered := m.filteredBrowse()
 		if len(filtered) > 0 && m.cursor < len(filtered) {
-			m.openBrowseDetail(filtered[m.cursor])
+			m.openBrowseDetail(filtered[m.cursor], scrBrowse)
 		}
 	case "delete":
 		filtered := m.filteredBrowse()
@@ -872,7 +893,7 @@ func (m *model) browseDetailKeys(msg tea.KeyMsg) tea.Cmd {
 	case "d", "delete":
 		m.browseDetailConfirm = true
 	case "esc", "q":
-		m.screen = scrBrowse
+		m.screen = m.browseBack
 		m.browseDetail = nil
 		m.browseDetailOffset = 0
 	}

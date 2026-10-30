@@ -251,3 +251,62 @@ func TestDeleteNoteRemovesRAGRows(t *testing.T) {
 		t.Fatalf("rag rows survived note deletion: chunks=%d metas=%d", chunks, metas)
 	}
 }
+
+func TestEmbeddingPrompts(t *testing.T) {
+	out := "Represent this sentence for searching relevant passages: "
+	if q, d := embeddingPrompts("mxbai-embed-large"); q == "" || !strings.HasPrefix(q, out) {
+		t.Fatalf("mxbai query prompt missing: %q", q)
+	} else if d != "" {
+		t.Fatalf("mxbai should have no document prompt, got %q", d)
+	}
+	if q, d := embeddingPrompts("nomic-embed-text:latest"); q != "search_query: " || d != "search_document: " {
+		t.Fatalf("nomic prompts = %q / %q", q, d)
+	}
+	if q, d := embeddingPrompts("some-other-model"); q != "" || d != "" {
+		t.Fatalf("unknown model should have no prompts, got %q / %q", q, d)
+	}
+}
+
+func TestEmbedQueryAndDocumentApplyPrompts(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Input string `json:"input"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		got = append(got, in.Input)
+		_ = json.NewEncoder(w).Encode(map[string]any{"embeddings": [][]float32{{1, 0}}})
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.Host = srv.URL
+	cfg.EmbeddingModel = "mxbai-embed-large"
+	if _, err := EmbedQuery(context.Background(), cfg, "my cat"); err != nil {
+		t.Fatalf("embed query: %v", err)
+	}
+	if _, err := EmbedDocument(context.Background(), cfg, "Note title", "the body"); err != nil {
+		t.Fatalf("embed document: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 embedding calls, got %d", len(got))
+	}
+	if !strings.Contains(got[0], "Represent this sentence") || !strings.Contains(got[0], "my cat") {
+		t.Fatalf("query embedding input = %q", got[0])
+	}
+	if !strings.Contains(got[1], "Note title") || !strings.Contains(got[1], "the body") {
+		t.Fatalf("document embedding input = %q", got[1])
+	}
+}
+
+func TestNormalizeRAGTopK(t *testing.T) {
+	if got := NormalizeRAGTopK(0); got != ragMinTopK {
+		t.Fatalf("NormalizeRAGTopK(0) = %d, want %d", got, ragMinTopK)
+	}
+	if got := NormalizeRAGTopK(10); got != 10 {
+		t.Fatalf("NormalizeRAGTopK(10) = %d, want 10", got)
+	}
+	if got := NormalizeRAGTopK(9999); got != ragMaxTopK {
+		t.Fatalf("NormalizeRAGTopK(9999) = %d, want %d", got, ragMaxTopK)
+	}
+}

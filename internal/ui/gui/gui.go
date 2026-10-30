@@ -247,7 +247,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	}
 	s.browseCols = defaultBrowseCols()
 	s.browseBack = scrBrowse
-	s.ragTopK = 5
+	s.ragTopK = core.NormalizeRAGTopK(st.RAGTopK)
 	s.ollamaStatus = "checking ollama…"
 
 	s.importSource = core.SourceFilesystem
@@ -744,9 +744,7 @@ func (s *state) openRAGSearch() {
 	s.ragAnswer = ""
 	s.ragErr = ""
 	s.ragBusy = false
-	if s.ragTopK < 1 {
-		s.ragTopK = 5
-	}
+	s.ragTopK = core.NormalizeRAGTopK(s.ragTopK)
 	s.screen = scrRAGSearch
 	s.render()
 }
@@ -1400,6 +1398,7 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		SpeechLanguage:  cfg.SpeechLanguage,
 		MaxChars:        cfg.MaxChars,
 		Workers:         cfg.Workers,
+		RAGTopK:         s.ragTopK,
 		Formats:         core.EncodeFormatSelection(s.importFormats),
 	}.Save(db)
 }
