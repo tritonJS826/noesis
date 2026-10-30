@@ -12,22 +12,6 @@ import (
 	"time"
 )
 
-// ensureOllama verifies that the ollama host is reachable before running
-// model phases.
-func ensureOllama(ctx context.Context, c Config) error {
-	hc := http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.Host, "/")+"/api/tags", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return fmt.Errorf("ollama unavailable at %s: %w", c.Host, err)
-	}
-	resp.Body.Close()
-	return nil
-}
-
 // FetchModels returns the models available on the ollama host.
 func FetchModels(host string) ([]string, error) {
 	hc := http.Client{Timeout: 5 * time.Second}

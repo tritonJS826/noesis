@@ -60,11 +60,8 @@ func EmbeddingModelSuggestion(installed []string, model string) string {
 		return ""
 	}
 	model = NormalizeEmbeddingModel(model)
-	base := modelBaseName(model)
-	for _, m := range installed {
-		if strings.EqualFold(m, model) || strings.EqualFold(modelBaseName(m), base) {
-			return ""
-		}
+	if ModelInstalled(installed, model) {
+		return ""
 	}
 	return "not installed — run: ollama pull " + model
 }
@@ -258,7 +255,7 @@ type ragNote struct {
 // "RAG index" process.
 func BuildRAGIndex(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	model := NormalizeEmbeddingModel(c.EmbeddingModel)
-	if err := ensureOllama(ctx, c); err != nil {
+	if err := EnsureOllamaModel(ctx, r, c.Host, model); err != nil {
 		return err
 	}
 

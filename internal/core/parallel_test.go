@@ -29,7 +29,7 @@ func TestSingleProcessUsesWorkers(t *testing.T) {
 	var inflight, maxInflight int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/tags" {
-			_, _ = w.Write([]byte(`{"models":[]}`))
+			_, _ = w.Write([]byte(`{"models":[{"name":"m"}]}`))
 			return
 		}
 		cur := atomic.AddInt32(&inflight, 1)

@@ -780,6 +780,26 @@ func (s *state) runRAGSearch(ask bool) {
 	topK := s.ragTopK
 	go func() {
 		ctx := context.Background()
+		r := &guiReporter{s: s}
+		fail := func(err error) {
+			fyne.Do(func() {
+				s.ragBusy = false
+				s.ragErr = err.Error()
+				s.ragResults = nil
+				s.ragAnswer = ""
+				s.render()
+			})
+		}
+		if err := core.EnsureOllamaModel(ctx, r, cfg.Host, core.NormalizeEmbeddingModel(cfg.EmbeddingModel)); err != nil {
+			fail(err)
+			return
+		}
+		if ask {
+			if err := core.EnsureOllamaModel(ctx, r, cfg.Host, cfg.Model); err != nil {
+				fail(err)
+				return
+			}
+		}
 		var results []core.RAGResult
 		var answer string
 		var err error
@@ -1537,6 +1557,22 @@ func (r *guiReporter) Logf(format string, a ...any) {
 
 func (r *guiReporter) Fail(format string, a ...any) {
 	r.Logf("error: "+format, a...)
+}
+
+// ApproveModelPull asks the user (through a dialog) whether a missing ollama
+// model may be downloaded. It blocks the worker goroutine until the dialog is
+// answered.
+func (r *guiReporter) ApproveModelPull(model string) bool {
+	done := make(chan bool, 1)
+	fyne.Do(func() {
+		dialog.ShowConfirm(
+			"Download model",
+			fmt.Sprintf("Model %q is not installed. Download it now? This can take a while and may use several GB.", model),
+			func(ok bool) { done <- ok },
+			r.s.win,
+		)
+	})
+	return <-done
 }
 
 func ratio(done, total int) float64 {

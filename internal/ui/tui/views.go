@@ -555,6 +555,12 @@ func (m *model) viewRAGSearch() string {
 	lines = append(lines, "")
 
 	switch {
+	case m.ragConfirm:
+		prompt := fmt.Sprintf("Model(s) not installed: %s. Download now? (y/N)", strings.Join(m.ragConfirmModels, ", "))
+		for _, l := range wrapText(prompt, cw) {
+			lines = append(lines, tuiRed.MaxWidth(cw).Render(l))
+		}
+		lines = append(lines, "")
 	case m.ragBusy:
 		lines = append(lines, tuiDim.Width(cw).Render("searching…"))
 	case m.ragErr != "":
@@ -589,7 +595,9 @@ func (m *model) viewRAGSearch() string {
 
 	lines = append(lines, "")
 	hint := "↑↓/jk move  ·  Enter open note  ·  a ask  ·  / new search  ·  h/ESC back"
-	if m.ragTyping {
+	if m.ragConfirm {
+		hint = "y — download & search  ·  any other key — cancel"
+	} else if m.ragTyping {
 		hint = "type query  ·  Enter search  ·  Ctrl+A search + ask  ·  ESC clear"
 	}
 	lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))

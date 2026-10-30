@@ -224,8 +224,8 @@ var saveMu sync.Mutex
 
 // Phase2 asks ollama for tags and links for every pair of notes.
 func Phase2(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
-	// check ollama availability
-	if err := ensureOllama(ctx, c); err != nil {
+	// check ollama availability and make sure the chat model is present
+	if err := EnsureOllamaModel(ctx, r, c.Host, c.Model); err != nil {
 		return err
 	}
 

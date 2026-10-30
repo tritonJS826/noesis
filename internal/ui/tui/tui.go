@@ -70,6 +70,16 @@ type ragMsg struct {
 	err     error
 }
 
+// ragModelsMsg reports which ollama models needed for a search are missing.
+type ragModelsMsg struct {
+	missing []string
+	ask     bool
+	err     error
+}
+
+// ragPulledMsg reports the result of downloading the missing models.
+type ragPulledMsg struct{ err error }
+
 type model struct {
 	db      *sql.DB
 	program *tea.Program
@@ -159,14 +169,16 @@ type model struct {
 	extractTyping  bool
 
 	// semantic (RAG) search
-	ragQuery   string
-	ragResults []core.RAGResult
-	ragAnswer  string
-	ragErr     string
-	ragBusy    bool
-	ragTyping  bool
-	ragAsk     bool
-	ragTopK    int
+	ragQuery         string
+	ragResults       []core.RAGResult
+	ragAnswer        string
+	ragErr           string
+	ragBusy          bool
+	ragTyping        bool
+	ragAsk           bool
+	ragTopK          int
+	ragConfirm       bool
+	ragConfirmModels []string
 
 	pickConfirm   bool
 	pickConfirmID int64
@@ -430,6 +442,49 @@ func ragSearchCmd(db *sql.DB, c core.Config, query string, topK int, ask bool) t
 	}
 }
 
+// ragPreflightCmd checks which ollama models a search needs before running it,
+// so the TUI can ask the user to download any that are missing.
+func ragPreflightCmd(c core.Config, ask bool) tea.Cmd {
+	return func() tea.Msg {
+		models, err := core.FetchModels(c.Host)
+		if err != nil {
+			return ragModelsMsg{err: fmt.Errorf("ollama unavailable at %s: %w", c.Host, err)}
+		}
+		var missing []string
+		if emb := core.NormalizeEmbeddingModel(c.EmbeddingModel); !core.ModelInstalled(models, emb) {
+			missing = append(missing, emb)
+		}
+		if ask && !core.ModelInstalled(models, c.Model) {
+			missing = append(missing, c.Model)
+		}
+		return ragModelsMsg{missing: missing, ask: ask}
+	}
+}
+
+// ragPullCmd downloads the missing models on the terminal (leaving the TUI's
+// alternate screen), then reports back so the search can start.
+func ragPullCmd(m *model, models []string) tea.Cmd {
+	c := m.ragConfig()
+	return func() tea.Msg {
+		m.program.ReleaseTerminal()
+		defer m.program.RestoreTerminal()
+
+		progress := consoleshared.New(m.db)
+		progress.AssumeYes = true // already approved with the y/N prompt
+		progress.Start()
+		defer progress.Stop()
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		for _, model := range models {
+			if err := core.EnsureOllamaModel(ctx, progress, c.Host, model); err != nil {
+				return ragPulledMsg{err: err}
+			}
+		}
+		return ragPulledMsg{}
+	}
+}
+
 func removeNoteCmd(db *sql.DB, id int64, mode int) tea.Cmd {
 	return func() tea.Msg {
 		var removed, scrubbed int
@@ -601,6 +656,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ragAnswer = msg.answer
 		}
 		return m, nil
+
+	case ragModelsMsg:
+		if msg.err != nil {
+			m.ragBusy = false
+			m.ragErr = msg.err.Error()
+			return m, nil
+		}
+		if len(msg.missing) == 0 {
+			return m, ragSearchCmd(m.db, m.ragConfig(), m.ragQuery, m.ragTopK, msg.ask)
+		}
+		m.ragBusy = false
+		m.ragConfirm = true
+		m.ragConfirmModels = msg.missing
+		return m, nil
+
+	case ragPulledMsg:
+		if msg.err != nil {
+			m.ragBusy = false
+			m.ragErr = msg.err.Error()
+			return m, nil
+		}
+		return m, tea.Batch(
+			ragSearchCmd(m.db, m.ragConfig(), m.ragQuery, m.ragTopK, m.ragAsk),
+			fetchOllamaCmd(m.host),
+		)
 
 	case removeMsg:
 		if m.removeFromDetail {

@@ -4,6 +4,7 @@
 package consoleshared
 
 import (
+	"bufio"
 	"database/sql"
 	"fmt"
 	"os"
@@ -30,6 +31,13 @@ const (
 type Progress struct {
 	db  *sql.DB
 	tty bool
+
+	// AssumeYes auto-approves interactive prompts (such as downloading a
+	// missing ollama model). It is set from the CLI -yes flag.
+	AssumeYes bool
+
+	drawMu    sync.Mutex
+	suspended bool
 
 	mu        sync.Mutex
 	phase     string
@@ -236,12 +244,57 @@ func (p *Progress) Start() {
 		for {
 			select {
 			case <-t.C:
-				fmt.Print("\x1b[H" + p.render() + "\x1b[J")
+				p.drawMu.Lock()
+				if !p.suspended {
+					fmt.Print("\x1b[H" + p.render() + "\x1b[J")
+				}
+				p.drawMu.Unlock()
 			case <-p.quit:
 				return
 			}
 		}
 	}()
+}
+
+// suspend pauses live rendering and leaves the alternate screen so a prompt can
+// be shown on the normal terminal. resume undoes it.
+func (p *Progress) suspend() {
+	p.drawMu.Lock()
+	defer p.drawMu.Unlock()
+	p.suspended = true
+	if p.tty && p.quit != nil {
+		fmt.Print("\x1b[?25h\x1b[?1049l")
+	}
+}
+
+func (p *Progress) resume() {
+	p.drawMu.Lock()
+	defer p.drawMu.Unlock()
+	if p.tty && p.quit != nil {
+		fmt.Print("\x1b[?1049h\x1b[?25l")
+	}
+	p.suspended = false
+}
+
+// ApproveModelPull asks on the terminal whether a missing ollama model may be
+// downloaded. With -yes it approves without asking; without a terminal to ask
+// on it declines, so scripted runs fail loudly instead of downloading silently.
+func (p *Progress) ApproveModelPull(model string) bool {
+	if p.AssumeYes {
+		return true
+	}
+	if st, _ := os.Stdin.Stat(); st == nil || st.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	p.suspend()
+	defer p.resume()
+	fmt.Printf("\nModel %q is not installed. Download it now? This may use several GB. [y/N] ", model)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }
 
 // Stop stops rendering and prints the final progress snapshot.

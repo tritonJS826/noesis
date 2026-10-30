@@ -119,7 +119,7 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 	if strings.TrimSpace(tmpl) == "" {
 		return fmt.Errorf("prompt %q not found", promptName)
 	}
-	if err := ensureOllama(ctx, c); err != nil {
+	if err := EnsureOllamaModel(ctx, r, c.Host, c.Model); err != nil {
 		return err
 	}
 
@@ -246,6 +246,16 @@ func ExtractDataForAll(ctx context.Context, r Reporter, db *sql.DB, c Config) er
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
+	}
+
+	mimes := make([]string, len(candidates))
+	for i, n := range candidates {
+		mimes[i] = n.mime
+	}
+	if len(candidates) > 0 {
+		if err := ensureExtractionModels(ctx, r, c, mimes); err != nil {
+			return err
+		}
 	}
 
 	workers := normalizedWorkers(c.Workers)

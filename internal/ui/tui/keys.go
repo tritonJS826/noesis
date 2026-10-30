@@ -432,6 +432,8 @@ func (m *model) openRAGSearch() {
 	m.ragBusy = false
 	m.ragTyping = true
 	m.ragAsk = false
+	m.ragConfirm = false
+	m.ragConfirmModels = nil
 	if m.ragTopK < 1 {
 		m.ragTopK = 5
 	}
@@ -444,6 +446,18 @@ func (m *model) ragSearchKeys(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	key := msg.String()
+
+	if m.ragConfirm {
+		m.ragConfirm = false
+		if strings.EqualFold(key, "y") {
+			m.ragBusy = true
+			models := m.ragConfirmModels
+			m.ragConfirmModels = nil
+			return ragPullCmd(m, models)
+		}
+		m.ragConfirmModels = nil
+		return nil
+	}
 
 	if m.ragTyping {
 		switch key {
@@ -503,7 +517,8 @@ func (m *model) ragSearchKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // runRAGSearch starts a semantic search (and, when ask is true, an LLM answer
-// grounded in the retrieved chunks).
+// grounded in the retrieved chunks). It first checks that the required models
+// are installed so they can be downloaded on demand.
 func (m *model) runRAGSearch(ask bool) tea.Cmd {
 	if strings.TrimSpace(m.ragQuery) == "" {
 		m.ragErr = "enter a search query"
@@ -514,8 +529,10 @@ func (m *model) runRAGSearch(ask bool) tea.Cmd {
 	m.ragErr = ""
 	m.ragAnswer = ""
 	m.ragTyping = false
+	m.ragConfirm = false
+	m.ragConfirmModels = nil
 	m.cursor = 0
-	return ragSearchCmd(m.db, m.ragConfig(), m.ragQuery, m.ragTopK, ask)
+	return ragPreflightCmd(m.ragConfig(), ask)
 }
 
 // ─── re-extract picker ──────────────────────────────────────────────────────

@@ -444,7 +444,7 @@ func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 		return RunSingleProcess(ctx, r, db, c)
 	}
 
-	if err := ensureOllama(ctx, c); err != nil {
+	if err := EnsureOllamaModel(ctx, r, c.Host, c.Model); err != nil {
 		return err
 	}
 	rows, err := db.Query(`SELECT id FROM notes WHERE id NOT IN (SELECT DISTINCT note_id FROM tags) ORDER BY id`)

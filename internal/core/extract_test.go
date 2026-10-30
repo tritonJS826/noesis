@@ -282,6 +282,10 @@ func TestDataExtractionStoresAudioError(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			_, _ = io.WriteString(w, `{"models":[{"name":"missing"}]}`)
+			return
+		}
 		http.Error(w, "model not found", http.StatusNotFound)
 	}))
 	defer srv.Close()

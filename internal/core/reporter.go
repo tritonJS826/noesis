@@ -11,6 +11,15 @@ type Reporter interface {
 	Fail(format string, a ...any)
 }
 
+// ModelApprover is an optional Reporter capability. When a Reporter implements
+// it, core asks it for permission before downloading a missing ollama model.
+// Reporters that do not implement it cause core to pull the model automatically.
+type ModelApprover interface {
+	// ApproveModelPull reports whether model may be downloaded from the ollama
+	// library. It may block while the UI asks the user.
+	ApproveModelPull(model string) bool
+}
+
 // NoopReporter ignores all progress events.
 type NoopReporter struct{}
 

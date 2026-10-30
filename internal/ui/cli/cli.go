@@ -67,6 +67,7 @@ func Run(args []string) error {
 	ragSearch := fs.String("rag-search", "", "semantic search query over the RAG index and exit")
 	ragAsk := fs.Bool("rag-ask", false, "with -rag-search: also answer the question with the chat model")
 	ragTopK := fs.Int("rag-topk", 5, "number of RAG chunks to retrieve")
+	assumeYes := fs.Bool("yes", false, "auto-approve prompts, e.g. downloading a missing ollama model (default asks)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -212,10 +213,11 @@ func Run(args []string) error {
 		return nil
 
 	case *ragSearch != "":
-		return runRAGSearch(ctx, db, cfg, *ragSearch, *ragTopK, *ragAsk)
+		return runRAGSearch(ctx, db, cfg, *ragSearch, *ragTopK, *ragAsk, *assumeYes)
 	}
 
 	progress := consoleshared.New(db)
+	progress.AssumeYes = *assumeYes
 	progress.Start()
 	defer progress.Stop()
 
@@ -264,8 +266,16 @@ func Run(args []string) error {
 
 // runRAGSearch performs a semantic search over the RAG index, optionally
 // asking the chat model to answer the question from the retrieved context.
-func runRAGSearch(ctx context.Context, db *sql.DB, cfg core.Config, query string, topK int, ask bool) error {
+func runRAGSearch(ctx context.Context, db *sql.DB, cfg core.Config, query string, topK int, ask, assumeYes bool) error {
+	p := consoleshared.New(db)
+	p.AssumeYes = assumeYes
+	if err := core.EnsureOllamaModel(ctx, p, cfg.Host, core.NormalizeEmbeddingModel(cfg.EmbeddingModel)); err != nil {
+		return err
+	}
 	if ask {
+		if err := core.EnsureOllamaModel(ctx, p, cfg.Host, cfg.Model); err != nil {
+			return err
+		}
 		answer, results, err := core.RAGAnswer(ctx, db, cfg, query, topK)
 		if err != nil {
 			return err
