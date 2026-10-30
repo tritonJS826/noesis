@@ -389,6 +389,7 @@ func (s *state) dataScreen() fyne.CanvasObject {
 		"Browse database",
 		"Compare file (filesystem search)",
 		"Re-extract documents, images & transcribe audio",
+		"Search RAG (semantic)",
 	}
 	list := widget.NewList(
 		func() int { return len(items) },
@@ -403,6 +404,8 @@ func (s *state) dataScreen() fyne.CanvasObject {
 			s.openFsSearch()
 		case 2:
 			s.openExtract()
+		case 3:
+			s.openRAGSearch()
 		}
 	}
 
@@ -653,6 +656,7 @@ func (s *state) browseScreen() fyne.CanvasObject {
 		notes := s.filteredBrowseNotes()
 		list.UnselectAll()
 		if id < len(notes) {
+			s.browseBack = scrBrowse
 			s.openBrowseDetail(notes[id])
 		}
 	}
@@ -725,7 +729,7 @@ func (s *state) browseDetailScreen() fyne.CanvasObject {
 		container.NewHBox(
 			remove,
 			widget.NewButton("Back", func() {
-				s.screen = scrBrowse
+				s.screen = s.browseBack
 				s.render()
 			}),
 		),
@@ -785,6 +789,90 @@ func (s *state) relativePath(path string) string {
 		return strings.TrimPrefix(path, cwd+string(os.PathSeparator))
 	}
 	return path
+}
+
+// ─── semantic (RAG) search ──────────────────────────────────────────────────
+
+func (s *state) ragSearchScreen() fyne.CanvasObject {
+	db := s.currentDB()
+	idxNotes, idxChunks, _ := core.RAGStats(db)
+	model := core.NormalizeEmbeddingModel(s.embedding.Text)
+
+	status := "Embedding model: " + model
+	if idxChunks > 0 {
+		status += fmt.Sprintf("   ·   indexed: %d note(s) / %d chunk(s)", idxNotes, idxChunks)
+	} else {
+		status += "   ·   index empty — run the \"RAG index\" one-by-one process first."
+	}
+
+	query := widget.NewEntry()
+	query.SetPlaceHolder("ask a question about your notes…")
+	query.SetText(s.ragQuery)
+	query.OnChanged = func(v string) { s.ragQuery = v }
+	query.OnSubmitted = func(string) { s.runRAGSearch(false) }
+
+	searchBtn := widget.NewButton("Search", func() { s.runRAGSearch(false) })
+	askBtn := widget.NewButton("Ask", func() { s.runRAGSearch(true) })
+	askBtn.Importance = widget.HighImportance
+
+	var feedback fyne.CanvasObject
+	switch {
+	case s.ragBusy:
+		feedback = widget.NewLabel("Searching…")
+	case s.ragErr != "":
+		feedback = wrappedLabel("Error: " + s.ragErr)
+	case s.ragAnswer != "":
+		answer := widget.NewLabel(s.ragAnswer)
+		answer.Wrapping = fyne.TextWrapWord
+		answer.Selectable = true
+		feedback = container.NewVBox(
+			widget.NewLabelWithStyle("Answer:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			answer,
+		)
+	default:
+		feedback = widget.NewLabel("")
+	}
+
+	list := widget.NewList(
+		func() int { return len(s.ragResults) },
+		func() fyne.CanvasObject { return widget.NewLabel("") },
+		func(id widget.ListItemID, o fyne.CanvasObject) {
+			if id < len(s.ragResults) {
+				r := s.ragResults[id]
+				o.(*widget.Label).SetText(fmt.Sprintf("[%.3f]  %s — %s", r.Score, r.Path, ragSnippet(r.Chunk)))
+			}
+		},
+	)
+	list.OnSelected = func(id widget.ListItemID) {
+		if id >= len(s.ragResults) {
+			return
+		}
+		list.UnselectAll()
+		r := s.ragResults[id]
+		s.browseBack = scrRAGSearch
+		s.openBrowseDetail(core.NoteDetail{ID: r.NoteID, FileName: r.Name, FilePath: r.Path})
+	}
+
+	top := container.NewVBox(
+		wrappedLabel(status),
+		container.NewBorder(nil, nil, nil, container.NewHBox(searchBtn, askBtn), query),
+		feedback,
+	)
+
+	return container.NewBorder(
+		top,
+		wrappedLabel("Search ranks notes by meaning. Ask also answers the question from the top matches. Select a result to open the full note record."),
+		nil, nil, list,
+	)
+}
+
+// ragSnippet collapses whitespace and truncates a chunk for list display.
+func ragSnippet(text string) string {
+	s := strings.Join(strings.Fields(text), " ")
+	if rs := []rune(s); len(rs) > 160 {
+		s = string(rs[:160]) + "…"
+	}
+	return s
 }
 
 // ─── evaluation result ──────────────────────────────────────────────────────
@@ -848,6 +936,9 @@ func (s *state) evalScreen() fyne.CanvasObject {
 
 func (s *state) settingsScreen() fyne.CanvasObject {
 	modelRow := container.NewBorder(nil, nil, nil, widget.NewButton("Fetch…", s.pickModel), s.model)
+	embeddingRow := container.NewBorder(nil, nil, nil, widget.NewButton("Fetch…", func() {
+		s.pickOllamaModel("Choose embedding model", s.embedding)
+	}), s.embedding)
 	whisperValue := container.NewVBox(s.whisperModel, wrappedLabel(s.whisperModelStatus()))
 	whisperRow := container.NewBorder(nil, nil, nil, widget.NewButton("Manage…", s.openWhisperManager), whisperValue)
 
@@ -857,6 +948,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewFormItem("DB", s.dbEntry),
 		widget.NewFormItem("MODEL", modelRow),
 		widget.NewFormItem("VISION MODEL", s.vision),
+		widget.NewFormItem("EMBEDDING MODEL", embeddingRow),
 		widget.NewFormItem("AUDIO", s.audioEngine),
 		widget.NewFormItem("WHISPER MODEL", whisperRow),
 		widget.NewFormItem("WHISPER GPU", s.whisperBackend),
@@ -901,6 +993,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 	scroll := container.NewVScroll(container.NewVBox(
 		form,
 		wrappedLabel("VISION MODEL describes images during import, sync and re-extraction. Leave it empty to reuse MODEL."),
+		wrappedLabel(s.embeddingHint()),
 		audioHint,
 		audioHelp,
 		widget.NewSeparator(),
@@ -913,6 +1006,16 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 	scroll.SetMinSize(fyne.NewSize(720, 380))
 
 	return scroll
+}
+
+// embeddingHint describes the EMBEDDING MODEL setting and, when the selected
+// model is not installed, suggests how to install it.
+func (s *state) embeddingHint() string {
+	hint := "EMBEDDING MODEL builds the semantic (RAG) index used by \"Work with data → Search RAG\". Pick one with Fetch… or type a name."
+	if sug := core.EmbeddingModelSuggestion(s.ollamaModels, s.embedding.Text); sug != "" {
+		hint += " The selected model is " + sug + "."
+	}
+	return hint
 }
 
 // ─── whisper manager ────────────────────────────────────────────────────────

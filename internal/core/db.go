@@ -68,6 +68,25 @@ CREATE TABLE IF NOT EXISTS settings(
 	name  TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rag_chunks(
+	id         INTEGER PRIMARY KEY,
+	note_id    INTEGER NOT NULL REFERENCES notes(id),
+	chunk_idx  INTEGER NOT NULL,
+	text       TEXT NOT NULL,
+	model      TEXT NOT NULL DEFAULT '',
+	dim        INTEGER NOT NULL DEFAULT 0,
+	embedding  BLOB NOT NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_note ON rag_chunks(note_id);
+CREATE TABLE IF NOT EXISTS rag_notes(
+	note_id    INTEGER PRIMARY KEY REFERENCES notes(id),
+	hash       TEXT NOT NULL DEFAULT '',
+	model      TEXT NOT NULL DEFAULT '',
+	chunks     INTEGER NOT NULL DEFAULT 0,
+	dim        INTEGER NOT NULL DEFAULT 0,
+	indexed_at TEXT NOT NULL
+);
 `
 
 // OpenDB opens (or creates) the sqlite database and seeds the default prompts.
@@ -118,6 +137,13 @@ const DataExtractionProcess = "Data extraction"
 // DefaultSummaryProcess is the built-in single process that writes a very short
 // summary for every note.
 const DefaultSummaryProcess = "Short summary"
+
+// RAGIndexProcess is the built-in one-by-one process that builds the semantic
+// (RAG) vector index over every note. It calls the embedding model, not the
+// chat model, and is handled specially by TagAllSingle.
+const RAGIndexProcess = "RAG index"
+
+const ragIndexFallback = "Builds (or refreshes) the semantic vector index over every note so it can be searched by meaning. Uses the embedding model configured in Settings (EMBEDDING MODEL). This process does not call the chat model."
 
 // SummaryMaxChars is the hard limit applied to the built-in summary output.
 const SummaryMaxChars = 500
@@ -296,6 +322,7 @@ func seedPrompts(db *sql.DB) {
 		"Ты помощник, который размечает личные заметки (дневник, события) для Obsidian.\nДана одна заметка.\n\nВыдели от 2 до 8 коротких тегов, отражающих, о чём в ней говорится:\nлюди, места, темы, события, проекты, настроение. Теги — на языке заметки, нижний регистр,\nодно-два слова (вместо пробела используй дефис), без символа #.\n\nОтветь ТОЛЬКО JSON, без пояснений, в формате:\n{\"tags\":[\"...\"]}\n\n=== Заметка (файл: ${FILE_NAME}) ===\n${CONTENT}", "single")
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, DataExtractionProcess, dataExtractionFallback, "single")
 	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, DefaultSummaryProcess, summaryFallback, "single")
+	db.Exec(`INSERT OR IGNORE INTO prompts(name, prompt, type) VALUES(?,?,?)`, RAGIndexProcess, ragIndexFallback, "single")
 }
 
 // DefaultExportTemplateBody reproduces the built-in Obsidian export format.

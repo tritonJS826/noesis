@@ -71,6 +71,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.browseDetailKeys(msg)
 	case scrExtract:
 		return m.extractKeys(msg)
+	case scrRAGSearch:
+		return m.ragSearchKeys(msg)
 	case scrRunning:
 	}
 	return nil
@@ -384,7 +386,7 @@ func (m *model) toggleFormat(ext string) {
 
 // ─── work with data submenu ────────────────────────────────────────────────
 
-const dataItems = 2 // 0..2
+const dataItems = 3 // 0..3
 
 func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 	switch vimNav(msg.String()) {
@@ -408,12 +410,110 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 			m.filterTyping = false
 		case 2: // re-extract documents, images & transcribe audio
 			m.openExtract()
+		case 3: // semantic (RAG) search
+			m.openRAGSearch()
 		}
 	case "esc", "q":
 		m.screen = scrMenu
 		m.cursor = 4
 	}
 	return nil
+}
+
+// ─── semantic (RAG) search ──────────────────────────────────────────────────
+
+func (m *model) openRAGSearch() {
+	m.ragQuery = ""
+	m.ragResults = nil
+	m.ragAnswer = ""
+	m.ragErr = ""
+	m.ragBusy = false
+	m.ragTyping = true
+	m.ragAsk = false
+	if m.ragTopK < 1 {
+		m.ragTopK = 5
+	}
+	m.cursor = 0
+	m.screen = scrRAGSearch
+}
+
+func (m *model) ragSearchKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.ragBusy {
+		return nil
+	}
+	key := msg.String()
+
+	if m.ragTyping {
+		switch key {
+		case "esc":
+			if m.ragQuery != "" {
+				m.ragQuery = ""
+				m.ragResults = nil
+				m.ragAnswer = ""
+				m.ragErr = ""
+				return nil
+			}
+			m.ragTyping = false
+		case "enter":
+			return m.runRAGSearch(false)
+		case "ctrl+a":
+			return m.runRAGSearch(true)
+		case "backspace":
+			r := []rune(m.ragQuery)
+			if len(r) > 0 {
+				m.ragQuery = string(r[:len(r)-1])
+			}
+		default:
+			if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
+				m.ragQuery += string(msg.Runes[0])
+			}
+		}
+		return nil
+	}
+
+	switch vimNav(key) {
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down":
+		if m.cursor < len(m.ragResults)-1 {
+			m.cursor++
+		}
+	case "enter":
+		if len(m.ragResults) > 0 && m.cursor < len(m.ragResults) {
+			n := m.ragResults[m.cursor]
+			m.openBrowseDetail(core.NoteDetail{ID: n.NoteID, FileName: n.Name, FilePath: n.Path})
+		}
+	case "a", "A":
+		return m.runRAGSearch(true)
+	case "/", "i":
+		m.ragTyping = true
+		m.ragQuery = ""
+		m.ragResults = nil
+		m.ragAnswer = ""
+		m.ragErr = ""
+	case "esc", "h", "q":
+		m.screen = scrData
+		m.dataCursor = 3
+	}
+	return nil
+}
+
+// runRAGSearch starts a semantic search (and, when ask is true, an LLM answer
+// grounded in the retrieved chunks).
+func (m *model) runRAGSearch(ask bool) tea.Cmd {
+	if strings.TrimSpace(m.ragQuery) == "" {
+		m.ragErr = "enter a search query"
+		return nil
+	}
+	m.ragBusy = true
+	m.ragAsk = ask
+	m.ragErr = ""
+	m.ragAnswer = ""
+	m.ragTyping = false
+	m.cursor = 0
+	return ragSearchCmd(m.db, m.ragConfig(), m.ragQuery, m.ragTopK, ask)
 }
 
 // ─── re-extract picker ──────────────────────────────────────────────────────
@@ -871,6 +971,7 @@ const (
 	setDB
 	setModel
 	setVision
+	setEmbedding
 	setAudio
 	setWhisper
 	setWhisperGPU
@@ -927,6 +1028,34 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// openModelPicker opens the installed-models list for a settings row. target is
+// "model" (MODEL) or "embedding" (EMBEDDING MODEL).
+func (m *model) openModelPicker(target string) {
+	m.modelPickerTarget = target
+	m.screen = scrModelPicker
+	m.cursor = 0
+	current := m.modelName
+	if target == "embedding" {
+		current = m.embeddingModel
+	}
+	for i, mod := range m.ollamaModels {
+		if mod == current {
+			m.cursor = i
+			break
+		}
+	}
+}
+
+// backFromModelPicker returns to the settings row that opened the picker.
+func (m *model) backFromModelPicker() {
+	m.screen = scrSettings
+	if m.modelPickerTarget == "embedding" {
+		m.cursor = setEmbedding
+	} else {
+		m.cursor = setModel
+	}
+}
+
 func (m *model) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
 	switch vimNav(msg.String()) {
 	case "up":
@@ -939,14 +1068,17 @@ func (m *model) modelPickerKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "enter":
 		if len(m.ollamaModels) > 0 && m.cursor < len(m.ollamaModels) {
-			m.modelName = m.ollamaModels[m.cursor]
+			picked := m.ollamaModels[m.cursor]
+			if m.modelPickerTarget == "embedding" {
+				m.embeddingModel = core.NormalizeEmbeddingModel(picked)
+			} else {
+				m.modelName = picked
+			}
 			m.persistSettings()
 		}
-		m.screen = scrSettings
-		m.cursor = setModel
+		m.backFromModelPicker()
 	case "esc":
-		m.screen = scrSettings
-		m.cursor = setModel
+		m.backFromModelPicker()
 	}
 	return nil
 }
@@ -1181,14 +1313,7 @@ func (m *model) startEdit() {
 		m.editingField = "DB — database file"
 	case setModel:
 		if m.ollamaOK && len(m.ollamaModels) > 0 {
-			m.screen = scrModelPicker
-			m.cursor = 0
-			for i, mod := range m.ollamaModels {
-				if mod == m.modelName {
-					m.cursor = i
-					break
-				}
-			}
+			m.openModelPicker("model")
 			return
 		}
 		m.textInput.SetValue(m.modelName)
@@ -1198,6 +1323,14 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(m.visionModel)
 		m.textInput.Focus()
 		m.editingField = "VISION MODEL — describes images (empty = MODEL)"
+	case setEmbedding:
+		if m.ollamaOK && len(m.ollamaModels) > 0 {
+			m.openModelPicker("embedding")
+			return
+		}
+		m.textInput.SetValue(m.embeddingModel)
+		m.textInput.Focus()
+		m.editingField = "EMBEDDING MODEL — ollama model for RAG"
 	case setAudio:
 		m.openOptionPicker("audio", core.AudioEngineIDs(), core.AudioEngineLabels(), m.audioEngine)
 		return
@@ -1341,6 +1474,8 @@ func (m *model) saveField() {
 		m.modelName = val
 	case setVision:
 		m.visionModel = val
+	case setEmbedding:
+		m.embeddingModel = core.NormalizeEmbeddingModel(val)
 	case setGoogle:
 		m.googleAPIKey = val
 	case setHost:

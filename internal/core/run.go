@@ -14,6 +14,7 @@ const (
 	PhaseWrite
 	PhaseTagSingle
 	PhaseExtract
+	PhaseRAG
 )
 
 // Run executes the selected phase.
@@ -37,6 +38,8 @@ func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src
 			Name:    c.ExtractName,
 			Formats: c.ExtractFormats,
 		}, true)
+	case PhaseRAG:
+		return BuildRAGIndex(ctx, r, db, c)
 	}
 	return nil
 }

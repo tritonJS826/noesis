@@ -11,7 +11,7 @@ BIN_CLI  := noesis-cli
 BIN_GUI  := noesis-gui
 MODEL_STAMP := .model-stamp
 GO_SOURCES := $(shell find . -name '*.go' -not -path './.git/*')
-LDFLAGS  := -ldflags "-X noesis/internal/core.DefaultModel=$(MODEL) -X noesis/internal/core.DefaultTranscribeModel=$(TRANSCRIBE_MODEL)"
+LDFLAGS  := -ldflags "-s -w -X noesis/internal/core.DefaultModel=$(MODEL) -X noesis/internal/core.DefaultTranscribeModel=$(TRANSCRIBE_MODEL)"
 
 .PHONY: help build build-tui build-cli build-gui run run-cli run-gui dist clean
 
@@ -42,13 +42,13 @@ build-cli: $(BIN_CLI)
 build-gui: $(BIN_GUI)
 
 $(BIN_TUI): $(GO_SOURCES) go.mod go.sum $(MODEL_STAMP)
-	go build $(LDFLAGS) -o $(BIN_TUI) ./cmd/noesis-tui
+	go build -trimpath $(LDFLAGS) -o $(BIN_TUI) ./cmd/noesis-tui
 
 $(BIN_CLI): $(GO_SOURCES) go.mod go.sum $(MODEL_STAMP)
-	go build $(LDFLAGS) -o $(BIN_CLI) ./cmd/noesis-cli
+	go build -trimpath $(LDFLAGS) -o $(BIN_CLI) ./cmd/noesis-cli
 
 $(BIN_GUI): $(GO_SOURCES) go.mod go.sum $(MODEL_STAMP)
-	go build $(LDFLAGS) -o $(BIN_GUI) ./cmd/noesis-gui
+	go build -trimpath $(LDFLAGS) -o $(BIN_GUI) ./cmd/noesis-gui
 
 $(MODEL_STAMP): FORCE
 	@echo "$(MODEL)|$(TRANSCRIBE_MODEL)" | cmp -s $@ - 2>/dev/null || echo "$(MODEL)|$(TRANSCRIBE_MODEL)" > $@

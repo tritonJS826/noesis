@@ -169,6 +169,12 @@ func deleteNotes(db *sql.DB, notes []NoteInfo) (int, error) {
 		if _, err := tx.Exec(`DELETE FROM process_output WHERE note_id=?`, n.ID); err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec(`DELETE FROM rag_chunks WHERE note_id=?`, n.ID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM rag_notes WHERE note_id=?`, n.ID); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(`DELETE FROM notes WHERE id=?`, n.ID); err != nil {
 			return 0, err
 		}
@@ -430,6 +436,8 @@ func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	switch c.PromptName {
 	case DataExtractionProcess:
 		return ExtractDataForAll(ctx, r, db, c)
+	case RAGIndexProcess:
+		return BuildRAGIndex(ctx, r, db, c)
 	case "", DefaultSinglePrompt:
 		// built-in tagging below
 	default:

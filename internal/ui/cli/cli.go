@@ -40,6 +40,7 @@ func Run(args []string) error {
 	host := fs.String("host", def.Host, "ollama host")
 	model := fs.String("model", def.Model, "ollama model")
 	visionModel := fs.String("vision-model", def.VisionModel, "ollama vision model for images (empty uses -model)")
+	embeddingModel := fs.String("embedding-model", def.EmbeddingModel, "ollama embedding model for the RAG index")
 	transcribeModel := fs.String("transcribe-model", def.TranscribeModel, "legacy ollama audio transcription model")
 	audioEngine := fs.String("audio", def.AudioEngine, "audio backend: whisper, google or ollama (legacy)")
 	whisperModel := fs.String("whisper-model", def.WhisperModel, "whisper.cpp model; download it first in the TUI/GUI settings")
@@ -50,7 +51,7 @@ func Run(args []string) error {
 	binaryStorage := fs.String("binary-storage", def.BinaryStorage, "binary storage: links (default, smaller db) or db (base64)")
 	maxChars := fs.Int("maxchars", def.MaxChars, "max characters per note sent to ollama")
 	workers := fs.Int("workers", def.Workers, "concurrent ollama requests (1-100)")
-	phaseName := fs.String("phase", "all", "phase to run: import, extract, pairs, single, export, all")
+	phaseName := fs.String("phase", "all", "phase to run: import, extract, pairs, single, rag, export, all")
 	source := fs.String("source", "", "import source: filesystem, zip or json (default filesystem)")
 	format := fs.String("format", "", "comma-separated extensions to import, e.g. md,txt,csv,png (empty = default set)")
 	extractName := fs.String("extract-name", "", "extract phase: only re-extract notes whose path/name contains this text")
@@ -62,6 +63,10 @@ func Run(args []string) error {
 	removeLinksPath := fs.String("remove-links", "", "remove note matching this path and scrub its obsidian links")
 	comparePath := fs.String("compare", "", "evaluate novelty of a file without adding it to the db")
 	statsOnly := fs.Bool("stats", false, "print per-format import/extraction counts and exit")
+	ragIndex := fs.Bool("rag-index", false, "build/refresh the semantic (RAG) vector index and exit")
+	ragSearch := fs.String("rag-search", "", "semantic search query over the RAG index and exit")
+	ragAsk := fs.Bool("rag-ask", false, "with -rag-search: also answer the question with the chat model")
+	ragTopK := fs.Int("rag-topk", 5, "number of RAG chunks to retrieve")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -109,6 +114,9 @@ func Run(args []string) error {
 	if !seen["vision-model"] && strings.TrimSpace(saved.VisionModel) != "" {
 		*visionModel = saved.VisionModel
 	}
+	if !seen["embedding-model"] && strings.TrimSpace(saved.EmbeddingModel) != "" {
+		*embeddingModel = saved.EmbeddingModel
+	}
 	if !seen["transcribe-model"] && strings.TrimSpace(saved.TranscribeModel) != "" {
 		*transcribeModel = saved.TranscribeModel
 	}
@@ -144,6 +152,7 @@ func Run(args []string) error {
 		Host:            *host,
 		Model:           *model,
 		VisionModel:     *visionModel,
+		EmbeddingModel:  core.NormalizeEmbeddingModel(*embeddingModel),
 		TranscribeModel: *transcribeModel,
 		AudioEngine:     core.NormalizeAudioEngine(*audioEngine),
 		WhisperModel:    core.NormalizeWhisperModel(*whisperModel),
@@ -201,11 +210,18 @@ func Run(args []string) error {
 		}
 		fmt.Println(result)
 		return nil
+
+	case *ragSearch != "":
+		return runRAGSearch(ctx, db, cfg, *ragSearch, *ragTopK, *ragAsk)
 	}
 
 	progress := consoleshared.New(db)
 	progress.Start()
 	defer progress.Stop()
+
+	if *ragIndex {
+		return core.BuildRAGIndex(ctx, progress, db, cfg)
+	}
 
 	// "all" (the default) runs import → analysis → export in sequence.
 	if isAllPhase(*phaseName) {
@@ -246,6 +262,42 @@ func Run(args []string) error {
 	return core.Run(ctx, progress, db, cfg, phase, *src, *out)
 }
 
+// runRAGSearch performs a semantic search over the RAG index, optionally
+// asking the chat model to answer the question from the retrieved context.
+func runRAGSearch(ctx context.Context, db *sql.DB, cfg core.Config, query string, topK int, ask bool) error {
+	if ask {
+		answer, results, err := core.RAGAnswer(ctx, db, cfg, query, topK)
+		if err != nil {
+			return err
+		}
+		fmt.Println(answer)
+		fmt.Println()
+		printRAGResults(results)
+		return nil
+	}
+	results, err := core.RAGSearch(ctx, db, cfg, query, topK)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		fmt.Println("no matches (is the RAG index built? run: noesis-cli -rag-index)")
+		return nil
+	}
+	printRAGResults(results)
+	return nil
+}
+
+// printRAGResults prints ranked chunks with their similarity score.
+func printRAGResults(results []core.RAGResult) {
+	for i, r := range results {
+		snippet := strings.Join(strings.Fields(r.Chunk), " ")
+		if len([]rune(snippet)) > 240 {
+			snippet = string([]rune(snippet)[:240]) + "…"
+		}
+		fmt.Printf("[%d] %.3f  %s\n    %s\n", i+1, r.Score, r.Path, snippet)
+	}
+}
+
 // parseFormats turns a comma-separated extension list into a FormatSet.
 func parseFormats(s string) core.FormatSet {
 	if strings.TrimSpace(s) == "" {
@@ -278,8 +330,10 @@ func parsePhase(s string) (core.Phase, error) {
 		return core.PhaseWrite, nil
 	case "single", "1x1", "tags-single", "one":
 		return core.PhaseTagSingle, nil
+	case "rag", "index", "embed", "embeddings":
+		return core.PhaseRAG, nil
 	default:
-		return 0, fmt.Errorf("unknown phase %q (use import, extract, pairs, single, export or all)", s)
+		return 0, fmt.Errorf("unknown phase %q (use import, extract, pairs, single, rag, export or all)", s)
 	}
 }
 

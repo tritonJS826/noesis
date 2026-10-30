@@ -64,6 +64,8 @@ func (m *model) View() string {
 		return m.viewBrowseDetail()
 	case scrExtract:
 		return m.viewExtract()
+	case scrRAGSearch:
+		return m.viewRAGSearch()
 	default:
 		return m.viewMenu()
 	}
@@ -128,9 +130,15 @@ func (m *model) viewMenu() string {
 	}
 
 	// ── status ──
+	ragNotes, ragChunks, _ := core.RAGStats(m.db)
+	ragLine := "RAG: not indexed"
+	if ragChunks > 0 {
+		ragLine = fmt.Sprintf("RAG: %d note(s) │ %d chunk(s)", ragNotes, ragChunks)
+	}
 	statsLines := []string{
 		fmt.Sprintf("Notes: %d │ With tags: %d │ Tags: %d │ Links: %d", s.Notes, s.Tagged, s.UniqTags, s.Links),
 		fmt.Sprintf("Pairs: %d/%d │ Written: %d", s.PairsDone, pairsTotal, s.Written),
+		ragLine,
 	}
 	formatLines := formatStatsLines(core.LoadFormatStats(m.db), cw)
 
@@ -424,6 +432,7 @@ func (m *model) viewData() string {
 		"Browse database",
 		"Compare file (filesystem search)",
 		"Re-extract documents, images & transcribe audio",
+		"Search RAG (semantic)",
 	}
 
 	var lines []string
@@ -510,6 +519,82 @@ func (m *model) extractFormatSummary() string {
 		return "all formats"
 	}
 	return fmt.Sprintf("%d of %d formats", len(m.extractFormats), len(core.ExtractableFormats()))
+}
+
+// viewRAGSearch is the semantic search screen: type a query, then search or ask.
+func (m *model) viewRAGSearch() string {
+	w := m.width
+	cw := w - 4
+
+	idxNotes, idxChunks, _ := core.RAGStats(m.db)
+	model := core.NormalizeEmbeddingModel(m.embeddingModel)
+
+	var lines []string
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Semantic search (RAG)"))
+	status := "Embedding model: " + model
+	if idxChunks > 0 {
+		status += fmt.Sprintf("  ·  indexed: %d note(s) / %d chunk(s)", idxNotes, idxChunks)
+	} else {
+		status += "  ·  index empty — run the \"RAG index\" process"
+	}
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(status))
+	lines = append(lines, "")
+
+	query := m.ragQuery
+	if query == "" {
+		if m.ragTyping {
+			query = "█"
+		} else {
+			query = tuiDim.Render("press / and type a question…")
+		}
+	} else if m.ragTyping {
+		query += "█"
+	}
+	lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Query: "+query))
+	lines = append(lines, "")
+
+	switch {
+	case m.ragBusy:
+		lines = append(lines, tuiDim.Width(cw).Render("searching…"))
+	case m.ragErr != "":
+		lines = append(lines, tuiRed.MaxWidth(cw).Render("Error: "+m.ragErr))
+	case m.ragAnswer != "":
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Answer:"))
+		for _, l := range wrapText(m.ragAnswer, cw) {
+			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(l))
+		}
+		lines = append(lines, "")
+	}
+
+	if len(m.ragResults) > 0 {
+		lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf("%d result(s)", len(m.ragResults))))
+		start, end := listWindow(len(m.ragResults), m.cursor, m.listRows(8))
+		for i := start; i < end; i++ {
+			r := m.ragResults[i]
+			cursor := "  "
+			if m.cursor == i {
+				cursor = tuiSel.Render("▸ ")
+			}
+			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(
+				fmt.Sprintf("%s[%d] %.3f  %s", cursor, i+1, r.Score, r.Path)))
+			snippet := strings.Join(strings.Fields(r.Chunk), " ")
+			if rs := []rune(snippet); len(rs) > cw-6 {
+				snippet = string(rs[:cw-6]) + "…"
+			}
+			lines = append(lines, tuiDim.MaxWidth(cw).Render("     "+snippet))
+		}
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, "")
+	hint := "↑↓/jk move  ·  Enter open note  ·  a ask  ·  / new search  ·  h/ESC back"
+	if m.ragTyping {
+		hint = "type query  ·  Enter search  ·  Ctrl+A search + ask  ·  ESC clear"
+	}
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
 }
 
 func (m *model) browseHeader() string {
@@ -758,7 +843,7 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "EMBEDDING MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
 	googleKey := "(not set)"
 	if strings.TrimSpace(m.googleAPIKey) != "" {
 		googleKey = "(set)"
@@ -767,7 +852,7 @@ func (m *model) viewSettings() string {
 	if strings.TrimSpace(vision) == "" {
 		vision = "(= MODEL)"
 	}
-	vals := []string{m.src, m.out, m.dbPath, m.modelName, vision,
+	vals := []string{m.src, m.out, m.dbPath, m.modelName, vision, core.NormalizeEmbeddingModel(m.embeddingModel),
 		core.AudioEngineLabel(m.audioEngine), m.whisperSummary(),
 		core.WhisperBackendLabel(m.whisperBackend), fmt.Sprintf("%d", m.whisperDevice), googleKey,
 		core.SpeechLanguageLabel(m.speechLanguage), m.host,
@@ -793,11 +878,25 @@ func (m *model) viewSettings() string {
 		}
 		lines = append(lines, line)
 	}
+	if sug := m.embeddingSuggestion(); sug != "" {
+		lines = append(lines, "")
+		lines = append(lines, tuiYel.Width(cw).Render("EMBEDDING MODEL is "+sug))
+	}
 	lines = append(lines, "")
 	lines = append(lines, tuiDim.Width(cw).Render("↑↓/jk select  ·  Enter/l edit  ·  ? audio setup help  ·  h/ESC back"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
+}
+
+// embeddingSuggestion returns a hint when the selected embedding model is not
+// installed on the ollama host, or "" when it is (or when the model list is
+// unknown).
+func (m *model) embeddingSuggestion() string {
+	if !m.ollamaReady || !m.ollamaOK {
+		return ""
+	}
+	return core.EmbeddingModelSuggestion(m.ollamaModels, m.embeddingModel)
 }
 
 func (m *model) viewResetConfirm() string {
@@ -836,8 +935,15 @@ func (m *model) viewModelPicker() string {
 	w := m.width
 	cw := w - 4
 
+	title := "Choose model (ollama)"
+	if m.modelPickerTarget == "embedding" {
+		title = "Choose embedding model (ollama)"
+	}
+
 	var lines []string
-	start, end := listWindow(len(m.ollamaModels), m.cursor, m.listRows(2))
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render(title))
+	lines = append(lines, "")
+	start, end := listWindow(len(m.ollamaModels), m.cursor, m.listRows(3))
 	if len(m.ollamaModels) == 0 {
 		lines = append(lines, tuiRed.Width(cw).Render("no models available"))
 	} else {

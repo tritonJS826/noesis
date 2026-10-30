@@ -44,6 +44,7 @@ const (
 	scrBrowse
 	scrBrowseDetail
 	scrExtract
+	scrRAGSearch
 )
 
 type ollamaMsg struct {
@@ -63,6 +64,11 @@ type removeMsg struct {
 	removed, scrubbed int
 	err               error
 }
+type ragMsg struct {
+	results []core.RAGResult
+	answer  string
+	err     error
+}
 
 type model struct {
 	db      *sql.DB
@@ -72,6 +78,7 @@ type model struct {
 
 	src, out, dbPath, modelName, host, transcribeModel     string
 	visionModel                                            string
+	embeddingModel                                         string
 	audioEngine, whisperModel, googleAPIKey, binaryStorage string
 	speechLanguage                                         string
 	whisperBackend                                         string
@@ -93,6 +100,10 @@ type model struct {
 	pickerValues []string
 	pickerLabels []string
 	pickerCursor int
+
+	// which settings row the ollama model picker writes to ("model" or
+	// "embedding")
+	modelPickerTarget string
 
 	// whisper.cpp model manager
 	whisperModels []core.WhisperModelInfo
@@ -142,6 +153,16 @@ type model struct {
 	extractFormats core.FormatSet
 	extractCursor  int
 	extractTyping  bool
+
+	// semantic (RAG) search
+	ragQuery   string
+	ragResults []core.RAGResult
+	ragAnswer  string
+	ragErr     string
+	ragBusy    bool
+	ragTyping  bool
+	ragAsk     bool
+	ragTopK    int
 
 	pickConfirm   bool
 	pickConfirmID int64
@@ -218,6 +239,7 @@ func newModel(db *sql.DB) *model {
 		host:            st.Host,
 		transcribeModel: st.TranscribeModel,
 		visionModel:     st.VisionModel,
+		embeddingModel:  st.EmbeddingModel,
 		audioEngine:     st.AudioEngine,
 		whisperModel:    st.WhisperModel,
 		whisperBackend:  st.WhisperBackend,
@@ -233,6 +255,7 @@ func newModel(db *sql.DB) *model {
 		importFormats:   formats,
 		syncSource:      core.SourceFilesystem,
 		browseCols:      [5]bool{true, true, false, true, true},
+		ragTopK:         5,
 	}
 }
 
@@ -248,6 +271,7 @@ func (m *model) persistSettings() {
 		Host:            m.host,
 		Model:           m.modelName,
 		VisionModel:     m.visionModel,
+		EmbeddingModel:  m.embeddingModel,
 		TranscribeModel: m.transcribeModel,
 		AudioEngine:     m.audioEngine,
 		WhisperModel:    m.whisperModel,
@@ -296,7 +320,7 @@ func fetchOllamaCmd(host string) tea.Cmd {
 
 func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) tea.Cmd {
 	src, out, modelName, host, transcribeModel := m.src, m.out, m.modelName, m.host, m.transcribeModel
-	visionModel := m.visionModel
+	visionModel, embeddingModel := m.visionModel, m.embeddingModel
 	extractFilter, extractFormats := m.extractFilter, m.extractFormats
 	audioEngine, whisperModel, googleAPIKey, speechLanguage := m.audioEngine, m.whisperModel, m.googleAPIKey, m.speechLanguage
 	whisperBackend, whisperDevice := m.whisperBackend, m.whisperDevice
@@ -309,6 +333,7 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 			Host:            host,
 			Model:           modelName,
 			VisionModel:     visionModel,
+			EmbeddingModel:  embeddingModel,
 			TranscribeModel: transcribeModel,
 			AudioEngine:     audioEngine,
 			WhisperModel:    whisperModel,
@@ -375,6 +400,29 @@ func compareFileCmd(db *sql.DB, path, host, model string, audio core.AudioOption
 	return func() tea.Msg {
 		result, err := core.CompareFileWithAudio(context.Background(), db, path, host, model, audio, maxChars)
 		return evalMsg{result: result, err: err}
+	}
+}
+
+// ragConfig builds the minimal config needed for embedding/search.
+func (m *model) ragConfig() core.Config {
+	return core.Config{
+		Host:           m.host,
+		Model:          m.modelName,
+		EmbeddingModel: m.embeddingModel,
+		MaxChars:       m.maxChars,
+		Workers:        m.workers,
+	}
+}
+
+func ragSearchCmd(db *sql.DB, c core.Config, query string, topK int, ask bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if ask {
+			answer, results, err := core.RAGAnswer(ctx, db, c, query, topK)
+			return ragMsg{results: results, answer: answer, err: err}
+		}
+		results, err := core.RAGSearch(ctx, db, c, query, topK)
+		return ragMsg{results: results, err: err}
 	}
 }
 
@@ -535,6 +583,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.evalErr = ""
 		}
 		m.screen = scrEval
+		return m, nil
+
+	case ragMsg:
+		m.ragBusy = false
+		if msg.err != nil {
+			m.ragErr = msg.err.Error()
+			m.ragResults = nil
+			m.ragAnswer = ""
+		} else {
+			m.ragErr = ""
+			m.ragResults = msg.results
+			m.ragAnswer = msg.answer
+		}
 		return m, nil
 
 	case removeMsg:

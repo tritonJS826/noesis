@@ -70,6 +70,7 @@ type AppSettings struct {
 	Host            string
 	Model           string
 	VisionModel     string
+	EmbeddingModel  string
 	TranscribeModel string
 	AudioEngine     string
 	WhisperModel    string
@@ -95,6 +96,7 @@ func DefaultAppSettings() AppSettings {
 		Host:            c.Host,
 		Model:           c.Model,
 		VisionModel:     c.VisionModel,
+		EmbeddingModel:  c.EmbeddingModel,
 		TranscribeModel: c.TranscribeModel,
 		AudioEngine:     c.AudioEngine,
 		WhisperModel:    c.WhisperModel,
@@ -136,6 +138,9 @@ func LoadAppSettings(db *sql.DB) AppSettings {
 	}
 	if v, ok := get("vision_model"); ok {
 		s.VisionModel = v
+	}
+	if v, ok := get("embedding_model"); ok {
+		s.EmbeddingModel = NormalizeEmbeddingModel(v)
 	}
 	if v, ok := get("transcribe_model"); ok {
 		s.TranscribeModel = v
@@ -224,6 +229,13 @@ func (s AppSettings) Save(db *sql.DB) error {
 	}
 	for _, it := range items {
 		if err := set(it[0], it[1], it[2]); err != nil {
+			return err
+		}
+	}
+	// The embedding model is written only when non-empty, so UIs that do not
+	// expose the setting (e.g. the GUI) leave an existing value untouched.
+	if strings.TrimSpace(s.EmbeddingModel) != "" {
+		if err := set("embedding_model", s.EmbeddingModel, def.EmbeddingModel); err != nil {
 			return err
 		}
 	}

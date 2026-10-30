@@ -45,6 +45,7 @@ const (
 	scrBrowse
 	scrBrowseDetail
 	scrExtract
+	scrRAGSearch
 )
 
 type noteAction int
@@ -85,6 +86,7 @@ type state struct {
 	// persistent settings widgets (shared by the settings and import screens)
 	src, out, dbEntry, model, host, transcribe *widget.Entry
 	vision                                     *widget.Entry
+	embedding                                  *widget.Entry
 	maxChars, workers                          *widget.Entry
 	audioEngine                                *widget.Select
 	whisperModel                               *widget.Select
@@ -141,6 +143,15 @@ type state struct {
 	browseDetail []core.NoteField
 	browseNoteID int64
 	browsePath   string
+	browseBack   screen // where "Back" from the record view returns to
+
+	// semantic (RAG) search
+	ragQuery   string
+	ragResults []core.RAGResult
+	ragAnswer  string
+	ragErr     string
+	ragBusy    bool
+	ragTopK    int
 
 	// filesystem search for compare
 	fsFilter string
@@ -166,6 +177,7 @@ type state struct {
 
 	// ollama connection status shown on the start screen and in settings
 	ollamaStatus string
+	ollamaModels []string
 }
 
 // Run opens the database and starts the desktop application. It blocks until
@@ -199,6 +211,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.host = widget.NewEntry()
 	s.model = widget.NewEntry()
 	s.vision = widget.NewEntry()
+	s.embedding = widget.NewEntry()
 	s.transcribe = widget.NewEntry()
 	s.maxChars = widget.NewEntry()
 	s.workers = widget.NewEntry()
@@ -215,6 +228,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.host.SetText(st.Host)
 	s.model.SetText(st.Model)
 	s.vision.SetText(st.VisionModel)
+	s.embedding.SetText(core.NormalizeEmbeddingModel(st.EmbeddingModel))
 	s.transcribe.SetText(st.TranscribeModel)
 	s.maxChars.SetText(strconv.Itoa(st.MaxChars))
 	s.workers.SetText(strconv.Itoa(st.Workers))
@@ -228,10 +242,12 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.whisperModel.OnChanged = func(string) { s.persistSettings() }
 	s.whisperBackend.OnChanged = func(string) { s.persistSettings() }
 	s.speechLanguage.OnChanged = func(string) { s.persistSettings() }
-	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.transcribe, s.maxChars, s.workers, s.googleKey, s.whisperDevice} {
+	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.embedding, s.transcribe, s.maxChars, s.workers, s.googleKey, s.whisperDevice} {
 		e.OnSubmitted = func(string) { s.persistSettings() }
 	}
 	s.browseCols = defaultBrowseCols()
+	s.browseBack = scrBrowse
+	s.ragTopK = 5
 	s.ollamaStatus = "checking ollama…"
 
 	s.importSource = core.SourceFilesystem
@@ -282,6 +298,7 @@ func newState(db *sql.DB, dbPath string) *state {
 			case len(models) == 0:
 				s.ollamaStatus = "ollama ✓ — no models found"
 			default:
+				s.ollamaModels = models
 				s.ollamaStatus = "ollama ✓ " + strings.Join(models, ", ")
 			}
 			s.render()
@@ -358,6 +375,8 @@ func (s *state) screenTitle() string {
 		return "Note record: " + s.browsePath
 	case scrExtract:
 		return "Re-extract documents, images & transcribe audio"
+	case scrRAGSearch:
+		return "Semantic search (RAG)"
 	case scrRunning:
 		return "Processing…"
 	default:
@@ -393,8 +412,10 @@ func (s *state) goBack() {
 	case scrBrowse:
 		s.screen = scrData
 	case scrBrowseDetail:
-		s.screen = scrBrowse
+		s.screen = s.browseBack
 	case scrExtract:
+		s.screen = scrData
+	case scrRAGSearch:
 		s.screen = scrData
 	case scrRunning:
 		return
@@ -440,6 +461,8 @@ func (s *state) body() fyne.CanvasObject {
 		return s.browseDetailScreen()
 	case scrExtract:
 		return s.extractScreen()
+	case scrRAGSearch:
+		return s.ragSearchScreen()
 	case scrRunning:
 		return s.runningScreen()
 	default:
@@ -714,6 +737,72 @@ func (s *state) searchFiles(filter string, done func([]string)) {
 	}()
 }
 
+// openRAGSearch opens the semantic search screen with a clean slate.
+func (s *state) openRAGSearch() {
+	s.ragQuery = ""
+	s.ragResults = nil
+	s.ragAnswer = ""
+	s.ragErr = ""
+	s.ragBusy = false
+	if s.ragTopK < 1 {
+		s.ragTopK = 5
+	}
+	s.screen = scrRAGSearch
+	s.render()
+}
+
+// runRAGSearch embeds the query and ranks chunks (and, when ask is true, asks
+// the chat model to answer from the retrieved context). Work happens off the UI
+// goroutine; results are applied with fyne.Do.
+func (s *state) runRAGSearch(ask bool) {
+	if s.ragBusy {
+		return
+	}
+	query := strings.TrimSpace(s.ragQuery)
+	if query == "" {
+		return
+	}
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	cfg, _, _, _, err := s.readConfigRaw()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+
+	s.ragBusy = true
+	s.ragErr = ""
+	s.ragAnswer = ""
+	s.render()
+
+	topK := s.ragTopK
+	go func() {
+		ctx := context.Background()
+		var results []core.RAGResult
+		var answer string
+		var err error
+		if ask {
+			answer, results, err = core.RAGAnswer(ctx, db, cfg, query, topK)
+		} else {
+			results, err = core.RAGSearch(ctx, db, cfg, query, topK)
+		}
+		fyne.Do(func() {
+			s.ragBusy = false
+			if err != nil {
+				s.ragErr = err.Error()
+				s.ragResults = nil
+				s.ragAnswer = ""
+			} else {
+				s.ragResults = results
+				s.ragAnswer = answer
+			}
+			s.render()
+		})
+	}()
+}
+
 func (s *state) openProcessList(ptype string) {
 	s.processType = ptype
 	s.processName = ""
@@ -935,6 +1024,13 @@ func (s *state) renameProcess() {
 }
 
 func (s *state) pickModel() {
+	s.pickOllamaModel("Choose model", s.model)
+}
+
+// pickOllamaModel loads the models installed on the ollama host and lets the
+// user pick one into the given entry. It is shared by the MODEL and EMBEDDING
+// MODEL settings.
+func (s *state) pickOllamaModel(title string, target *widget.Entry) {
 	host := strings.TrimSpace(s.host.Text)
 	go func() {
 		models, err := core.FetchModels(host)
@@ -956,10 +1052,13 @@ func (s *state) pickModel() {
 				func(id widget.ListItemID, o fyne.CanvasObject) { o.(*widget.Label).SetText(models[id]) },
 			)
 			body := container.NewGridWrap(fyne.NewSize(440, 320), list)
-			d := dialog.NewCustom("Choose model", "Cancel", body, s.win)
+			d := dialog.NewCustom(title, "Cancel", body, s.win)
+			s.ollamaModels = models
 			list.OnSelected = func(id widget.ListItemID) {
-				s.model.SetText(models[id])
+				target.SetText(models[id])
+				s.persistSettings()
 				d.Hide()
+				s.render()
 			}
 			d.Show()
 		})
@@ -1245,6 +1344,7 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 		Host:            strings.TrimSpace(s.host.Text),
 		Model:           strings.TrimSpace(s.model.Text),
 		VisionModel:     strings.TrimSpace(s.vision.Text),
+		EmbeddingModel:  core.NormalizeEmbeddingModel(s.embedding.Text),
 		TranscribeModel: strings.TrimSpace(s.transcribe.Text),
 		AudioEngine:     core.NormalizeAudioEngine(s.audioEngine.Selected),
 		WhisperModel:    core.NormalizeWhisperModel(s.whisperModel.Selected),
@@ -1270,6 +1370,7 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		Host:            cfg.Host,
 		Model:           cfg.Model,
 		VisionModel:     cfg.VisionModel,
+		EmbeddingModel:  cfg.EmbeddingModel,
 		TranscribeModel: cfg.TranscribeModel,
 		AudioEngine:     cfg.AudioEngine,
 		WhisperModel:    cfg.WhisperModel,

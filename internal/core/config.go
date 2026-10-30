@@ -13,6 +13,20 @@ var DefaultTranscribeModel = "whisper"
 // value means "use the main model" (see Config.visionModel).
 var DefaultVisionModel = ""
 
+// DefaultEmbeddingModel is the ollama model used to build the semantic (RAG)
+// vector index. Pull it with "ollama pull mxbai-embed-large".
+var DefaultEmbeddingModel = "mxbai-embed-large"
+
+// NormalizeEmbeddingModel returns a usable embedding model name, falling back
+// to the default when the value is empty.
+func NormalizeEmbeddingModel(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return DefaultEmbeddingModel
+	}
+	return s
+}
+
 // Audio backend identifiers.
 const (
 	AudioEngineWhisper = "whisper"
@@ -47,6 +61,7 @@ type Config struct {
 	Host            string
 	Model           string
 	VisionModel     string // model used to describe images (empty = main model)
+	EmbeddingModel  string // model used to embed notes for RAG (empty = default)
 	TranscribeModel string // legacy Ollama audio transcription model
 	AudioEngine     string // whisper / google / ollama
 	WhisperModel    string
@@ -82,6 +97,7 @@ func DefaultConfig() Config {
 	return Config{
 		Host:            "http://localhost:11434",
 		Model:           DefaultModel,
+		EmbeddingModel:  DefaultEmbeddingModel,
 		TranscribeModel: DefaultTranscribeModel,
 		AudioEngine:     AudioEngineWhisper,
 		WhisperModel:    DefaultWhisperModel,
