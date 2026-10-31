@@ -429,8 +429,8 @@ func BuildRAGIndex(ctx context.Context, r Reporter, db *sql.DB, c Config) error 
 	return nil
 }
 
-// RAGSearch embeds query and returns the topK most similar chunks. topK <= 0
-// uses ragDefaultTopK.
+// RAGSearch embeds query and returns the topK most similar chunks, keeping at
+// most one chunk per note. topK <= 0 uses ragDefaultTopK.
 func RAGSearch(ctx context.Context, db *sql.DB, c Config, query string, topK int) ([]RAGResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -466,10 +466,30 @@ func RAGSearch(ctx context.Context, db *sql.DB, c Config, query string, topK int
 		return nil, err
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	results = dedupeRAGResults(results)
 	if len(results) > topK {
 		results = results[:topK]
 	}
 	return results, nil
+}
+
+// dedupeRAGResults keeps at most one chunk per note so the same file never
+// appears twice in a result list. It expects results sorted best-first, so the
+// highest-scoring chunk of each note is the one kept.
+func dedupeRAGResults(results []RAGResult) []RAGResult {
+	if len(results) < 2 {
+		return results
+	}
+	seen := make(map[int64]bool, len(results))
+	out := results[:0]
+	for _, r := range results {
+		if seen[r.NoteID] {
+			continue
+		}
+		seen[r.NoteID] = true
+		out = append(out, r)
+	}
+	return out
 }
 
 // RAGAnswer retrieves the most relevant chunks and asks the chat model to

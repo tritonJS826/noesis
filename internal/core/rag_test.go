@@ -327,6 +327,66 @@ func TestEmbedQueryAndDocumentApplyPrompts(t *testing.T) {
 	}
 }
 
+func TestDedupeRAGResults(t *testing.T) {
+	results := []RAGResult{
+		{NoteID: 1, Path: "a.md", Score: 0.9},
+		{NoteID: 2, Path: "b.md", Score: 0.8},
+		{NoteID: 1, Path: "a.md", Score: 0.7},
+		{NoteID: 3, Path: "c.md", Score: 0.6},
+		{NoteID: 2, Path: "b.md", Score: 0.5},
+	}
+	got := dedupeRAGResults(results)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 unique notes, got %d: %v", len(got), got)
+	}
+	// The best-scoring chunk of each note must survive, in order.
+	want := []int64{1, 2, 3}
+	for i, id := range want {
+		if got[i].NoteID != id {
+			t.Fatalf("result %d: got note %d, want %d", i, got[i].NoteID, id)
+		}
+	}
+	if got[0].Score != 0.9 || got[1].Score != 0.8 || got[2].Score != 0.6 {
+		t.Fatalf("kept the wrong chunks: %v", got)
+	}
+	if got := dedupeRAGResults(nil); got != nil {
+		t.Fatalf("nil input should stay nil, got %v", got)
+	}
+}
+
+func TestRAGSearchDeduplicatesNotes(t *testing.T) {
+	db := openTestDB(t)
+	srv := newFakeOllama(t)
+
+	// This note is long enough to split into several chunks, all matching "cat".
+	longCat := strings.Repeat("I have a cat. The cat is fluffy. ", 120)
+	insertMarkdownNote(t, db, "cat.md", "cat.md", longCat)
+	insertMarkdownNote(t, db, "dog.md", "dog.md", "Dogs are loyal. A dog barks at strangers.")
+
+	cfg := DefaultConfig()
+	cfg.Host = srv.URL
+	cfg.EmbeddingModel = "mxbai-embed-large"
+	cfg.Workers = 2
+	if err := BuildRAGIndex(context.Background(), NoopReporter{}, db, cfg); err != nil {
+		t.Fatalf("build index: %v", err)
+	}
+
+	results, err := RAGSearch(context.Background(), db, cfg, "tell me about my cat", 10)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	seen := map[int64]bool{}
+	for _, r := range results {
+		if seen[r.NoteID] {
+			t.Fatalf("note %d (%s) appears more than once", r.NoteID, r.Path)
+		}
+		seen[r.NoteID] = true
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected one result per note, got %d: %v", len(results), results)
+	}
+}
+
 func TestNormalizeRAGTopK(t *testing.T) {
 	if got := NormalizeRAGTopK(0); got != ragMinTopK {
 		t.Fatalf("NormalizeRAGTopK(0) = %d, want %d", got, ragMinTopK)

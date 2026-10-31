@@ -87,6 +87,10 @@ jobs:
   # Build a Vulkan-enabled whisper.cpp runtime and publish it as a release
   # asset. The app downloads these archives into its cache as "runtime-vulkan"
   # when the user selects the Vulkan backend (see internal/core/whisper.go).
+  #
+  # GGML_NATIVE=OFF is mandatory: GitHub runners expose AVX-512, so a
+  # -march=native build emits AVX-512 instructions and dies with SIGILL on
+  # CPUs that lack it (e.g. Intel Meteor Lake / Core Ultra), even in CPU mode.
   whisper-vulkan:
     name: Whisper Vulkan runtime (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
@@ -126,6 +130,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_VULKAN=ON \
+            -DGGML_NATIVE=OFF \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
             -DWHISPER_BUILD_EXAMPLES=ON
@@ -138,6 +143,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_VULKAN=ON \
+            -DGGML_NATIVE=OFF \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
             -DWHISPER_BUILD_EXAMPLES=ON
