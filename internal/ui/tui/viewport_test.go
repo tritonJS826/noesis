@@ -57,6 +57,48 @@ func TestFormatsViewFitsTerminalHeight(t *testing.T) {
 	}
 }
 
+func TestRAGSearchViewFitsTerminalHeightAndScrolls(t *testing.T) {
+	ti := textinput.New()
+	results := make([]core.RAGResult, 20)
+	for i := range results {
+		results[i] = core.RAGResult{Score: 0.9, Path: "notes/file" + strconv.Itoa(i) + ".md", Chunk: "chunk text " + strconv.Itoa(i)}
+	}
+
+	for _, size := range []struct{ width, height int }{{80, 24}, {50, 12}} {
+		m := &model{width: size.width, height: size.height, textInput: ti}
+		m.ragQuery = "question"
+		m.ragResults = results
+		m.ragTopK = 20
+
+		// Cursor on the last result: the header must stay pinned at the top
+		// while the list scrolls to keep the selection visible.
+		m.cursor = len(results) - 1
+		view := m.viewRAGSearch()
+		if got := strings.Count(view, "\n") + 1; got > m.height {
+			t.Fatalf("%dx%d: view is %d lines:\n%s", size.width, size.height, got, view)
+		}
+		if !strings.Contains(view, "Query: question") {
+			t.Fatalf("%dx%d: query header scrolled off the top:\n%s", size.width, size.height, view)
+		}
+		if !strings.Contains(view, "of 20") {
+			t.Fatalf("%dx%d: view does not show the scroll position:\n%s", size.width, size.height, view)
+		}
+		if !strings.Contains(view, "[20]") {
+			t.Fatalf("%dx%d: last result not visible:\n%s", size.width, size.height, view)
+		}
+
+		// Cursor on the first result: the list scrolls back to the top.
+		m.cursor = 0
+		view = m.viewRAGSearch()
+		if got := strings.Count(view, "\n") + 1; got > m.height {
+			t.Fatalf("%dx%d: view is %d lines:\n%s", size.width, size.height, got, view)
+		}
+		if !strings.Contains(view, "▸ [1]") {
+			t.Fatalf("%dx%d: first result not visible at the top:\n%s", size.width, size.height, view)
+		}
+	}
+}
+
 func TestBrowseDetailScrollsWithVimKeys(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{80, 24}, {60, 12}} {
 		m := &model{width: size.width, height: size.height}

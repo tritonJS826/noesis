@@ -56,6 +56,10 @@ type resetMsg struct {
 	err error
 	db  *sql.DB
 }
+type clearRAGMsg struct {
+	notes, chunks int
+	err           error
+}
 type evalMsg struct {
 	result string
 	err    error
@@ -131,6 +135,11 @@ type model struct {
 	resetting    bool
 	resetErr     string
 
+	confirmClearRAG bool
+	clearingRAG     bool
+	clearRAGErr     string
+	clearRAGStatus  string
+
 	fileNotes   []core.NoteInfo
 	evalResult  string
 	evalErr     string
@@ -177,6 +186,7 @@ type model struct {
 	ragTyping        bool
 	ragAsk           bool
 	ragTopK          int
+	ragAnswerOffset  int
 	ragConfirm       bool
 	ragConfirmModels []string
 
@@ -409,6 +419,13 @@ func resetDBCmd(db *sql.DB, path string) tea.Cmd {
 	}
 }
 
+func clearRAGCmd(db *sql.DB) tea.Cmd {
+	return func() tea.Msg {
+		notes, chunks, err := core.ClearRAGIndex(db)
+		return clearRAGMsg{notes: notes, chunks: chunks, err: err}
+	}
+}
+
 func evalNoteCmd(db *sql.DB, noteID int64, host, model string, maxChars int, linkedIDs []int64) tea.Cmd {
 	return func() tea.Msg {
 		result, err := core.EvalNote(context.Background(), db, noteID, host, model, maxChars, linkedIDs)
@@ -636,6 +653,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, fetchOllamaCmd(m.host)
 
+	case clearRAGMsg:
+		m.clearingRAG = false
+		if msg.err != nil {
+			m.clearRAGErr = msg.err.Error()
+			m.clearRAGStatus = ""
+		} else {
+			m.clearRAGErr = ""
+			m.clearRAGStatus = fmt.Sprintf("Cleared %d note(s) / %d chunk(s) from the RAG index.", msg.notes, msg.chunks)
+		}
+		return m, nil
+
 	case evalMsg:
 		m.evalLoading = false
 		if msg.err != nil {
@@ -650,6 +678,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ragMsg:
 		m.ragBusy = false
+		m.ragAnswerOffset = 0
 		if msg.err != nil {
 			m.ragErr = msg.err.Error()
 			m.ragResults = nil

@@ -499,6 +499,34 @@ func RAGAnswer(ctx context.Context, db *sql.DB, c Config, query string, topK int
 	return answer, results, nil
 }
 
+// ClearRAGIndex deletes every stored embedding, leaving the notes themselves
+// untouched. It is meant to be run after the embedding model changes so the
+// next "RAG index" run rebuilds the vectors with the new model instead of
+// mixing dimensions from two different models.
+func ClearRAGIndex(db *sql.DB) (notes, chunks int, err error) {
+	if db == nil {
+		return 0, 0, fmt.Errorf("nil database")
+	}
+	_ = db.QueryRow(`SELECT COUNT(*) FROM rag_notes`).Scan(&notes)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM rag_chunks`).Scan(&chunks)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.Exec(`DELETE FROM rag_chunks`); err != nil {
+		return 0, 0, err
+	}
+	if _, err = tx.Exec(`DELETE FROM rag_notes`); err != nil {
+		return 0, 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return notes, chunks, nil
+}
+
 // RAGStats reports how many notes and chunks are indexed and which models were
 // used. models is empty when nothing is indexed.
 func RAGStats(db *sql.DB) (notes, chunks int, models []string) {

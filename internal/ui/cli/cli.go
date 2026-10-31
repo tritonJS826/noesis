@@ -64,6 +64,7 @@ func Run(args []string) error {
 	comparePath := fs.String("compare", "", "evaluate novelty of a file without adding it to the db")
 	statsOnly := fs.Bool("stats", false, "print per-format import/extraction counts and exit")
 	ragIndex := fs.Bool("rag-index", false, "build/refresh the semantic (RAG) vector index and exit")
+	ragReset := fs.Bool("rag-reset", false, "delete all stored RAG embeddings and exit (use after changing -embedding-model)")
 	ragSearch := fs.String("rag-search", "", "semantic search query over the RAG index and exit")
 	ragAsk := fs.Bool("rag-ask", false, "with -rag-search: also answer the question with the chat model")
 	ragTopK := fs.Int("rag-topk", core.DefaultRAGTopK(), "number of RAG chunks to retrieve")
@@ -210,6 +211,14 @@ func Run(args []string) error {
 			return err
 		}
 		fmt.Println(result)
+		return nil
+
+	case *ragReset:
+		notes, chunks, err := core.ClearRAGIndex(db)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("cleared RAG index: %d note(s), %d chunk(s)\n", notes, chunks)
 		return nil
 
 	case *ragSearch != "":

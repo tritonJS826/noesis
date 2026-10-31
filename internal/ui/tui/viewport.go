@@ -116,3 +116,33 @@ func (m *model) scrollBrowseDetail(delta int) {
 	}
 	m.browseDetailOffset = offset
 }
+
+// scrollRAGAnswer moves the semantic-search answer window by delta lines. The
+// offset is clamped to what actually fits so PgUp/PgDn never scroll past the
+// text.
+func (m *model) scrollRAGAnswer(delta int) {
+	visible := m.ragAnswerVisible()
+	total := len(wrapText(m.ragAnswer, m.width-4))
+	max := total - visible
+	if max < 0 {
+		max = 0
+	}
+	offset := m.ragAnswerOffset + delta
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > max {
+		offset = max
+	}
+	m.ragAnswerOffset = offset
+}
+
+// ragAnswerStep is the PgUp/PgDn step: one screen minus a line of overlap, so
+// the reader keeps their place.
+func (m *model) ragAnswerStep() int {
+	step := m.ragAnswerVisible() - 1
+	if step < 1 {
+		step = 1
+	}
+	return step
+}

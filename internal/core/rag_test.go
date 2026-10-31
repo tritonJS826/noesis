@@ -89,7 +89,7 @@ func newFakeOllama(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tags", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"models": []map[string]string{{"name": "mxbai-embed-large"}},
+			"models": []map[string]string{{"name": "mxbai-embed-large"}, {"name": "bge-m3"}},
 		})
 	})
 	mux.HandleFunc("/api/embed", func(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +204,34 @@ func TestBuildRAGIndexSkipsUnchanged(t *testing.T) {
 	}
 	if rows != chunks1 {
 		t.Fatalf("rag_chunks rows = %d, want %d", rows, chunks1)
+	}
+}
+
+func TestClearRAGIndex(t *testing.T) {
+	db := openTestDB(t)
+	srv := newFakeOllama(t)
+	insertMarkdownNote(t, db, "a.md", "a.md", "cat cat cat")
+
+	cfg := DefaultConfig()
+	cfg.Host = srv.URL
+	cfg.Workers = 1
+	if err := BuildRAGIndex(context.Background(), NoopReporter{}, db, cfg); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	notes, chunks, _ := RAGStats(db)
+	if notes == 0 || chunks == 0 {
+		t.Fatalf("expected an index before clearing, got notes=%d chunks=%d", notes, chunks)
+	}
+
+	clearedNotes, clearedChunks, err := ClearRAGIndex(db)
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if clearedNotes != notes || clearedChunks != chunks {
+		t.Fatalf("cleared counts = %d/%d, want %d/%d", clearedNotes, clearedChunks, notes, chunks)
+	}
+	if n, c, _ := RAGStats(db); n != 0 || c != 0 {
+		t.Fatalf("index not empty after clear: notes=%d chunks=%d", n, c)
 	}
 }
 

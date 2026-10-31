@@ -997,6 +997,9 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 	reset := widget.NewButton("Reset database", s.confirmReset)
 	reset.Importance = widget.DangerImportance
 
+	clearRAG := widget.NewButton("Reset embeddings", s.confirmClearRAG)
+	clearRAG.Importance = widget.DangerImportance
+
 	scroll := container.NewVScroll(container.NewVBox(
 		form,
 		wrappedLabel("VISION MODEL describes images during import, sync and re-extraction. Leave it empty to reuse MODEL."),
@@ -1008,6 +1011,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewButton("Edit eval prompt…", func() {
 			s.openPrompt("eval", scrSettings)
 		}),
+		clearRAG,
 		reset,
 	))
 	scroll.SetMinSize(fyne.NewSize(720, 380))
@@ -1016,11 +1020,25 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 }
 
 // embeddingHint describes the EMBEDDING MODEL setting and, when the selected
-// model is not installed, suggests how to install it.
+// model is not installed, suggests how to install it. When the existing index
+// was built with a different model it points at "Reset embeddings".
 func (s *state) embeddingHint() string {
 	hint := "EMBEDDING MODEL builds the semantic (RAG) index used by \"Work with data → Search RAG\". Pick one with Fetch… or type a name."
 	if sug := core.EmbeddingModelSuggestion(s.ollamaModels, s.embedding.Text); sug != "" {
 		hint += " The selected model is " + sug + "."
+	}
+	if _, chunks, models := core.RAGStats(s.currentDB()); chunks > 0 {
+		model := core.NormalizeEmbeddingModel(s.embedding.Text)
+		stale := true
+		for _, m := range models {
+			if m == model {
+				stale = false
+				break
+			}
+		}
+		if stale {
+			hint += " The index was built with " + strings.Join(models, ", ") + " — use \"Reset embeddings\" and run the RAG index again."
+		}
 	}
 	return hint
 }

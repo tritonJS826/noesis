@@ -490,6 +490,12 @@ func (m *model) ragSearchKeys(msg tea.KeyMsg) tea.Cmd {
 		return m.changeRAGTopK(1)
 	case "-", "_", "[":
 		return m.changeRAGTopK(-1)
+	case "pgup":
+		m.scrollRAGAnswer(-m.ragAnswerStep())
+		return nil
+	case "pgdown":
+		m.scrollRAGAnswer(m.ragAnswerStep())
+		return nil
 	}
 
 	switch vimNav(key) {
@@ -1023,6 +1029,7 @@ const (
 	setWorkers
 	setBinary
 	setEvalPrompt
+	setClearRAG
 	setReset
 )
 
@@ -1036,6 +1043,19 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 			return resetDBCmd(m.db, m.dbPath)
 		default:
 			m.confirmReset = false
+		}
+		return nil
+	}
+	if m.confirmClearRAG {
+		switch msg.String() {
+		case "y", "Y":
+			m.confirmClearRAG = false
+			m.clearingRAG = true
+			m.clearRAGErr = ""
+			m.clearRAGStatus = ""
+			return clearRAGCmd(m.db)
+		default:
+			m.confirmClearRAG = false
 		}
 		return nil
 	}
@@ -1061,6 +1081,9 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 		if m.cursor == setReset {
 			// Reset database
 			m.confirmReset = true
+		} else if m.cursor == setClearRAG {
+			// Clear RAG embeddings
+			m.confirmClearRAG = true
 		} else {
 			m.startEdit()
 		}

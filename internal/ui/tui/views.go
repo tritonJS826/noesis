@@ -527,19 +527,117 @@ func (m *model) viewRAGSearch() string {
 	w := m.width
 	cw := w - 4
 
+	lines := m.ragHeaderLines(cw)
+
+	// Rows available inside the box border. The header and footer are pinned;
+	// the feedback block (answer / confirm / error) and the results list share
+	// whatever is left. The height is unknown on the very first frame, so the
+	// limits are skipped until the terminal reports its size.
+	known := m.height > 0
+	inner := m.height - 2
+	if known && inner < 1 {
+		inner = 1
+	}
+	const footer = 2 // blank line + hint
+	body := inner - len(lines) - footer
+	if !known {
+		body = -1 // unlimited
+	}
+
+	hasResults := len(m.ragResults) > 0
+	// Reserve the count line plus one two-line result, but only when there is
+	// enough room for the feedback block as well.
+	reservedResults := 0
+	if hasResults && (!known || body >= 5) {
+		reservedResults = 3
+	}
+	fbBudget := body - reservedResults
+	if fbBudget < 0 {
+		fbBudget = 0
+	}
+
+	var feedback []string
+	switch {
+	case m.ragConfirm:
+		prompt := fmt.Sprintf("Model(s) not installed: %s. Download now? (y/N)", strings.Join(m.ragConfirmModels, ", "))
+		for _, l := range wrapText(prompt, cw) {
+			feedback = append(feedback, tuiRed.MaxWidth(cw).Render(l))
+		}
+		feedback = append(feedback, "")
+	case m.ragBusy:
+		feedback = append(feedback, tuiDim.Width(cw).Render("searching…"))
+	case m.ragErr != "":
+		for _, l := range wrapText("Error: "+m.ragErr, cw) {
+			feedback = append(feedback, tuiRed.MaxWidth(cw).Render(l))
+		}
+	case m.ragAnswer != "":
+		feedback = m.ragAnswerLines(cw, fbBudget)
+	}
+	if known && len(feedback) > fbBudget {
+		feedback = feedback[:fbBudget]
+	}
+	lines = append(lines, feedback...)
+
+	if hasResults {
+		// Rows left for the list after the feedback that was actually shown.
+		resultsBudget := body - len(feedback)
+		if !known {
+			resultsBudget = 1 + len(m.ragResults)*2
+		}
+		if resultsBudget >= 3 { // count line + at least one two-line result
+			window := (resultsBudget - 1) / 2
+			if window < 1 {
+				window = 1
+			}
+			start, end := listWindow(len(m.ragResults), m.cursor, window)
+			lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf(
+				"%s  ·  %d result(s)  ·  up to %d",
+				scrollHint(start, end, len(m.ragResults)), len(m.ragResults), m.ragTopK)))
+			for i := start; i < end; i++ {
+				r := m.ragResults[i]
+				cursor := "  "
+				if m.cursor == i {
+					cursor = tuiSel.Render("▸ ")
+				}
+				lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(
+					fmt.Sprintf("%s[%d] %.3f  %s", cursor, i+1, r.Score, r.Path)))
+				snippet := strings.Join(strings.Fields(r.Chunk), " ")
+				if rs := []rune(snippet); len(rs) > cw-6 {
+					snippet = string(rs[:cw-6]) + "…"
+				}
+				lines = append(lines, tuiDim.MaxWidth(cw).Render("     "+snippet))
+			}
+		}
+	}
+
+	lines = append(lines, "")
+	hint := fmt.Sprintf("↑↓/jk move  ·  Enter open note  ·  a ask  ·  +/- results (%d)  ·  / new search  ·  h/ESC back", m.ragTopK)
+	switch {
+	case m.ragConfirm:
+		hint = "y — download & search  ·  any other key — cancel"
+	case m.ragTyping:
+		hint = "type query  ·  Enter search  ·  Ctrl+A search + ask  ·  ESC clear"
+	case m.ragAnswer != "":
+		hint = fmt.Sprintf("PgUp/PgDn answer  ·  ↑↓/jk move  ·  Enter open note  ·  a ask  ·  +/- results (%d)  ·  h/ESC back", m.ragTopK)
+	}
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+// ragHeaderLines builds the pinned top of the semantic-search screen: the
+// title, the indexing status, the query line and the spacers around them.
+func (m *model) ragHeaderLines(cw int) []string {
 	idxNotes, idxChunks, _ := core.RAGStats(m.db)
 	model := core.NormalizeEmbeddingModel(m.embeddingModel)
 
-	var lines []string
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Semantic search (RAG)"))
 	status := "Embedding model: " + model
 	if idxChunks > 0 {
 		status += fmt.Sprintf("  ·  indexed: %d note(s) / %d chunk(s)", idxNotes, idxChunks)
 	} else {
 		status += "  ·  index empty — run the \"RAG index\" process"
 	}
-	lines = append(lines, tuiDim.MaxWidth(cw).Render(status))
-	lines = append(lines, "")
 
 	query := m.ragQuery
 	if query == "" {
@@ -551,59 +649,92 @@ func (m *model) viewRAGSearch() string {
 	} else if m.ragTyping {
 		query += "█"
 	}
-	lines = append(lines, lipgloss.NewStyle().Width(cw).Render("Query: "+query))
-	lines = append(lines, "")
 
+	return []string{
+		lipgloss.NewStyle().Bold(true).Width(cw).Render("Semantic search (RAG)"),
+		tuiDim.MaxWidth(cw).Render(status),
+		"",
+		lipgloss.NewStyle().Width(cw).Render("Query: " + query),
+		"",
+	}
+}
+
+// ragAnswerLines renders the answer inside the given row budget so it never
+// overflows the terminal. When the text does not fit it is windowed at
+// ragAnswerOffset and the header shows the position (PgUp/PgDn scroll it). An
+// unknown height shows the whole answer; a zero budget shows just the header.
+func (m *model) ragAnswerLines(cw, budget int) []string {
+	all := wrapText(m.ragAnswer, cw)
+
+	if m.height <= 0 {
+		out := []string{lipgloss.NewStyle().Bold(true).Width(cw).Render("Answer:")}
+		for _, l := range all {
+			out = append(out, lipgloss.NewStyle().MaxWidth(cw).Render(l))
+		}
+		return out
+	}
+
+	avail := budget - 1 // the header takes one row
+	if avail < 0 {
+		avail = 0
+	}
+	total := len(all)
+
+	start := m.ragAnswerOffset
+	if max := total - avail; start > max {
+		start = max
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + avail
+	if end > total {
+		end = total
+	}
+
+	header := "Answer:"
 	switch {
-	case m.ragConfirm:
-		prompt := fmt.Sprintf("Model(s) not installed: %s. Download now? (y/N)", strings.Join(m.ragConfirmModels, ", "))
-		for _, l := range wrapText(prompt, cw) {
-			lines = append(lines, tuiRed.MaxWidth(cw).Render(l))
-		}
-		lines = append(lines, "")
-	case m.ragBusy:
-		lines = append(lines, tuiDim.Width(cw).Render("searching…"))
-	case m.ragErr != "":
-		lines = append(lines, tuiRed.MaxWidth(cw).Render("Error: "+m.ragErr))
-	case m.ragAnswer != "":
-		lines = append(lines, lipgloss.NewStyle().Bold(true).Width(cw).Render("Answer:"))
-		for _, l := range wrapText(m.ragAnswer, cw) {
-			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(l))
-		}
-		lines = append(lines, "")
+	case avail == 0:
+		header = fmt.Sprintf("Answer:  (%d line(s) — terminal too small)", total)
+	case total > avail:
+		header = fmt.Sprintf("Answer:  (%d–%d of %d, PgUp/PgDn)", start+1, end, total)
 	}
 
-	if len(m.ragResults) > 0 {
-		lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf("%d result(s)  ·  showing up to %d", len(m.ragResults), m.ragTopK)))
-		start, end := listWindow(len(m.ragResults), m.cursor, m.listRows(8))
-		for i := start; i < end; i++ {
-			r := m.ragResults[i]
-			cursor := "  "
-			if m.cursor == i {
-				cursor = tuiSel.Render("▸ ")
-			}
-			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(
-				fmt.Sprintf("%s[%d] %.3f  %s", cursor, i+1, r.Score, r.Path)))
-			snippet := strings.Join(strings.Fields(r.Chunk), " ")
-			if rs := []rune(snippet); len(rs) > cw-6 {
-				snippet = string(rs[:cw-6]) + "…"
-			}
-			lines = append(lines, tuiDim.MaxWidth(cw).Render("     "+snippet))
-		}
-		lines = append(lines, "")
+	out := []string{lipgloss.NewStyle().Bold(true).Width(cw).Render(header)}
+	for _, l := range all[start:end] {
+		out = append(out, lipgloss.NewStyle().MaxWidth(cw).Render(l))
 	}
+	return out
+}
 
-	lines = append(lines, "")
-	hint := fmt.Sprintf("↑↓/jk move  ·  Enter open note  ·  a ask  ·  +/- results (%d)  ·  / new search  ·  h/ESC back", m.ragTopK)
-	if m.ragConfirm {
-		hint = "y — download & search  ·  any other key — cancel"
-	} else if m.ragTyping {
-		hint = "type query  ·  Enter search  ·  Ctrl+A search + ask  ·  ESC clear"
+// ragAnswerVisible returns how many answer lines fit on screen, mirroring the
+// layout in viewRAGSearch. The keys use it to clamp the answer scroll offset.
+func (m *model) ragAnswerVisible() int {
+	cw := m.width - 4
+	total := len(wrapText(m.ragAnswer, cw))
+	if m.height <= 0 {
+		return total
 	}
-	lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))
-
-	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
-	return tuiBox.Width(w).Render(content)
+	inner := m.height - 2
+	if inner < 1 {
+		inner = 1
+	}
+	body := inner - len(m.ragHeaderLines(cw)) - 2
+	if body < 0 {
+		body = 0
+	}
+	reserved := 0
+	if len(m.ragResults) > 0 && body >= 5 {
+		reserved = 3
+	}
+	fbBudget := body - reserved
+	if fbBudget < 0 {
+		fbBudget = 0
+	}
+	if avail := fbBudget - 1; avail > 0 {
+		return avail
+	}
+	return 0
 }
 
 func (m *model) browseHeader() string {
@@ -849,10 +980,13 @@ func (m *model) viewSettings() string {
 	if m.confirmReset {
 		return m.viewResetConfirm()
 	}
+	if m.confirmClearRAG {
+		return m.viewClearRAGConfirm()
+	}
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "EMBEDDING MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset database"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "EMBEDDING MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset embeddings", "Reset database"}
 	googleKey := "(not set)"
 	if strings.TrimSpace(m.googleAPIKey) != "" {
 		googleKey = "(set)"
@@ -866,7 +1000,7 @@ func (m *model) viewSettings() string {
 		core.WhisperBackendLabel(m.whisperBackend), fmt.Sprintf("%d", m.whisperDevice), googleKey,
 		core.SpeechLanguageLabel(m.speechLanguage), m.host,
 		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers),
-		core.BinaryStorageLabel(m.binaryStorage), "edit…", ""}
+		core.BinaryStorageLabel(m.binaryStorage), "edit…", "clear…", ""}
 
 	var lines []string
 	for i, k := range keys {
@@ -876,7 +1010,7 @@ func (m *model) viewSettings() string {
 		}
 		style := lipgloss.NewStyle().Width(cw)
 		line := fmt.Sprintf("%s%-12s: %s", cursor, k, vals[i])
-		if i == setReset {
+		if i == setReset || i == setClearRAG {
 			if m.cursor == i {
 				line = cursor + tuiRed.Render(k)
 			} else {
@@ -890,6 +1024,17 @@ func (m *model) viewSettings() string {
 	if sug := m.embeddingSuggestion(); sug != "" {
 		lines = append(lines, "")
 		lines = append(lines, tuiYel.Width(cw).Render("EMBEDDING MODEL is "+sug))
+	}
+	switch {
+	case m.clearingRAG:
+		lines = append(lines, "")
+		lines = append(lines, tuiDim.Width(cw).Render("Clearing RAG embeddings…"))
+	case m.clearRAGErr != "":
+		lines = append(lines, "")
+		lines = append(lines, tuiRed.Width(cw).Render("Reset embeddings error: "+m.clearRAGErr))
+	case m.clearRAGStatus != "":
+		lines = append(lines, "")
+		lines = append(lines, tuiGreen.Width(cw).Render(m.clearRAGStatus))
 	}
 	lines = append(lines, "")
 	lines = append(lines, tuiDim.Width(cw).Render("↑↓/jk select  ·  Enter/l edit  ·  ? audio setup help  ·  h/ESC back"))
@@ -913,6 +1058,16 @@ func (m *model) viewResetConfirm() string {
 	cw := w - 4
 	lines := []string{
 		tuiYel.Width(cw).Render("Delete database " + m.dbPath + " and all data? (y/N)"),
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return tuiBox.Width(w).Render(content)
+}
+
+func (m *model) viewClearRAGConfirm() string {
+	w := m.width
+	cw := w - 4
+	lines := []string{
+		tuiYel.Width(cw).Render("Delete all RAG embeddings? Notes are kept; run \"RAG index\" to rebuild. (y/N)"),
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)

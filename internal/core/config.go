@@ -14,8 +14,8 @@ var DefaultTranscribeModel = "whisper"
 var DefaultVisionModel = ""
 
 // DefaultEmbeddingModel is the ollama model used to build the semantic (RAG)
-// vector index. Pull it with "ollama pull mxbai-embed-large".
-var DefaultEmbeddingModel = "mxbai-embed-large"
+// vector index. Pull it with "ollama pull bge-m3".
+var DefaultEmbeddingModel = "bge-m3"
 
 // NormalizeEmbeddingModel returns a usable embedding model name, falling back
 // to the default when the value is empty.

@@ -1482,6 +1482,30 @@ func (s *state) confirmReset() {
 	}, s.win)
 }
 
+func (s *state) confirmClearRAG() {
+	dialog.ShowConfirm("Reset embeddings",
+		"Delete all RAG embeddings? Notes are kept; run the \"RAG index\" process again to rebuild with the current embedding model.",
+		func(ok bool) {
+			if !ok {
+				return
+			}
+			db := s.currentDB()
+			if db == nil {
+				return
+			}
+			notes, chunks, err := core.ClearRAGIndex(db)
+			if err != nil {
+				dialog.ShowError(err, s.win)
+				return
+			}
+			s.ragResults = nil
+			s.ragAnswer = ""
+			s.ragErr = ""
+			(&guiReporter{s: s}).Logf("cleared RAG index: %d note(s), %d chunk(s)", notes, chunks)
+			s.render()
+		}, s.win)
+}
+
 func (s *state) refreshStats() {
 	db := s.currentDB()
 	if db == nil {
