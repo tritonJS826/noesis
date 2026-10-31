@@ -54,6 +54,7 @@ func Run(args []string) error {
 	phaseName := fs.String("phase", "all", "phase to run: import, extract, pairs, single, rag, export, all")
 	source := fs.String("source", "", "import source: filesystem, zip or json (default filesystem)")
 	format := fs.String("format", "", "comma-separated extensions to import, e.g. md,txt,csv,png (empty = default set)")
+	skipDirs := fs.String("skip-dirs", core.DefaultSkipDirs, "comma-separated directory name/globs to skip while importing, e.g. .private,node_modules (empty = skip nothing)")
 	extractName := fs.String("extract-name", "", "extract phase: only re-extract notes whose path/name contains this text")
 	extractFormat := fs.String("extract-format", "", "extract phase: comma-separated extensions to re-extract, e.g. pdf,png,mp3 (empty = all)")
 	promptName := fs.String("prompt", "", "prompt name for pairs/single phases (empty uses default)")
@@ -149,6 +150,9 @@ func Run(args []string) error {
 	if !seen["workers"] {
 		*workers = saved.Workers
 	}
+	if !seen["skip-dirs"] {
+		*skipDirs = saved.SkipDirs
+	}
 
 	cfg := core.Config{
 		Host:            *host,
@@ -169,6 +173,7 @@ func Run(args []string) error {
 		TemplateName:    *templateName,
 		ExtractName:     *extractName,
 		ExtractFormats:  core.ExtractFormatSet(strings.Split(*extractFormat, ",")),
+		SkipDirs:        core.SkipDirPatterns(*skipDirs),
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -266,6 +271,7 @@ func Run(args []string) error {
 			Source:        src2,
 			Formats:       formats,
 			BinaryStorage: cfg.BinaryStorage,
+			SkipDirs:      core.SkipDirPatterns(*skipDirs),
 		}
 		return core.Import(ctx, progress, db, *src, opts)
 	}

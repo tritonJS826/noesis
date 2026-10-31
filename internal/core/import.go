@@ -227,6 +227,9 @@ type ImportOptions struct {
 	Source        ImportSource
 	Formats       FormatSet
 	BinaryStorage string // links (default) or db
+	// SkipDirs lists directory-name globs to skip while walking a filesystem
+	// source (see ShouldSkipDir). An empty list skips nothing.
+	SkipDirs []string
 }
 
 // Import reads files from src into the notes table according to opt. The
@@ -235,7 +238,7 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 	if src == "" {
 		return errors.New("specify source: -src FOLDER|ARCHIVE|JSON")
 	}
-	files, err := collectFiles(src, opt.Source, opt.Formats)
+	files, err := collectFiles(src, opt.Source, opt.Formats, opt.SkipDirs)
 	if err != nil {
 		return err
 	}
@@ -342,18 +345,18 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 	return nil
 }
 
-func collectFiles(src string, source ImportSource, formats FormatSet) ([]importFile, error) {
+func collectFiles(src string, source ImportSource, formats FormatSet, skipDirs []string) ([]importFile, error) {
 	switch source {
 	case SourceZip:
 		return collectZip(src, formats)
 	case SourceJSONArray:
 		return collectJSONArray(src, formats)
 	default:
-		return collectFilesystem(src, formats), nil
+		return collectFilesystem(src, formats, skipDirs), nil
 	}
 }
 
-func collectFilesystem(src string, formats FormatSet) []importFile {
+func collectFilesystem(src string, formats FormatSet, skipDirs []string) []importFile {
 	abs, err := filepath.Abs(src)
 	if err != nil {
 		return nil
@@ -364,7 +367,7 @@ func collectFilesystem(src string, formats FormatSet) []importFile {
 			return nil
 		}
 		if d.IsDir() {
-			if p != abs && strings.HasPrefix(d.Name(), ".") {
+			if p != abs && ShouldSkipDir(d.Name(), skipDirs) {
 				return filepath.SkipDir
 			}
 			return nil

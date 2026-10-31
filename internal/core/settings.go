@@ -2,10 +2,46 @@ package core
 
 import (
 	"database/sql"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 )
+
+// DefaultSkipDirs is the default comma-separated list of directory-name globs
+// skipped while walking a source folder. ".*" skips hidden folders such as
+// .private. Users can replace it with a custom list (e.g. ".private,node_modules").
+const DefaultSkipDirs = ".*"
+
+// SkipDirPatterns splits a comma-separated skip list into trimmed, non-empty
+// glob patterns. An empty raw value yields an empty (non-nil) list, which skips
+// nothing.
+func SkipDirPatterns(raw string) []string {
+	out := []string{}
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ShouldSkipDir reports whether a directory name matches any skip glob. An
+// empty pattern list skips nothing.
+func ShouldSkipDir(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if ok, err := filepath.Match(p, name); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// SavedSkipDirs returns the directory skip globs stored for the database,
+// falling back to the default when none was saved.
+func SavedSkipDirs(db *sql.DB) []string {
+	return SkipDirPatterns(LoadAppSettings(db).SkipDirs)
+}
 
 // EncodeFormatSelection serialises an import-format selection for the settings
 // table: nil (every format) becomes "*", an empty non-nil set (none) becomes
@@ -86,6 +122,10 @@ type AppSettings struct {
 	// table. Empty means "not chosen — use DefaultImportFormats"; see
 	// EncodeFormatSelection / DecodeFormatSelection.
 	Formats string
+	// SkipDirs is the comma-separated list of directory-name globs skipped
+	// while walking a source folder. Empty means "not chosen — use
+	// DefaultSkipDirs"; see SkipDirPatterns / ShouldSkipDir.
+	SkipDirs string
 }
 
 // DefaultAppSettings returns the initial settings used for new databases.
@@ -109,6 +149,7 @@ func DefaultAppSettings() AppSettings {
 		MaxChars:        c.MaxChars,
 		Workers:         c.Workers,
 		RAGTopK:         ragDefaultTopK,
+		SkipDirs:        DefaultSkipDirs,
 	}
 }
 
@@ -173,6 +214,9 @@ func LoadAppSettings(db *sql.DB) AppSettings {
 	if v, ok := get("import_formats"); ok {
 		s.Formats = v
 	}
+	if v, ok := get("skip_dirs"); ok {
+		s.SkipDirs = v
+	}
 	if v, ok := get("maxchars"); ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
 			s.MaxChars = n
@@ -231,6 +275,7 @@ func (s AppSettings) Save(db *sql.DB) error {
 		{"google_api_key", s.GoogleAPIKey, def.GoogleAPIKey},
 		{"speech_language", s.SpeechLanguage, def.SpeechLanguage},
 		{"import_formats", s.Formats, def.Formats},
+		{"skip_dirs", s.SkipDirs, def.SkipDirs},
 		{"maxchars", strconv.Itoa(s.MaxChars), strconv.Itoa(def.MaxChars)},
 		{"workers", strconv.Itoa(s.Workers), strconv.Itoa(def.Workers)},
 		{"rag_topk", strconv.Itoa(s.RAGTopK), strconv.Itoa(def.RAGTopK)},

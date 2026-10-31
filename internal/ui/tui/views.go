@@ -118,6 +118,7 @@ func (m *model) viewMenu() string {
 		tuiLabel("HOST", m.host),
 		fmt.Sprintf("MAXCHARS: %d", m.maxChars),
 		fmt.Sprintf("WORKERS: %d", m.workers),
+		tuiLabel("SKIP DIRS", tuiEmpty(m.skipDirs)),
 	}
 	var settingPairs []string
 	for i := 0; i < len(settingsLines); i += 2 {
@@ -809,7 +810,7 @@ func (m *model) viewBrowse() string {
 	lines = append(lines, "")
 
 	filtered := m.filteredBrowse()
-	if m.browseConfirm {
+	if m.browseConfirm || m.browseBulkConfirm {
 		lines = append(lines, tuiYel.Width(cw).Render(m.browseResult))
 		lines = append(lines, "")
 		lines = append(lines, tuiDim.Width(cw).Render("y — confirm  ·  any other key — cancel"))
@@ -828,7 +829,11 @@ func (m *model) viewBrowse() string {
 				if m.cursor == i {
 					cursor = tuiSel.Render("▸ ")
 				}
-				lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+m.browseRow(filtered[i])))
+				mark := "  "
+				if m.browseSelected[filtered[i].ID] {
+					mark = tuiSel.Render("● ")
+				}
+				lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(cursor+mark+m.browseRow(filtered[i])))
 			}
 		}
 		if m.browseResult != "" {
@@ -838,11 +843,16 @@ func (m *model) viewBrowse() string {
 	}
 
 	lines = append(lines, "")
-	hint := "↑↓/jk select  ·  PgUp/PgDn page  ·  Enter/l details  ·  Del delete  ·  / search  ·  h/ESC back  ·  F1-F5 columns"
+	sel := len(m.selectedBrowseIDs())
+	hint := "↑↓/jk select  ·  PgUp/PgDn page  ·  Enter/l details  ·  Space toggle  ·  a all  ·  c clear  ·  D remove selected  ·  Del delete  ·  / search  ·  h/ESC back  ·  F1-F5 columns"
 	if m.filterTyping {
 		hint = "typing filter  ·  Enter details  ·  ↑↓ select  ·  ESC stop search"
 	}
-	lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf("found: %d  ·  %s", len(filtered), hint)))
+	selPart := ""
+	if sel > 0 {
+		selPart = fmt.Sprintf("  ·  selected: %d", sel)
+	}
+	lines = append(lines, tuiDim.MaxWidth(cw).Render(fmt.Sprintf("found: %d%s  ·  %s", len(filtered), selPart, hint)))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return tuiBox.Width(w).Render(content)
@@ -986,7 +996,7 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "EMBEDDING MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "BINARY STORAGE", "EVAL PROMPT", "Reset embeddings", "Reset database"}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "EMBEDDING MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "SKIP DIRS", "BINARY STORAGE", "EVAL PROMPT", "Reset embeddings", "Reset database"}
 	googleKey := "(not set)"
 	if strings.TrimSpace(m.googleAPIKey) != "" {
 		googleKey = "(set)"
@@ -995,11 +1005,15 @@ func (m *model) viewSettings() string {
 	if strings.TrimSpace(vision) == "" {
 		vision = "(= MODEL)"
 	}
+	skipDirs := m.skipDirs
+	if strings.TrimSpace(skipDirs) == "" {
+		skipDirs = "(none)"
+	}
 	vals := []string{m.src, m.out, m.dbPath, m.modelName, vision, core.NormalizeEmbeddingModel(m.embeddingModel),
 		core.AudioEngineLabel(m.audioEngine), m.whisperSummary(),
 		core.WhisperBackendLabel(m.whisperBackend), fmt.Sprintf("%d", m.whisperDevice), googleKey,
 		core.SpeechLanguageLabel(m.speechLanguage), m.host,
-		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers),
+		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), skipDirs,
 		core.BinaryStorageLabel(m.binaryStorage), "edit…", "clear…", ""}
 
 	var lines []string

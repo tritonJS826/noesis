@@ -75,6 +75,11 @@ type Config struct {
 	PromptName      string // prompt to use (empty = default)
 	TemplateName    string // export template to use (empty = default)
 
+	// SkipDirs lists directory-name globs skipped while walking a source
+	// folder during import/sync (see ShouldSkipDir). Empty means "use the
+	// value saved in the database".
+	SkipDirs []string
+
 	// Re-extraction filters (used by PhaseExtract). ExtractName matches a
 	// case-insensitive substring of the file path / name; ExtractFormats
 	// restricts the run to the given extensions (nil = every extractable

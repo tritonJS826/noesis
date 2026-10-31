@@ -25,7 +25,7 @@ type SyncItem struct {
 // folder and the files currently on disk. Only files whose extension matches
 // the supplied format set are considered for the new-files side; the deleted
 // side covers every abs_path stored in the DB.
-func SyncDiff(db *sql.DB, src string, formats FormatSet) ([]SyncItem, error) {
+func SyncDiff(db *sql.DB, src string, formats FormatSet, skipDirs []string) ([]SyncItem, error) {
 	if strings.TrimSpace(src) == "" {
 		return nil, fmt.Errorf("source folder not set")
 	}
@@ -74,7 +74,7 @@ func SyncDiff(db *sql.DB, src string, formats FormatSet) ([]SyncItem, error) {
 			return nil
 		}
 		if d.IsDir() {
-			if p != absSrc && strings.HasPrefix(d.Name(), ".") {
+			if p != absSrc && ShouldSkipDir(d.Name(), skipDirs) {
 				return filepath.SkipDir
 			}
 			return nil

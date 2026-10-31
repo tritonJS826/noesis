@@ -72,6 +72,29 @@ func RemoveNoteAndLinksByID(db *sql.DB, id int64) (int, int, error) {
 	return removeNotesAndScrub(db, []NoteInfo{{ID: id}})
 }
 
+// RemoveNotesByIDs deletes several notes at once (tags, pairs, links and
+// process output included). References kept in other notes' links_md are left
+// as-is.
+func RemoveNotesByIDs(db *sql.DB, ids []int64) (int, error) {
+	return deleteNotes(db, noteInfosByID(ids))
+}
+
+// RemoveNotesAndLinksByIDs deletes several notes at once and also scrubs every
+// obsidian link to them from the other notes.
+func RemoveNotesAndLinksByIDs(db *sql.DB, ids []int64) (removed int, scrubbed int, err error) {
+	return removeNotesAndScrub(db, noteInfosByID(ids))
+}
+
+func noteInfosByID(ids []int64) []NoteInfo {
+	notes := make([]NoteInfo, 0, len(ids))
+	for _, id := range ids {
+		if id != 0 {
+			notes = append(notes, NoteInfo{ID: id})
+		}
+	}
+	return notes
+}
+
 // removeNotesAndScrub deletes notes and rebuilds the links_md of every other
 // note that had linked to one of them, so the [[link]] disappears.
 func removeNotesAndScrub(db *sql.DB, notes []NoteInfo) (int, int, error) {
@@ -499,7 +522,9 @@ func TagAllSingle(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 
 // FindFiles searches the filesystem starting from the given directory for files
 // whose path contains the query (case-insensitive). Returns at most 200 matches.
-func FindFiles(dir, query string) ([]string, error) {
+// Directories listed in skipDirs (name globs) are not descended into, and the
+// usual heavy folders (node_modules, __pycache__) are always skipped.
+func FindFiles(dir, query string, skipDirs []string) ([]string, error) {
 	lower := strings.ToLower(query)
 	var matches []string
 	err := filepathWalk(dir, func(path string, info os.FileInfo, err error) error {
@@ -508,7 +533,7 @@ func FindFiles(dir, query string) ([]string, error) {
 		}
 		if info.IsDir() {
 			name := info.Name()
-			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "__pycache__" {
+			if name == "node_modules" || name == "__pycache__" || ShouldSkipDir(name, skipDirs) {
 				return filepath.SkipDir
 			}
 			return nil

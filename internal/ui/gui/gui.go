@@ -88,6 +88,7 @@ type state struct {
 	vision                                     *widget.Entry
 	embedding                                  *widget.Entry
 	maxChars, workers                          *widget.Entry
+	skipDirs                                   *widget.Entry
 	audioEngine                                *widget.Select
 	whisperModel                               *widget.Select
 	whisperBackend                             *widget.Select
@@ -132,9 +133,10 @@ type state struct {
 	extractFormats core.FormatSet
 
 	// notes (remove / evaluate)
-	noteAction noteAction
-	noteFilter string
-	notes      []core.NoteInfo
+	noteAction   noteAction
+	noteFilter   string
+	notes        []core.NoteInfo
+	noteSelected map[int64]bool
 
 	// database browser
 	browseNotes  []core.NoteDetail
@@ -216,6 +218,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.transcribe = widget.NewEntry()
 	s.maxChars = widget.NewEntry()
 	s.workers = widget.NewEntry()
+	s.skipDirs = widget.NewEntry()
 	s.ragTopKEntry = widget.NewEntry()
 	st := core.LoadAppSettings(db)
 	s.audioEngine = widget.NewSelect(core.AudioEngineLabels(), nil)
@@ -234,6 +237,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.transcribe.SetText(st.TranscribeModel)
 	s.maxChars.SetText(strconv.Itoa(st.MaxChars))
 	s.workers.SetText(strconv.Itoa(st.Workers))
+	s.skipDirs.SetText(st.SkipDirs)
 	s.audioEngine.SetSelected(core.AudioEngineLabel(st.AudioEngine))
 	s.whisperModel.SetSelected(core.NormalizeWhisperModel(st.WhisperModel))
 	s.whisperBackend.SetSelected(core.WhisperBackendLabel(st.WhisperBackend))
@@ -244,7 +248,7 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.whisperModel.OnChanged = func(string) { s.persistSettings() }
 	s.whisperBackend.OnChanged = func(string) { s.persistSettings() }
 	s.speechLanguage.OnChanged = func(string) { s.persistSettings() }
-	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.embedding, s.transcribe, s.maxChars, s.workers, s.googleKey, s.whisperDevice} {
+	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.embedding, s.transcribe, s.maxChars, s.workers, s.skipDirs, s.googleKey, s.whisperDevice} {
 		e.OnSubmitted = func(string) { s.persistSettings() }
 	}
 	s.browseCols = defaultBrowseCols()
@@ -517,6 +521,7 @@ func (s *state) openNotes(action noteAction, back screen) {
 	s.notes = notes
 	s.noteFilter = ""
 	s.noteAction = action
+	s.noteSelected = map[int64]bool{}
 	s.noteBack = back
 	s.screen = scrNotes
 	s.render()
@@ -641,6 +646,53 @@ func (s *state) pickNote(n core.NoteInfo) {
 	}, s.win)
 }
 
+// removeSelectedNotes deletes every note toggled in the notes screen. Only used
+// by the remove / remove+links actions.
+func (s *state) removeSelectedNotes(withLinks bool) {
+	ids := make([]int64, 0, len(s.noteSelected))
+	for id, on := range s.noteSelected {
+		if on {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	label := "Remove files"
+	if withLinks {
+		label = "Remove files + links"
+	}
+	dialog.ShowConfirm(label, fmt.Sprintf("Remove %d selected record(s)?", len(ids)), func(ok bool) {
+		if !ok {
+			return
+		}
+		db := s.currentDB()
+		if db == nil {
+			return
+		}
+		var removed, scrubbed int
+		var err error
+		if withLinks {
+			removed, scrubbed, err = core.RemoveNotesAndLinksByIDs(db, ids)
+		} else {
+			removed, err = core.RemoveNotesByIDs(db, ids)
+		}
+		if err != nil {
+			dialog.ShowError(err, s.win)
+			return
+		}
+		s.noteSelected = map[int64]bool{}
+		s.reloadNotes()
+		s.refreshStats()
+		if withLinks {
+			s.phaseLabel.SetText(fmt.Sprintf("Removed %d note(s), scrubbed links in %d other file(s)", removed, scrubbed))
+		} else {
+			s.phaseLabel.SetText(fmt.Sprintf("Removed %d note(s)", removed))
+		}
+		s.render()
+	}, s.win)
+}
+
 func (s *state) startEvalNote(n core.NoteInfo) {
 	cfg, _, _, _, err := s.readConfig()
 	if err != nil {
@@ -733,8 +785,9 @@ func (s *state) searchFiles(filter string, done func([]string)) {
 	if err != nil {
 		cwd = "."
 	}
+	patterns := core.SkipDirPatterns(s.skipDirs.Text)
 	go func() {
-		files, err := core.FindFiles(cwd, filter)
+		files, err := core.FindFiles(cwd, filter, patterns)
 		fyne.Do(func() {
 			if filter != s.fsFilter {
 				return
@@ -1121,6 +1174,7 @@ func (s *state) startImport() {
 		Source:        s.importSource,
 		Formats:       s.importFormats,
 		BinaryStorage: cfg.BinaryStorage,
+		SkipDirs:      cfg.SkipDirs,
 	}
 	db := s.currentDB()
 	if db == nil {
@@ -1149,8 +1203,9 @@ func (s *state) runSyncDiff() {
 		}
 	}
 	src := strings.TrimSpace(s.src.Text)
+	patterns := core.SkipDirPatterns(s.skipDirs.Text)
 	go func() {
-		items, err := core.SyncDiff(db, src, formats)
+		items, err := core.SyncDiff(db, src, formats, patterns)
 		fyne.Do(func() {
 			if err != nil {
 				dialog.ShowError(err, s.win)
@@ -1198,6 +1253,7 @@ func (s *state) applySync() {
 		Source:        core.SourceFilesystem,
 		Formats:       s.importFormats,
 		BinaryStorage: cfg.BinaryStorage,
+		SkipDirs:      core.SkipDirPatterns(s.skipDirs.Text),
 	}
 	s.beginRun("Syncing…")
 	src := strings.TrimSpace(s.src.Text)
@@ -1386,6 +1442,7 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 		BinaryStorage:   core.BinaryStorageLinks,
 		MaxChars:        maxChars,
 		Workers:         workers,
+		SkipDirs:        core.SkipDirPatterns(s.skipDirs.Text),
 	}
 	return cfg, strings.TrimSpace(s.src.Text), strings.TrimSpace(s.out.Text), strings.TrimSpace(s.dbEntry.Text), nil
 }
@@ -1413,6 +1470,7 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		Workers:         cfg.Workers,
 		RAGTopK:         s.ragTopK,
 		Formats:         core.EncodeFormatSelection(s.importFormats),
+		SkipDirs:        strings.TrimSpace(s.skipDirs.Text),
 	}.Save(db)
 }
 

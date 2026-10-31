@@ -14,6 +14,7 @@ func Phase1(ctx context.Context, r Reporter, db *sql.DB, src string) error {
 		Source:        SourceFilesystem,
 		Formats:       defaultFormatSet(),
 		BinaryStorage: cfg.BinaryStorage,
+		SkipDirs:      SavedSkipDirs(db),
 	})
 }
 

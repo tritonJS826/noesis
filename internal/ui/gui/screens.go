@@ -35,8 +35,8 @@ func (s *state) menuScreen() fyne.CanvasObject {
 	}
 
 	summary := widget.NewLabel(fmt.Sprintf(
-		"SRC: %s   ·   OUT: %s   ·   DB: %s   ·   MODEL: %s   ·   AUDIO: %s   ·   WHISPER: %s   ·   HOST: %s   ·   MAXCHARS: %s   ·   WORKERS: %s",
-		s.src.Text, s.out.Text, s.dbEntry.Text, s.model.Text, s.audioEngine.Selected, s.whisperModel.Selected, s.host.Text, s.maxChars.Text, s.workers.Text,
+		"SRC: %s   ·   OUT: %s   ·   DB: %s   ·   MODEL: %s   ·   AUDIO: %s   ·   WHISPER: %s   ·   HOST: %s   ·   MAXCHARS: %s   ·   WORKERS: %s   ·   SKIP DIRS: %s",
+		s.src.Text, s.out.Text, s.dbEntry.Text, s.model.Text, s.audioEngine.Selected, s.whisperModel.Selected, s.host.Text, s.maxChars.Text, s.workers.Text, s.skipDirs.Text,
 	))
 	summary.Wrapping = fyne.TextWrapWord
 
@@ -517,17 +517,66 @@ func (s *state) notesScreen() fyne.CanvasObject {
 	filter.SetPlaceHolder("start typing to filter by path…")
 	filter.SetText(s.noteFilter)
 
+	removing := s.noteAction == noteRemove || s.noteAction == noteRemoveLinks
+	if removing && s.noteSelected == nil {
+		s.noteSelected = map[int64]bool{}
+	}
+	if !removing {
+		s.noteSelected = nil
+	}
+
+	selectedCount := func() int {
+		n := 0
+		for _, on := range s.noteSelected {
+			if on {
+				n++
+			}
+		}
+		return n
+	}
+
+	var removeSel *widget.Button
+	updateRemoveButton := func() {
+		if removeSel != nil {
+			removeSel.SetText(fmt.Sprintf("Remove selected (%d)", selectedCount()))
+		}
+	}
+
 	list := widget.NewList(
 		func() int { return len(s.filteredNotes()) },
-		func() fyne.CanvasObject { return widget.NewLabel("") },
+		func() fyne.CanvasObject {
+			if removing {
+				return container.NewHBox(widget.NewCheck("", nil), widget.NewLabel(""))
+			}
+			return widget.NewLabel("")
+		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			notes := s.filteredNotes()
-			if id < len(notes) {
-				if s.noteAction == noteEval {
-					o.(*widget.Label).SetText(notes[id].Name)
-				} else {
-					o.(*widget.Label).SetText(notes[id].Path)
+			if id >= len(notes) {
+				return
+			}
+			n := notes[id]
+			if removing {
+				box := o.(*fyne.Container)
+				check := box.Objects[0].(*widget.Check)
+				label := box.Objects[1].(*widget.Label)
+				// SetChecked fires OnChanged, so silence it while we sync the
+				// visual state with our own selection set.
+				check.OnChanged = nil
+				check.SetChecked(s.noteSelected[n.ID])
+				check.OnChanged = func(on bool) {
+					if on {
+						s.noteSelected[n.ID] = true
+					} else {
+						delete(s.noteSelected, n.ID)
+					}
+					updateRemoveButton()
 				}
+				label.SetText(n.Path)
+			} else if s.noteAction == noteEval {
+				o.(*widget.Label).SetText(n.Name)
+			} else {
+				o.(*widget.Label).SetText(n.Path)
 			}
 		},
 	)
@@ -552,9 +601,31 @@ func (s *state) notesScreen() fyne.CanvasObject {
 	}
 	updateCount()
 
+	header := container.NewVBox(filter, count)
+
+	if removing {
+		selectAll := widget.NewButton("Select all shown", func() {
+			for _, n := range s.filteredNotes() {
+				s.noteSelected[n.ID] = true
+			}
+			list.Refresh()
+			updateRemoveButton()
+		})
+		clear := widget.NewButton("Clear selection", func() {
+			s.noteSelected = map[int64]bool{}
+			list.Refresh()
+			updateRemoveButton()
+		})
+		removeSel = widget.NewButton(fmt.Sprintf("Remove selected (%d)", selectedCount()), func() {
+			s.removeSelectedNotes(s.noteAction == noteRemoveLinks)
+		})
+		removeSel.Importance = widget.DangerImportance
+		header.Add(container.NewHBox(selectAll, clear, removeSel))
+	}
+
 	return container.NewBorder(
-		container.NewVBox(filter, count),
-		widget.NewLabel("Select a file to continue — ← Back returns."),
+		header,
+		widget.NewLabel("Tick files to remove several at once, or select a file to continue — ← Back returns."),
 		nil, nil,
 		list,
 	)
@@ -965,6 +1036,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewFormItem("HOST", s.host),
 		widget.NewFormItem("MAXCHARS", s.maxChars),
 		widget.NewFormItem("WORKERS", s.workers),
+		widget.NewFormItem("SKIP DIRS", s.skipDirs),
 	)
 
 	audioHint := wrappedLabel("Local Whisper runs offline after downloading a model and auto-detects the language. GPU acceleration is automatic: noesis uses Vulkan when your graphics driver supports it (Linux/Windows), Apple Metal on macOS, and falls back to the CPU otherwise — no extra setup. Google Speech-to-Text needs an API key (stored in the database) and ffmpeg.")
@@ -1003,6 +1075,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 	scroll := container.NewVScroll(container.NewVBox(
 		form,
 		wrappedLabel("VISION MODEL describes images during import, sync and re-extraction. Leave it empty to reuse MODEL."),
+		wrappedLabel("SKIP DIRS is a comma-separated list of directory name globs skipped during import and sync, e.g. .private,node_modules. Empty skips nothing; the default (.*) skips hidden folders."),
 		wrappedLabel(s.embeddingHint()),
 		audioHint,
 		audioHelp,

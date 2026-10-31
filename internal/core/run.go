@@ -22,10 +22,15 @@ const (
 func Run(ctx context.Context, r Reporter, db *sql.DB, c Config, phase Phase, src, out string) error {
 	switch phase {
 	case PhaseImport:
+		skipDirs := c.SkipDirs
+		if skipDirs == nil {
+			skipDirs = SavedSkipDirs(db)
+		}
 		return Import(ctx, r, db, src, ImportOptions{
 			Source:        SourceFilesystem,
 			Formats:       SavedImportFormats(db),
 			BinaryStorage: c.BinaryStorage,
+			SkipDirs:      skipDirs,
 		})
 	case PhaseAnalyze:
 		return Phase2(ctx, r, db, c)

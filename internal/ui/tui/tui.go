@@ -98,6 +98,7 @@ type model struct {
 	whisperBackend                                         string
 	whisperDevice                                          int
 	maxChars, workers                                      int
+	skipDirs                                               string
 
 	ollamaModels []string
 	ollamaOK     bool
@@ -194,14 +195,16 @@ type model struct {
 	pickConfirmID int64
 
 	// database browser
-	browseNotes      []core.NoteDetail
-	browseFilter     string
-	browseCols       [5]bool // path, format, imported, tags, links
-	browseConfirm    bool
-	browseConfirmID  int64
-	browseResult     string
-	browseErr        string
-	removeFromBrowse bool
+	browseNotes       []core.NoteDetail
+	browseFilter      string
+	browseCols        [5]bool // path, format, imported, tags, links
+	browseConfirm     bool
+	browseConfirmID   int64
+	browseBulkConfirm bool
+	browseSelected    map[int64]bool
+	browseResult      string
+	browseErr         string
+	removeFromBrowse  bool
 
 	browseDetail        []core.NoteField
 	browseDetailID      int64
@@ -277,6 +280,7 @@ func newModel(db *sql.DB) *model {
 		speechLanguage:  st.SpeechLanguage,
 		maxChars:        st.MaxChars,
 		workers:         st.Workers,
+		skipDirs:        st.SkipDirs,
 		textInput:       ti,
 		textArea:        ta,
 		importSource:    core.SourceFilesystem,
@@ -284,6 +288,7 @@ func newModel(db *sql.DB) *model {
 		syncSource:      core.SourceFilesystem,
 		browseCols:      [5]bool{true, true, false, true, true},
 		browseBack:      scrBrowse,
+		browseSelected:  map[int64]bool{},
 		ragTopK:         core.NormalizeRAGTopK(st.RAGTopK),
 	}
 }
@@ -311,6 +316,7 @@ func (m *model) persistSettings() {
 		SpeechLanguage:  m.speechLanguage,
 		MaxChars:        m.maxChars,
 		Workers:         m.workers,
+		SkipDirs:        m.skipDirs,
 		RAGTopK:         m.ragTopK,
 		Formats:         core.EncodeFormatSelection(m.importFormats),
 	}.Save(m.db)
@@ -355,6 +361,7 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 	audioEngine, whisperModel, googleAPIKey, speechLanguage := m.audioEngine, m.whisperModel, m.googleAPIKey, m.speechLanguage
 	whisperBackend, whisperDevice := m.whisperBackend, m.whisperDevice
 	maxChars, workers := m.maxChars, m.workers
+	skipDirs := core.SkipDirPatterns(m.skipDirs)
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
 		defer m.program.RestoreTerminal()
@@ -378,6 +385,7 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 			TemplateName:    templateName,
 			ExtractName:     extractFilter,
 			ExtractFormats:  extractFormats,
+			SkipDirs:        skipDirs,
 		}
 		progress := consoleshared.New(m.db)
 		progress.Start()
@@ -396,6 +404,7 @@ func runImportCmd(m *model) tea.Cmd {
 		Source:        m.importSource,
 		Formats:       m.importFormats,
 		BinaryStorage: m.binaryStorage,
+		SkipDirs:      core.SkipDirPatterns(m.skipDirs),
 	}
 	return func() tea.Msg {
 		m.program.ReleaseTerminal()
@@ -514,6 +523,21 @@ func removeNoteCmd(db *sql.DB, id int64, mode int) tea.Cmd {
 			removed, err = core.RemoveNoteByID(db, id)
 		} else {
 			removed, scrubbed, err = core.RemoveNoteAndLinksByID(db, id)
+		}
+		return removeMsg{removed: removed, scrubbed: scrubbed, err: err}
+	}
+}
+
+// removeNotesCmd deletes several records at once (bulk removal from the
+// browser). mode 0 keeps links in other notes, mode 1 scrubs them.
+func removeNotesCmd(db *sql.DB, ids []int64, mode int) tea.Cmd {
+	return func() tea.Msg {
+		var removed, scrubbed int
+		var err error
+		if mode == 0 {
+			removed, err = core.RemoveNotesByIDs(db, ids)
+		} else {
+			removed, scrubbed, err = core.RemoveNotesAndLinksByIDs(db, ids)
 		}
 		return removeMsg{removed: removed, scrubbed: scrubbed, err: err}
 	}
@@ -739,6 +763,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.removeFromBrowse {
 			m.removeFromBrowse = false
+			m.browseSelected = map[int64]bool{}
 			if msg.err != nil {
 				m.browseErr = msg.err.Error()
 				m.browseResult = ""

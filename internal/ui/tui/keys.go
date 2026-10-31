@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -267,7 +268,7 @@ func (m *model) syncKeys(msg tea.KeyMsg) tea.Cmd {
 
 func (m *model) runSyncDiff() tea.Cmd {
 	return func() tea.Msg {
-		items, err := core.SyncDiff(m.db, m.src, m.importFormats)
+		items, err := core.SyncDiff(m.db, m.src, m.importFormats, core.SkipDirPatterns(m.skipDirs))
 		return syncDiffMsg{items, err}
 	}
 }
@@ -692,6 +693,8 @@ func (m *model) openBrowse() {
 	m.browseNotes = notes
 	m.browseFilter = ""
 	m.browseConfirm = false
+	m.browseBulkConfirm = false
+	m.browseSelected = map[int64]bool{}
 	m.browseResult = ""
 	m.browseErr = ""
 	m.cursor = 0
@@ -732,6 +735,19 @@ func (m *model) openBrowseDetail(n core.NoteDetail, back screen) {
 	m.screen = scrBrowseDetail
 }
 
+// selectedBrowseIDs returns the ids currently toggled in the browser, in
+// ascending order.
+func (m *model) selectedBrowseIDs() []int64 {
+	ids := make([]int64, 0, len(m.browseSelected))
+	for id, on := range m.browseSelected {
+		if on {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
 func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 	if m.browseConfirm {
 		switch msg.String() {
@@ -742,6 +758,20 @@ func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 			return removeNoteCmd(m.db, m.browseConfirmID, 0)
 		default:
 			m.browseConfirm = false
+			m.browseResult = ""
+		}
+		return nil
+	}
+
+	if m.browseBulkConfirm {
+		switch msg.String() {
+		case "y", "Y":
+			m.browseBulkConfirm = false
+			m.removeFromBrowse = true
+			m.browseResult = ""
+			return removeNotesCmd(m.db, m.selectedBrowseIDs(), 0)
+		default:
+			m.browseBulkConfirm = false
 			m.browseResult = ""
 		}
 		return nil
@@ -831,6 +861,41 @@ func (m *model) browseKeys(msg tea.KeyMsg) tea.Cmd {
 		filtered := m.filteredBrowse()
 		if len(filtered) > 0 && m.cursor < len(filtered) {
 			m.openBrowseDetail(filtered[m.cursor], scrBrowse)
+		}
+	case " ", "x":
+		filtered := m.filteredBrowse()
+		if len(filtered) > 0 && m.cursor < len(filtered) {
+			if m.browseSelected == nil {
+				m.browseSelected = map[int64]bool{}
+			}
+			id := filtered[m.cursor].ID
+			if m.browseSelected[id] {
+				delete(m.browseSelected, id)
+			} else {
+				m.browseSelected[id] = true
+			}
+			if m.cursor < len(filtered)-1 {
+				m.cursor++
+			}
+		}
+		m.browseResult = ""
+	case "a":
+		if m.browseSelected == nil {
+			m.browseSelected = map[int64]bool{}
+		}
+		for _, n := range m.filteredBrowse() {
+			m.browseSelected[n.ID] = true
+		}
+		m.browseResult = ""
+	case "c":
+		m.browseSelected = map[int64]bool{}
+		m.browseResult = ""
+	case "D":
+		if ids := m.selectedBrowseIDs(); len(ids) == 0 {
+			m.browseResult = "nothing selected — press Space to select rows"
+		} else {
+			m.browseBulkConfirm = true
+			m.browseResult = fmt.Sprintf("Remove %d selected record(s) — are you sure? (y/N)", len(ids))
 		}
 	case "delete":
 		filtered := m.filteredBrowse()
@@ -1027,6 +1092,7 @@ const (
 	setHost
 	setMaxChars
 	setWorkers
+	setSkipDirs
 	setBinary
 	setEvalPrompt
 	setClearRAG
@@ -1427,6 +1493,10 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(fmt.Sprintf("%d", m.workers))
 		m.textInput.Focus()
 		m.editingField = "WORKERS — concurrency (1–100)"
+	case setSkipDirs:
+		m.textInput.SetValue(m.skipDirs)
+		m.textInput.Focus()
+		m.editingField = "SKIP DIRS — comma-separated names/globs, e.g. .private,node_modules (empty = none)"
 	case setBinary:
 		m.openOptionPicker("binary", core.BinaryStorageIDs(), core.BinaryStorageLabels(), m.binaryStorage)
 		return
@@ -1554,6 +1624,8 @@ func (m *model) saveField() {
 		if m.workers > 100 {
 			m.workers = 100
 		}
+	case setSkipDirs:
+		m.skipDirs = strings.TrimSpace(val)
 	case setWhisperDevice:
 		if n, _ := fmt.Sscanf(val, "%d", &m.whisperDevice); n != 1 || m.whisperDevice < 0 {
 			m.whisperDevice = core.DefaultWhisperDevice
@@ -1864,12 +1936,12 @@ func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
 				m.fsFilter = string(r[:len(r)-1])
 			}
 			m.cursor = 0
-			return fsSearchCmd(m.fsFilter)
+			return fsSearchCmd(m.fsFilter, core.SkipDirPatterns(m.skipDirs))
 		default:
 			if len(msg.Runes) == 1 && msg.Runes[0] >= 32 {
 				m.fsFilter += string(msg.Runes[0])
 				m.cursor = 0
-				return fsSearchCmd(m.fsFilter)
+				return fsSearchCmd(m.fsFilter, core.SkipDirPatterns(m.skipDirs))
 			}
 		}
 		return nil
@@ -1895,7 +1967,7 @@ func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
 			m.fsFilter = string(r[:len(r)-1])
 		}
 		m.cursor = 0
-		return fsSearchCmd(m.fsFilter)
+		return fsSearchCmd(m.fsFilter, core.SkipDirPatterns(m.skipDirs))
 	default:
 		if key == "/" {
 			m.filterTyping = true
@@ -1905,7 +1977,7 @@ func (m *model) fsSearchKeys(msg tea.KeyMsg) tea.Cmd {
 			m.filterTyping = true
 			m.fsFilter += string(msg.Runes[0])
 			m.cursor = 0
-			return fsSearchCmd(m.fsFilter)
+			return fsSearchCmd(m.fsFilter, core.SkipDirPatterns(m.skipDirs))
 		}
 	}
 	return nil
@@ -1926,13 +1998,13 @@ func (m *model) compareSelectedFile() tea.Cmd {
 	return compareFileCmd(m.db, path, m.host, m.modelName, m.audioOptions(), m.maxChars)
 }
 
-func fsSearchCmd(filter string) tea.Cmd {
+func fsSearchCmd(filter string, skipDirs []string) tea.Cmd {
 	return func() tea.Msg {
 		cwd, err := os.Getwd()
 		if err != nil {
 			cwd = "."
 		}
-		files, err := core.FindFiles(cwd, filter)
+		files, err := core.FindFiles(cwd, filter, skipDirs)
 		return fsSearchMsg{files: files, err: err, filter: filter}
 	}
 }
