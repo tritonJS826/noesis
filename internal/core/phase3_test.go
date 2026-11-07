@@ -61,10 +61,14 @@ func TestPhase3RDFExportTemplate(t *testing.T) {
 	}
 	b, _ := res.LastInsertId()
 	rdf := "@prefix n: <note:> .\nn:this n:mentions n:Alice ."
-	if _, err := db.Exec(`UPDATE notes SET markdown='Original note', rdf=? WHERE id=?`, rdf, id); err != nil {
+	bRDF := "@prefix n: <note:> .\nn:this n:mentions n:Alice .\nn:this n:works_with n:Bob ."
+	if _, err := db.Exec(`UPDATE notes SET markdown='Original note' WHERE id=?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE notes SET rdf=? WHERE id=?`, rdf, b); err != nil {
+	if err := storeNoteRDF(db, id, rdf); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeNoteRDF(db, b, bRDF); err != nil {
 		t.Fatal(err)
 	}
 	if got := LoadExportTemplate(db, DefaultRDFExportTemplate); got != DefaultRDFExportTemplateBody {
@@ -84,11 +88,58 @@ func TestPhase3RDFExportTemplate(t *testing.T) {
 	if !strings.Contains(got, "```turtle") || !strings.Contains(got, rdf) {
 		t.Fatalf("RDF export missing triples:\n%s", got)
 	}
+	if strings.Contains(got, "n:Bob") {
+		t.Fatalf("RDF export included another note's fact:\n%s", got)
+	}
 	if !strings.Contains(got, "## Related notes") || !strings.Contains(got, "[[b]]") {
 		t.Fatalf("RDF export missing graph links:\n%s", got)
 	}
 	if strings.Contains(got, "Original note") {
 		t.Fatalf("RDF-only export included the note body:\n%s", got)
+	}
+
+	// The second note has its own fact list (the Alice fact is shared through
+	// note_facts), and the export must render only that note's triples.
+	data, err = os.ReadFile(filepath.Join(out, "dir", "b.md"))
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	got = string(data)
+	if !strings.Contains(got, bRDF) {
+		t.Fatalf("second RDF export missing its triples:\n%s", got)
+	}
+	if !strings.Contains(got, "[[a]]") {
+		t.Fatalf("second RDF export missing graph links:\n%s", got)
+	}
+}
+
+func TestPhase3DefaultExportUsesRDFLinks(t *testing.T) {
+	db := openTestDB(t)
+	id := insertNote(t, db)
+	res, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+		VALUES('dir/b.md','/x/dir/b.md','b.md','world','text/markdown','world','2024-01-02')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := res.LastInsertId()
+	rdf := "@prefix n: <note:> .\nn:this n:mentions n:Alice ."
+	if err := storeNoteRDF(db, id, rdf); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeNoteRDF(db, b, rdf); err != nil {
+		t.Fatal(err)
+	}
+
+	out := t.TempDir()
+	if err := Phase3(context.Background(), NoopReporter{}, db, out, "", DefaultExportTemplate); err != nil {
+		t.Fatalf("phase3: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(out, "dir", "a.md"))
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "## Related notes") || !strings.Contains(got, "[[b]]") {
+		t.Fatalf("default Obsidian export ignores RDF links:\n%s", got)
 	}
 }
 

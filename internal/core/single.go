@@ -108,12 +108,11 @@ func saveTagsFromOutput(db *sql.DB, id int64, output string) int {
 }
 
 // saveSingleProcessOutput stores the answer of a one-by-one process. The
-// built-in RDF process writes to the dedicated notes.rdf column; every other
-// process keeps using process_output.
+// built-in RDF process replaces the note's rows in the normalized fact tables;
+// every other process keeps using process_output.
 func saveSingleProcessOutput(db *sql.DB, noteID int64, processName, output string) error {
 	if processName == RDFProcess {
-		_, err := db.Exec(`UPDATE notes SET rdf=? WHERE id=?`, output, noteID)
-		if err != nil {
+		if err := storeNoteRDF(db, noteID, output); err != nil {
 			return err
 		}
 		_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, noteID, processName)
@@ -123,8 +122,9 @@ func saveSingleProcessOutput(db *sql.DB, noteID int64, processName, output strin
 }
 
 // RunSingleProcess executes a one-by-one prompt for every note and stores the
-// answer in process_output (or notes.rdf for the built-in RDF process). The
-// built-in summary process is additionally truncated to SummaryMaxChars.
+// answer in process_output (or the normalized fact tables for the built-in RDF
+// process). The built-in summary process is additionally truncated to
+// SummaryMaxChars.
 func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	promptName := c.PromptName
 	if promptName == "" {

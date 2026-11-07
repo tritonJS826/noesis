@@ -152,8 +152,8 @@ func renderExport(db *sql.DB, templateName string, id int64, path, content, link
 	vars["title"] = noteLinkName(name)
 	vars["path"] = path
 	vars = mergeVars(vars, noteDBVars(db, "db", id))
-	// ${rdf} is a readable alias for the dedicated notes.rdf column.
-	vars["rdf"] = vars["db.rdf"]
+	// ${rdf} renders the note's facts from the normalized RDF tables.
+	vars["rdf"] = rdfForNote(db, id)
 	return expandPrompt(tmpl, vars)
 }
 
@@ -197,9 +197,9 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName 
 	}
 	// Keep RDF-derived graph links in sync before writing the vault, so the
 	// exported notes always contain the connections Obsidian should display.
-	var rdfNotes int
-	_ = db.QueryRow(`SELECT COUNT(*) FROM notes WHERE rdf<>''`).Scan(&rdfNotes)
-	if rdfNotes > 0 {
+	var rdfFacts int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM note_facts`).Scan(&rdfFacts)
+	if rdfFacts > 0 {
 		if _, err := rebuildRDFLinks(db); err != nil {
 			return fmt.Errorf("rdf links: %w", err)
 		}

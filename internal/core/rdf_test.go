@@ -44,6 +44,61 @@ func TestMigrateRDFPrompt(t *testing.T) {
 	}
 }
 
+func TestRDFFactsAreSharedAcrossNotes(t *testing.T) {
+	db := openTestDB(t)
+	a := insertNote(t, db)
+	res, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+		VALUES('dir/b.md','/x/dir/b.md','b.md','world','text/markdown','world','2024-01-02')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := res.LastInsertId()
+
+	rdf := "@prefix n: <note:> .\nn:this n:mentions n:Alice ."
+	for _, id := range []int64{a, b} {
+		if err := storeNoteRDF(db, id, rdf); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for table, want := range map[string]int{"entities": 2, "predicates": 1, "facts": 1, "note_facts": 2} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != want {
+			t.Fatalf("%s has %d rows, want %d", table, n, want)
+		}
+	}
+
+	// Removing one note keeps the shared fact for the other note.
+	if _, err := RemoveNoteByID(db, a); err != nil {
+		t.Fatal(err)
+	}
+	var facts int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM facts`).Scan(&facts)
+	if facts != 1 {
+		t.Fatalf("shared fact was removed too early: %d", facts)
+	}
+	if got := rdfForNote(db, b); got != rdf {
+		t.Fatalf("remaining note lost its facts: %q", got)
+	}
+
+	// Removing the last note prunes the orphan fact, entities and predicate.
+	if _, err := RemoveNoteByID(db, b); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"facts", "entities", "predicates", "note_facts"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatalf("%s still has %d orphan rows", table, n)
+		}
+	}
+}
+
 func TestRunRDFProcessBuildsGraphLinks(t *testing.T) {
 	db := openTestDB(t)
 	a := insertNote(t, db)
@@ -74,11 +129,7 @@ func TestRunRDFProcessBuildsGraphLinks(t *testing.T) {
 	}
 
 	for _, id := range []int64{a, b} {
-		var rdf string
-		if err := db.QueryRow(`SELECT rdf FROM notes WHERE id=?`, id).Scan(&rdf); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(rdf, "n:Alice") {
+		if rdf := rdfForNote(db, id); !strings.Contains(rdf, "n:Alice") {
 			t.Fatalf("note %d has no RDF output: %q", id, rdf)
 		}
 	}
@@ -101,12 +152,12 @@ func TestRebuildRDFLinks(t *testing.T) {
 	}
 	b, _ := res.LastInsertId()
 
-	if _, err := db.Exec(`UPDATE notes SET rdf=? WHERE id=?`,
-		"@prefix n: <note:> .\nn:this n:mentions n:Alice .\nn:this n:has_topic n:Gardening .", a); err != nil {
+	if err := storeNoteRDF(db, a,
+		"@prefix n: <note:> .\nn:this n:mentions n:Alice .\nn:this n:has_topic n:Gardening ."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE notes SET rdf=? WHERE id=?`,
-		"@prefix n: <note:> .\nn:Alice n:works_with n:Bob .\nn:this n:has_topic n:Gardening .", b); err != nil {
+	if err := storeNoteRDF(db, b,
+		"@prefix n: <note:> .\nn:Alice n:works_with n:Bob .\nn:this n:has_topic n:Gardening ."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,8 +206,7 @@ func TestRebuildRDFLinks(t *testing.T) {
 	}
 
 	// Changing the RDF removes links that no longer share an entity.
-	if _, err := db.Exec(`UPDATE notes SET rdf=? WHERE id=?`,
-		"@prefix n: <note:> .\nn:this n:mentions n:Bob .", b); err != nil {
+	if err := storeNoteRDF(db, b, "@prefix n: <note:> .\nn:this n:mentions n:Bob ."); err != nil {
 		t.Fatal(err)
 	}
 	created, err = rebuildRDFLinks(db)

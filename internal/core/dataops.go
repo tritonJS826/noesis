@@ -192,6 +192,9 @@ func deleteNotes(db *sql.DB, notes []NoteInfo) (int, error) {
 		if _, err := tx.Exec(`DELETE FROM process_output WHERE note_id=?`, n.ID); err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec(`DELETE FROM note_facts WHERE note_id=?`, n.ID); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(`DELETE FROM rag_chunks WHERE note_id=?`, n.ID); err != nil {
 			return 0, err
 		}
@@ -201,6 +204,9 @@ func deleteNotes(db *sql.DB, notes []NoteInfo) (int, error) {
 		if _, err := tx.Exec(`DELETE FROM notes WHERE id=?`, n.ID); err != nil {
 			return 0, err
 		}
+	}
+	if err := pruneRDF(tx); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
