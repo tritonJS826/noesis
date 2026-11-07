@@ -1473,7 +1473,7 @@ func (m *model) exportVarsHint() string {
 	named := []string{
 		"${frontmatter_block}", "${frontmatter}", "${body}", "${related}",
 		"${links}", "${tags}", "${tags_yaml}", "${tags_inline}",
-		"${name}", "${title}", "${path}",
+		"${name}", "${title}", "${path}", "${rdf}",
 	}
 	parts := append([]string{}, named...)
 	for _, c := range core.NotesColumns(m.db) {

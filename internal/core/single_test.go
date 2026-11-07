@@ -9,6 +9,77 @@ import (
 	"testing"
 )
 
+func TestRDFProcessStoresInNotesColumn(t *testing.T) {
+	db := openTestDB(t)
+	id := insertNote(t, db)
+	rdf := "@prefix n: <note:> .\nn:this n:mentions \"Alice\" ."
+
+	if err := SaveProcessOutput(db, id, RDFProcess, "legacy output"); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSingleProcessOutput(db, id, RDFProcess, rdf); err != nil {
+		t.Fatalf("save RDF: %v", err)
+	}
+
+	var got string
+	if err := db.QueryRow(`SELECT rdf FROM notes WHERE id=?`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != rdf {
+		t.Fatalf("rdf column = %q, want %q", got, rdf)
+	}
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM process_output WHERE note_id=? AND process_name=?`, id, RDFProcess).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("process_output rows left for RDF: %d", rows)
+	}
+	if got := LoadProcessOutput(db, id, RDFProcess); got != rdf {
+		t.Fatalf("LoadProcessOutput = %q, want %q", got, rdf)
+	}
+}
+
+func TestMigrateRDFProcessOutput(t *testing.T) {
+	db := openTestDB(t)
+	id := insertNote(t, db)
+	if err := SaveProcessOutput(db, id, RDFProcess, "legacy rdf"); err != nil {
+		t.Fatal(err)
+	}
+
+	migrateRDFProcessOutput(db)
+
+	var got string
+	if err := db.QueryRow(`SELECT rdf FROM notes WHERE id=?`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "legacy rdf" {
+		t.Fatalf("rdf column = %q, want legacy output", got)
+	}
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM process_output WHERE process_name=?`, RDFProcess).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("legacy RDF process rows left: %d", rows)
+	}
+
+	// An existing RDF value must win over an older process_output row.
+	if _, err := db.Exec(`UPDATE notes SET rdf='keep me' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveProcessOutput(db, id, RDFProcess, "newer legacy"); err != nil {
+		t.Fatal(err)
+	}
+	migrateRDFProcessOutput(db)
+	if err := db.QueryRow(`SELECT rdf FROM notes WHERE id=?`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "keep me" {
+		t.Fatalf("rdf column was overwritten: %q", got)
+	}
+}
+
 func TestExtractDataForAllDocuments(t *testing.T) {
 	db := openTestDB(t)
 

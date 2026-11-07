@@ -107,9 +107,24 @@ func saveTagsFromOutput(db *sql.DB, id int64, output string) int {
 	return added
 }
 
+// saveSingleProcessOutput stores the answer of a one-by-one process. The
+// built-in RDF process writes to the dedicated notes.rdf column; every other
+// process keeps using process_output.
+func saveSingleProcessOutput(db *sql.DB, noteID int64, processName, output string) error {
+	if processName == RDFProcess {
+		_, err := db.Exec(`UPDATE notes SET rdf=? WHERE id=?`, output, noteID)
+		if err != nil {
+			return err
+		}
+		_, _ = db.Exec(`DELETE FROM process_output WHERE note_id=? AND process_name=?`, noteID, processName)
+		return nil
+	}
+	return SaveProcessOutput(db, noteID, processName, output)
+}
+
 // RunSingleProcess executes a one-by-one prompt for every note and stores the
-// answer in process_output. The built-in summary process is additionally
-// truncated to SummaryMaxChars.
+// answer in process_output (or notes.rdf for the built-in RDF process). The
+// built-in summary process is additionally truncated to SummaryMaxChars.
 func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) error {
 	promptName := c.PromptName
 	if promptName == "" {
@@ -180,7 +195,7 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 
 		// Serialise the writes: sqlite allows a single writer.
 		saveMu.Lock()
-		saveErr := SaveProcessOutput(db, id, promptName, out)
+		saveErr := saveSingleProcessOutput(db, id, promptName, out)
 		added := 0
 		if saveErr == nil {
 			added = saveTagsFromOutput(db, id, out)
@@ -201,6 +216,13 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 	})
 	if err != nil {
 		return err
+	}
+	if promptName == RDFProcess {
+		links, err := rebuildRDFLinks(db)
+		if err != nil {
+			return fmt.Errorf("rdf links: %w", err)
+		}
+		r.Logf("rdf: rebuilt %d note link(s) from shared entities", links)
 	}
 	r.Logf("single process %q: processed — %d", promptName, done)
 	return nil

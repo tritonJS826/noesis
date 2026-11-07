@@ -99,7 +99,7 @@ func TestAppSettingsInvalidIntsIgnored(t *testing.T) {
 
 func TestNewBuiltinSinglePromptsSeeded(t *testing.T) {
 	db := openTestDB(t)
-	for _, name := range []string{DataExtractionProcess, DefaultSummaryProcess} {
+	for _, name := range []string{DataExtractionProcess, DefaultSummaryProcess, RDFProcess} {
 		body := LoadPrompt(db, name)
 		if body == "" {
 			t.Fatalf("prompt %q was not seeded", name)

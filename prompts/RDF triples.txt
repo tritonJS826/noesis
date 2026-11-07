@@ -1,0 +1,21 @@
+Turn the note into a small set of simple, human-readable RDF triples (subject, predicate, object).
+
+Write valid Turtle, one triple per line, using the prefix "n:":
+
+@prefix n: <note:> .
+n:this n:mentions n:Alice .
+n:this n:visited n:Berlin .
+n:this n:has_topic n:Gardening .
+n:this n:feels "calm" .
+
+Rules:
+- Use n:this as the subject (or a short lowercase slug of the file name instead of "this").
+- Predicates are short, lowercase, underscore-separated names: mentions, has_topic, visited, works_with, feels…
+- Write people, places, projects, organizations, books and events as n:Name without quotes (n:Alice, n:Berlin). These named entities connect notes in the Obsidian graph.
+- Write free text, dates, numbers and short values as quoted literals ("calm", "2024-05-01"). Literals do not connect notes.
+- Keep names short and in the language of the note.
+- Only include facts that are clearly present in the note; never invent anything.
+- No explanations, headings, markdown fences or blank lines.
+
+=== Note (file: ${FILE_NAME}) ===
+${CONTENT}

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -151,13 +152,17 @@ func renderExport(db *sql.DB, templateName string, id int64, path, content, link
 	vars["title"] = noteLinkName(name)
 	vars["path"] = path
 	vars = mergeVars(vars, noteDBVars(db, "db", id))
+	// ${rdf} is a readable alias for the dedicated notes.rdf column.
+	vars["rdf"] = vars["db.rdf"]
 	return expandPrompt(tmpl, vars)
 }
 
-// isMarkdownExport reports whether the selected template is the built-in
-// "All files to Markdown" export (an empty name also falls back to it).
+// isMarkdownExport reports whether the selected template renders Markdown. The
+// built-in templates do (an empty name also falls back to the default one), so
+// every imported file is written as a .md note. Custom templates keep the
+// original relative path.
 func isMarkdownExport(templateName string) bool {
-	return templateName == "" || templateName == DefaultExportTemplate
+	return templateName == "" || templateName == DefaultExportTemplate || templateName == DefaultRDFExportTemplate
 }
 
 // exportPath returns the destination path for one note. The built-in Markdown
@@ -190,15 +195,24 @@ func Phase3(ctx context.Context, r Reporter, db *sql.DB, out, src, templateName 
 			return errors.New("-out must not match source folder")
 		}
 	}
+	// Keep RDF-derived graph links in sync before writing the vault, so the
+	// exported notes always contain the connections Obsidian should display.
+	var rdfNotes int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM notes WHERE rdf<>''`).Scan(&rdfNotes)
+	if rdfNotes > 0 {
+		if _, err := rebuildRDFLinks(db); err != nil {
+			return fmt.Errorf("rdf links: %w", err)
+		}
+	}
 	var total int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&total)
 	r.SetPhase("3/3 export → "+out, 0, total)
 
 	type rec struct {
-		id                     int64
-		path, markdown         string
-		mime, links            string
-		hash                   string
+		id             int64
+		path, markdown string
+		mime, links    string
+		hash           string
 	}
 	rows, err := db.Query(`SELECT id, file_path, markdown, mime_type, links_md, out_hash FROM notes ORDER BY id`)
 	if err != nil {
