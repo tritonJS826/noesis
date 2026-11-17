@@ -90,15 +90,14 @@ type model struct {
 	screen  screen
 	cursor  int
 
-	src, out, dbPath, modelName, host, transcribeModel     string
-	visionModel                                            string
-	embeddingModel                                         string
-	audioEngine, whisperModel, googleAPIKey, binaryStorage string
-	speechLanguage                                         string
-	whisperBackend                                         string
-	whisperDevice                                          int
-	maxChars, workers                                      int
-	skipDirs                                               string
+	src, out, dbPath, modelName, host, transcribeModel string
+	visionModel                                        string
+	embeddingModel                                     string
+	audioEngine, whisperModel, binaryStorage           string
+	whisperBackend                                     string
+	whisperDevice                                      int
+	maxChars, workers                                  int
+	skipDirs                                           string
 
 	ollamaModels []string
 	ollamaOK     bool
@@ -110,7 +109,7 @@ type model struct {
 	editingField     string
 	editingMultiline bool
 
-	// generic settings picker (audio engine / speech language)
+	// generic settings picker (audio engine / GPU backend / binary storage)
 	pickerKind   string
 	pickerValues []string
 	pickerLabels []string
@@ -166,7 +165,7 @@ type model struct {
 	syncCursor  int               // cursor for the sync settings submenu (0=source, 1=formats, 2=action)
 	syncItems   []core.SyncItem
 	syncScroll  int
-	syncChecked map[string]bool // key: "del:<path>" or "new:<path>"
+	syncChecked map[string]bool // key: "del:<path>", "chg:<path>" or "new:<path>"
 	dataCursor  int
 	pickMode    int // 0 remove, 1 remove+links
 	pickResult  string
@@ -221,8 +220,10 @@ type model struct {
 
 	comparePath string
 
-	promptViewing string
-	promptText    string
+	promptViewing      string
+	promptText         string
+	promptReturn       screen
+	promptReturnCursor int
 
 	// process submenu
 	processType          string   // "pair" or "single"
@@ -275,9 +276,7 @@ func newModel(db *sql.DB) *model {
 		whisperModel:    st.WhisperModel,
 		whisperBackend:  st.WhisperBackend,
 		whisperDevice:   st.WhisperDevice,
-		googleAPIKey:    st.GoogleAPIKey,
 		binaryStorage:   st.BinaryStorage,
-		speechLanguage:  st.SpeechLanguage,
 		maxChars:        st.MaxChars,
 		workers:         st.Workers,
 		skipDirs:        st.SkipDirs,
@@ -311,9 +310,7 @@ func (m *model) persistSettings() {
 		WhisperModel:    m.whisperModel,
 		WhisperBackend:  m.whisperBackend,
 		WhisperDevice:   m.whisperDevice,
-		GoogleAPIKey:    m.googleAPIKey,
 		BinaryStorage:   m.binaryStorage,
-		SpeechLanguage:  m.speechLanguage,
 		MaxChars:        m.maxChars,
 		Workers:         m.workers,
 		SkipDirs:        m.skipDirs,
@@ -329,8 +326,6 @@ func (m *model) audioOptions() core.AudioOptions {
 		WhisperModel:   m.whisperModel,
 		WhisperBackend: m.whisperBackend,
 		WhisperDevice:  m.whisperDevice,
-		GoogleAPIKey:   m.googleAPIKey,
-		SpeechLanguage: m.speechLanguage,
 		OllamaHost:     m.host,
 		OllamaModel:    m.transcribeModel,
 	}
@@ -358,7 +353,7 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 	src, out, modelName, host, transcribeModel := m.src, m.out, m.modelName, m.host, m.transcribeModel
 	visionModel, embeddingModel := m.visionModel, m.embeddingModel
 	extractFilter, extractFormats := m.extractFilter, m.extractFormats
-	audioEngine, whisperModel, googleAPIKey, speechLanguage := m.audioEngine, m.whisperModel, m.googleAPIKey, m.speechLanguage
+	audioEngine, whisperModel := m.audioEngine, m.whisperModel
 	whisperBackend, whisperDevice := m.whisperBackend, m.whisperDevice
 	maxChars, workers := m.maxChars, m.workers
 	skipDirs := core.SkipDirPatterns(m.skipDirs)
@@ -377,8 +372,6 @@ func runPhaseCmd(m *model, phase core.Phase, promptName, templateName string) te
 			WhisperBackend:  whisperBackend,
 			WhisperDevice:   whisperDevice,
 			BinaryStorage:   m.binaryStorage,
-			GoogleAPIKey:    googleAPIKey,
-			SpeechLanguage:  speechLanguage,
 			MaxChars:        maxChars,
 			Workers:         workers,
 			PromptName:      promptName,
@@ -663,6 +656,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncChecked = nil
 		m.screen = scrMenu
 		return m, nil
+
+	case syncClearMsg:
+		m.phaseErr = msg.err
+		m.syncChecked = nil
+		m.syncCursor = 0
+		m.screen = scrSync
+		if msg.err != nil {
+			return m, nil
+		}
+		// Refresh the diff so the cleared files disappear from the list.
+		return m, m.runSyncDiff()
 
 	case resetMsg:
 		m.resetting = false

@@ -93,8 +93,6 @@ type state struct {
 	whisperModel                               *widget.Select
 	whisperBackend                             *widget.Select
 	whisperDevice                              *widget.Entry
-	googleKey                                  *widget.Entry
-	speechLanguage                             *widget.Select
 	formatsLabel                               *widget.Label
 
 	phaseLabel   *widget.Label
@@ -225,9 +223,6 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.whisperModel = widget.NewSelect(core.WhisperModelNames(), nil)
 	s.whisperBackend = widget.NewSelect(core.WhisperBackendLabels(), nil)
 	s.whisperDevice = widget.NewEntry()
-	s.googleKey = widget.NewEntry()
-	s.googleKey.Password = true
-	s.speechLanguage = widget.NewSelect(core.SpeechLanguageLabels(), nil)
 	s.src.SetText(st.Src)
 	s.out.SetText(st.Out)
 	s.host.SetText(st.Host)
@@ -242,13 +237,10 @@ func newState(db *sql.DB, dbPath string) *state {
 	s.whisperModel.SetSelected(core.NormalizeWhisperModel(st.WhisperModel))
 	s.whisperBackend.SetSelected(core.WhisperBackendLabel(st.WhisperBackend))
 	s.whisperDevice.SetText(strconv.Itoa(st.WhisperDevice))
-	s.googleKey.SetText(st.GoogleAPIKey)
-	s.speechLanguage.SetSelected(core.SpeechLanguageLabel(st.SpeechLanguage))
 	s.audioEngine.OnChanged = func(string) { s.persistSettings() }
 	s.whisperModel.OnChanged = func(string) { s.persistSettings() }
 	s.whisperBackend.OnChanged = func(string) { s.persistSettings() }
-	s.speechLanguage.OnChanged = func(string) { s.persistSettings() }
-	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.embedding, s.transcribe, s.maxChars, s.workers, s.skipDirs, s.googleKey, s.whisperDevice} {
+	for _, e := range []*widget.Entry{s.src, s.out, s.host, s.model, s.vision, s.embedding, s.transcribe, s.maxChars, s.workers, s.skipDirs, s.whisperDevice} {
 		e.OnSubmitted = func(string) { s.persistSettings() }
 	}
 	s.browseCols = defaultBrowseCols()
@@ -752,8 +744,6 @@ func (s *state) startCompare(path string) {
 			WhisperModel:   cfg.WhisperModel,
 			WhisperBackend: cfg.WhisperBackend,
 			WhisperDevice:  cfg.WhisperDevice,
-			GoogleAPIKey:   cfg.GoogleAPIKey,
-			SpeechLanguage: cfg.SpeechLanguage,
 			OllamaHost:     cfg.Host,
 			OllamaModel:    cfg.TranscribeModel,
 		}
@@ -1227,21 +1217,28 @@ func (s *state) applySync() {
 	}
 	var removeIDs []int64
 	var newPaths []string
+	var changedIDs []int64
 	for _, it := range s.syncItems {
 		key := syncItemGUIKey(it)
 		if !s.syncChecked[key] {
 			continue
 		}
-		if it.Deleted {
-			if id := core.SyncNoteIDByPath(db, it.Path); id != 0 {
+		switch {
+		case it.Deleted:
+			if it.ID != 0 {
+				removeIDs = append(removeIDs, it.ID)
+			} else if id := core.SyncNoteIDByPath(db, it.Path); id != 0 {
 				removeIDs = append(removeIDs, id)
 			}
-		}
-		if it.NewFile {
+		case it.NewFile:
 			newPaths = append(newPaths, it.Abs)
+		case it.Changed:
+			if it.ID != 0 {
+				changedIDs = append(changedIDs, it.ID)
+			}
 		}
 	}
-	if len(removeIDs) == 0 && len(newPaths) == 0 {
+	if len(removeIDs) == 0 && len(newPaths) == 0 && len(changedIDs) == 0 {
 		return
 	}
 	cfg, _, _, _, err := s.readConfigRaw()
@@ -1261,11 +1258,57 @@ func (s *state) applySync() {
 		_, cancel := s.runContext()
 		defer cancel()
 		removed, imported, err := core.SyncApply(db, src, removeIDs, newPaths, opts)
+		changed := 0
+		if err == nil && len(changedIDs) > 0 {
+			changed, err = core.SyncApplyChanged(db, changedIDs, cfg.BinaryStorage)
+		}
 		s.mu.Lock()
 		s.syncItems = nil
 		s.syncChecked = nil
 		s.mu.Unlock()
-		s.finishRunMessage(err, fmt.Sprintf("Sync done — removed %d, imported %d", removed, imported))
+		s.finishRunMessage(err, fmt.Sprintf("Sync done — removed %d, imported %d, refreshed %d", removed, imported, changed))
+	}()
+}
+
+// clearChangedMetadata refreshes every changed note from disk and clears its
+// derived metadata (RAG chunks, RDF triples, tags, summaries) so the processes
+// regenerate it. It is the "remove all deprecated metadata for changed files"
+// action.
+func (s *state) clearChangedMetadata() {
+	db := s.currentDB()
+	if db == nil {
+		return
+	}
+	var ids []int64
+	for _, it := range s.syncItems {
+		if it.Changed && it.ID != 0 {
+			ids = append(ids, it.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	cfg, _, _, _, err := s.readConfigRaw()
+	if err != nil {
+		dialog.ShowError(err, s.win)
+		return
+	}
+	s.beginRun("Clearing deprecated metadata…")
+	go func() {
+		_, cancel := s.runContext()
+		defer cancel()
+		changed, err := core.SyncApplyChanged(db, ids, cfg.BinaryStorage)
+		if err == nil {
+			// Refresh the diff so the cleared files leave the list.
+			items, derr := core.SyncDiff(db, strings.TrimSpace(s.src.Text), s.importFormats, core.SkipDirPatterns(s.skipDirs.Text))
+			if derr == nil {
+				s.mu.Lock()
+				s.syncItems = items
+				s.syncChecked = nil
+				s.mu.Unlock()
+			}
+		}
+		s.finishRunMessage(err, fmt.Sprintf("Cleared deprecated metadata — %d file(s)", changed))
 	}()
 }
 
@@ -1437,8 +1480,6 @@ func (s *state) readConfigRaw() (core.Config, string, string, string, error) {
 		WhisperModel:    core.NormalizeWhisperModel(s.whisperModel.Selected),
 		WhisperBackend:  core.NormalizeWhisperBackend(s.whisperBackend.Selected),
 		WhisperDevice:   whisperDevice,
-		GoogleAPIKey:    strings.TrimSpace(s.googleKey.Text),
-		SpeechLanguage:  core.NormalizeSpeechLanguage(s.speechLanguage.Selected),
 		BinaryStorage:   core.BinaryStorageLinks,
 		MaxChars:        maxChars,
 		Workers:         workers,
@@ -1464,8 +1505,6 @@ func (s *state) saveSettings(cfg core.Config, src, out string) {
 		WhisperModel:    cfg.WhisperModel,
 		WhisperBackend:  cfg.WhisperBackend,
 		WhisperDevice:   cfg.WhisperDevice,
-		GoogleAPIKey:    cfg.GoogleAPIKey,
-		SpeechLanguage:  cfg.SpeechLanguage,
 		MaxChars:        cfg.MaxChars,
 		Workers:         cfg.Workers,
 		RAGTopK:         s.ragTopK,

@@ -16,6 +16,14 @@ const rdfLinkReasonPrefix = "RDF shared: "
 // back to Turtle.
 const rdfPrefix = "@prefix n: <note:> ."
 
+// rdfEmptyPredicate marks a note that produced no usable triples. The model
+// occasionally answers with only a prefix declaration or with text that cannot
+// be parsed into triples; such notes would otherwise stay without rows in
+// note_facts and be reprocessed on every run. The marker is a literal fact, so
+// it never connects notes in the graph, and it is hidden when facts are
+// rendered back to Turtle.
+const rdfEmptyPredicate = "has_no_facts"
+
 // rdfTripleFields splits one simple Turtle triple line into subject, predicate
 // and object. Whitespace inside quoted literals is preserved.
 func rdfTripleFields(line string) []string {
@@ -253,6 +261,7 @@ func storeNoteRDF(db *sql.DB, noteID int64, rdf string) error {
 	if _, err := tx.Exec(`DELETE FROM note_facts WHERE note_id=?`, noteID); err != nil {
 		return err
 	}
+	stored := 0
 	for i, triple := range triples {
 		subject, ok := parseRDFTerm(triple.Subject)
 		if !ok {
@@ -287,6 +296,34 @@ func storeNoteRDF(db *sql.DB, noteID int64, rdf string) error {
 			noteID, factID, i); err != nil {
 			return err
 		}
+		stored++
+	}
+	// A note the model could not turn into any triple still gets an empty
+	// marker fact, so the RDF process treats it as done instead of retrying it
+	// on every run.
+	if stored == 0 {
+		subject := rdfTerm{Name: "this", Key: "this"}
+		object := rdfTerm{Name: `"true"`, Key: `"true"`, Literal: true}
+		subjectID, err := upsertEntity(tx, subject)
+		if err != nil {
+			return err
+		}
+		predicateID, err := upsertPredicate(tx, rdfEmptyPredicate)
+		if err != nil {
+			return err
+		}
+		objectID, err := upsertEntity(tx, object)
+		if err != nil {
+			return err
+		}
+		factID, err := upsertFact(tx, subjectID, predicateID, objectID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO note_facts(note_id, fact_id, position) VALUES(?,?,0)`,
+			noteID, factID); err != nil {
+			return err
+		}
 	}
 	if err := pruneRDF(tx); err != nil {
 		return err
@@ -318,6 +355,10 @@ func rdfForNote(db *sql.DB, noteID int64) string {
 		if err := rows.Scan(&subject, &subjectLiteral, &predicate, &object, &objectLiteral); err != nil {
 			return ""
 		}
+		// Hide the empty marker: it exists only to mark the note as processed.
+		if predicate == rdfEmptyPredicate {
+			continue
+		}
 		lines = append(lines, rdfTermText(subject, subjectLiteral != 0)+" n:"+predicate+" "+
 			rdfTermText(object, objectLiteral != 0)+" .")
 	}
@@ -325,6 +366,183 @@ func rdfForNote(db *sql.DB, noteID int64) string {
 		return ""
 	}
 	return rdfPrefix + "\n" + strings.Join(lines, "\n")
+}
+
+// rdfRelatedLabel is one shared term (an entity or a predicate) that connects a
+// note with another note.
+type rdfRelatedLabel struct {
+	kind  string // "entity" or "predicate"
+	label string
+}
+
+// rdfRelatedNotes returns, for noteID, the other notes that share an entity or a
+// predicate, keyed by the other note's id. Relations are derived directly from
+// the normalized fact tables, so the RDF export never depends on the links
+// written by the pair process. Generic terms such as n:this and quoted literals
+// have link=0 and therefore never connect notes.
+func rdfRelatedNotes(db *sql.DB, noteID int64) (map[int64][]rdfRelatedLabel, error) {
+	out := map[int64][]rdfRelatedLabel{}
+
+	collect := func(query, kind string) error {
+		rows, err := db.Query(query, noteID, noteID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var other int64
+			var label string
+			if err := rows.Scan(&other, &label); err != nil {
+				return err
+			}
+			// The empty marker is not a real predicate and must not connect
+			// notes.
+			if kind == "predicate" && label == rdfEmptyPredicate {
+				continue
+			}
+			out[other] = append(out[other], rdfRelatedLabel{kind: kind, label: label})
+		}
+		return rows.Err()
+	}
+
+	// Notes sharing a named entity, whether it appears as a subject or object.
+	if err := collect(`
+		SELECT DISTINCT nf2.note_id, e.name
+		FROM note_facts nf1
+		JOIN facts f1 ON f1.id = nf1.fact_id
+		JOIN entities e ON e.id IN (f1.subject_id, f1.object_id)
+		JOIN facts f2 ON e.id IN (f2.subject_id, f2.object_id)
+		JOIN note_facts nf2 ON nf2.fact_id = f2.id
+		WHERE nf1.note_id = ? AND e.link = 1 AND nf2.note_id <> ?`, "entity"); err != nil {
+		return nil, err
+	}
+
+	// Notes sharing a predicate.
+	if err := collect(`
+		SELECT DISTINCT nf2.note_id, p.name
+		FROM note_facts nf1
+		JOIN facts f1 ON f1.id = nf1.fact_id
+		JOIN predicates p ON p.id = f1.predicate_id
+		JOIN facts f2 ON f2.predicate_id = p.id
+		JOIN note_facts nf2 ON nf2.fact_id = f2.id
+		WHERE nf1.note_id = ? AND nf2.note_id <> ?`, "predicate"); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// rdfRelatedReason builds the human-readable reason shown next to a related
+// note, listing the shared entities and predicates.
+func rdfRelatedReason(labels []rdfRelatedLabel) string {
+	var entities, predicates []string
+	seen := map[string]bool{}
+	for _, l := range labels {
+		key := l.kind + "\x00" + strings.ToLower(l.label)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if l.kind == "predicate" {
+			predicates = append(predicates, l.label)
+		} else {
+			entities = append(entities, l.label)
+		}
+	}
+	sort.Strings(entities)
+	sort.Strings(predicates)
+
+	var parts []string
+	if len(entities) > 0 {
+		parts = append(parts, "entity "+strings.Join(entities, ", "))
+	}
+	if len(predicates) > 0 {
+		parts = append(parts, "predicate "+strings.Join(predicates, ", "))
+	}
+	return rdfLinkReasonPrefix + strings.Join(parts, "; ")
+}
+
+// rdfRelatedLines returns the "[[note]] — reason" lines for the notes that
+// share an entity or predicate with noteID, ordered by note id. Each shared
+// relation is emitted for both notes, so the links are bidirectional.
+func rdfRelatedLines(db *sql.DB, noteID int64) []string {
+	related, err := rdfRelatedNotes(db, noteID)
+	if err != nil || len(related) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(related))
+	for id := range related {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	var lines []string
+	for _, id := range ids {
+		var name string
+		if err := db.QueryRow(`SELECT file_name FROM notes WHERE id=?`, id).Scan(&name); err != nil {
+			continue
+		}
+		lines = append(lines, "- [["+noteLinkName(name)+"]] — "+rdfRelatedReason(related[id]))
+	}
+	return lines
+}
+
+// relatedSection wraps link lines in the shared "## Related notes" heading. It
+// returns an empty string for an empty list.
+func relatedSection(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n## Related notes\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// rdfRelatedBlock renders the "## Related notes" section for one note from the
+// entities and predicates it shares with other notes.
+func rdfRelatedBlock(db *sql.DB, noteID int64) string {
+	return relatedSection(rdfRelatedLines(db, noteID))
+}
+
+// linkTarget extracts the note name from a "[[" link "]]" line, lower-cased for
+// comparison. It returns "" when the line carries no link.
+func linkTarget(line string) string {
+	i := strings.Index(line, "[[")
+	if i < 0 {
+		return ""
+	}
+	rest := line[i+2:]
+	j := strings.Index(rest, "]]")
+	if j < 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(rest[:j]))
+}
+
+// combinedRelatedBlock merges the semantic pair links (linksMD, the note's
+// stored links_md) with the RDF-derived lines into a single "## Related notes"
+// section, de-duplicated by target note. Pair-process lines win when a note is
+// linked by both sources.
+func combinedRelatedBlock(linksMD string, rdfLines []string) string {
+	seen := map[string]bool{}
+	var lines []string
+	add := func(line string) {
+		if line = strings.TrimSpace(line); line == "" {
+			return
+		}
+		if t := linkTarget(line); t != "" {
+			if seen[t] {
+				return
+			}
+			seen[t] = true
+		}
+		lines = append(lines, line)
+	}
+	for _, l := range strings.Split(linksMD, "\n") {
+		add(l)
+	}
+	for _, l := range rdfLines {
+		add(l)
+	}
+	return relatedSection(lines)
 }
 
 // migrateRDFToTables moves RDF generated by older versions from the legacy

@@ -23,14 +23,31 @@ func TestListWindowKeepsCursorVisible(t *testing.T) {
 	}
 }
 
-func TestSettingsOnlyExposesEvalPrompt(t *testing.T) {
+func TestSettingsHasNoPromptOrGoogleRows(t *testing.T) {
 	m := &model{width: 80, height: 24}
 	view := m.viewSettings()
-	if !strings.Contains(view, "EVAL PROMPT") {
-		t.Fatalf("settings does not expose the eval prompt:\n%s", view)
+	if strings.Contains(view, "EVAL PROMPT") || strings.Contains(view, "GOOGLE") || strings.Contains(view, "PROMPTS") {
+		t.Fatalf("settings still exposes prompt/google rows:\n%s", view)
 	}
-	if strings.Contains(view, "PROMPTS") {
-		t.Fatalf("settings still exposes the generic prompt list:\n%s", view)
+}
+
+func TestMenuFitsTerminalHeight(t *testing.T) {
+	// Regression: the home menu used to render a blank line above every
+	// horizontal rule, making it exceed a normal terminal.
+	for _, size := range []struct{ width, height int }{{80, 24}, {100, 24}} {
+		m := &model{width: size.width, height: size.height}
+		view := m.viewMenu()
+		if got := strings.Count(view, "\n") + 1; got > m.height {
+			t.Fatalf("%dx%d: menu is %d lines:\n%s", size.width, size.height, got, view)
+		}
+	}
+}
+
+func TestDataMenuExposesEvalPrompt(t *testing.T) {
+	m := &model{width: 80, height: 24}
+	view := m.viewData()
+	if !strings.Contains(view, "Edit evaluation prompt") {
+		t.Fatalf("data menu does not expose the eval prompt:\n%s", view)
 	}
 }
 

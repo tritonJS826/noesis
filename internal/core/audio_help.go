@@ -10,9 +10,6 @@ const (
 	WhisperCPPReleasesURL  = "https://github.com/ggml-org/whisper.cpp/releases"
 	WhisperCPPHomebrewURL  = "https://formulae.brew.sh/formula/whisper.cpp"
 	VulkanDriverURL        = "https://vulkan.lunarg.com/sdk/home"
-	GoogleSpeechDocsURL    = "https://cloud.google.com/speech-to-text/docs"
-	GoogleSpeechEnableURL  = "https://console.cloud.google.com/apis/library/speech.googleapis.com"
-	GoogleCredentialsURL   = "https://console.cloud.google.com/apis/credentials"
 )
 
 // FFmpegAvailable reports whether ffmpeg can be found locally.
@@ -82,16 +79,4 @@ func WhisperVulkanInstallInstructions() string {
 		return `Vulkan acceleration is not published for this platform, so noesis uses the CPU automatically. Guide: ` + WhisperCPPBuildURL
 	}
 	return `Noesis uses Vulkan automatically when your graphics driver supports it and falls back to the CPU otherwise; no setup is needed. If the automatic download failed, retry, or set NOESIS_WHISPER_VULKAN_URL to a Vulkan whisper.cpp archive. Guide: ` + WhisperCPPBuildURL
-}
-
-// GoogleAPIKeyInstructions returns an actionable error message for a missing
-// Google Speech-to-Text API key.
-func GoogleAPIKeyInstructions() string {
-	return `Enable Speech-to-Text at ` + GoogleSpeechEnableURL + `, then create an API key at ` + GoogleCredentialsURL + ` and paste it in Settings. You can also set GOOGLE_API_KEY.`
-}
-
-// GoogleSpeechEnableInstructions returns an actionable error message for Google
-// API permission or billing failures.
-func GoogleSpeechEnableInstructions() string {
-	return `Check that Speech-to-Text is enabled and billing is active: ` + GoogleSpeechEnableURL
 }

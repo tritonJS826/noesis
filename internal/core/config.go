@@ -30,7 +30,6 @@ func NormalizeEmbeddingModel(s string) string {
 // Audio backend identifiers.
 const (
 	AudioEngineWhisper = "whisper"
-	AudioEngineGoogle  = "google"
 	AudioEngineOllama  = "ollama"
 )
 
@@ -52,10 +51,6 @@ const DefaultWhisperBackend = WhisperBackendAuto
 // DefaultWhisperDevice is the Vulkan device index (0 = default adapter).
 const DefaultWhisperDevice = 0
 
-// DefaultSpeechLanguage is the language used by API backends that require one.
-// Whisper ignores this and auto-detects.
-const DefaultSpeechLanguage = "ru-RU"
-
 // Config holds everything the processing phases need.
 type Config struct {
 	Host            string
@@ -63,13 +58,11 @@ type Config struct {
 	VisionModel     string // model used to describe images (empty = main model)
 	EmbeddingModel  string // model used to embed notes for RAG (empty = default)
 	TranscribeModel string // legacy Ollama audio transcription model
-	AudioEngine     string // whisper / google / ollama
+	AudioEngine     string // whisper / ollama
 	WhisperModel    string
 	WhisperBackend  string // auto / cpu / vulkan
 	WhisperDevice   int    // Vulkan device index
 	BinaryStorage   string // links (default) / db
-	GoogleAPIKey    string
-	SpeechLanguage  string
 	MaxChars        int
 	Workers         int
 	PromptName      string // prompt to use (empty = default)
@@ -109,7 +102,6 @@ func DefaultConfig() Config {
 		WhisperBackend:  DefaultWhisperBackend,
 		WhisperDevice:   DefaultWhisperDevice,
 		BinaryStorage:   BinaryStorageLinks,
-		SpeechLanguage:  DefaultSpeechLanguage,
 		MaxChars:        400000,
 		Workers:         2,
 	}

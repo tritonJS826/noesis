@@ -17,10 +17,9 @@ import (
 // endpoint and returns the transcript plus a tool identifier.
 //
 // This is a legacy backend for custom servers: Ollama itself does not ship
-// native audio transcription. New code should use TranscribeWhisper or
-// TranscribeGoogle via AudioOptions. When ffmpeg is installed, audio is
-// converted to 16 kHz mono WAV first, which is the format most local speech
-// models expect.
+// native audio transcription. New code should use TranscribeWhisper via
+// AudioOptions. When ffmpeg is installed, audio is converted to 16 kHz mono
+// WAV first, which is the format most local speech models expect.
 func TranscribeAudio(ctx context.Context, host, model, name string, data []byte) (string, string, error) {
 	if strings.TrimSpace(host) == "" {
 		host = DefaultConfig().Host

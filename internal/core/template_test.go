@@ -229,20 +229,22 @@ func TestRenamePrompt(t *testing.T) {
 }
 
 func TestMigratePromptNames(t *testing.T) {
-	db := openTestDB(t)
-	if _, err := db.Exec(`DELETE FROM prompts WHERE name=?`, DefaultPairPrompt); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO prompts(name, prompt, type) VALUES('phase2','legacy','pair')`); err != nil {
-		t.Fatal(err)
-	}
+	for _, legacy := range []string{"phase2", legacyPairPromptName} {
+		db := openTestDB(t)
+		if _, err := db.Exec(`DELETE FROM prompts WHERE name=?`, DefaultPairPrompt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO prompts(name, prompt, type) VALUES(?,?,'pair')`, legacy, "legacy"); err != nil {
+			t.Fatal(err)
+		}
 
-	migratePromptNames(db)
+		migratePromptNames(db)
 
-	if LoadPrompt(db, "phase2") != "" {
-		t.Fatal("phase2 should have been migrated away")
-	}
-	if LoadPrompt(db, DefaultPairPrompt) != "legacy" {
-		t.Fatal("expected the legacy prompt to be renamed")
+		if LoadPrompt(db, legacy) != "" {
+			t.Fatalf("%s should have been migrated away", legacy)
+		}
+		if LoadPrompt(db, DefaultPairPrompt) != "legacy" {
+			t.Fatalf("expected the legacy prompt %q to be renamed", legacy)
+		}
 	}
 }

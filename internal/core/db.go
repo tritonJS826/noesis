@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS notes(
 	extract_tool   TEXT NOT NULL DEFAULT '', -- extractor/transcriber used, e.g. go:docx / whisper:base
 	links_md       TEXT NOT NULL DEFAULT '', -- obsidian links ([[...]]) as a separate column
 	out_hash       TEXT NOT NULL DEFAULT '', -- hash of the file written in phase 3
+	src_hash       TEXT NOT NULL DEFAULT '', -- sha256 of the source file at import/sync time ('' until first sync)
+	src_mtime      INTEGER NOT NULL DEFAULT 0, -- source file mtime (unix nanoseconds) for the fast change check
 	imported_at    TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tags(
@@ -137,6 +139,12 @@ func OpenDB(path string) (*sql.DB, error) {
 	if err := ensureColumn(db, "notes", "markdown", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
+	if err := ensureColumn(db, "notes", "src_hash", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
+	if err := ensureColumn(db, "notes", "src_mtime", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return nil, err
+	}
 	if err := ensureColumn(db, "prompts", "type", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
@@ -156,7 +164,11 @@ func OpenDB(path string) (*sql.DB, error) {
 }
 
 // DefaultPairPrompt is the name of the built-in pair process.
-const DefaultPairPrompt = "Tags and bidirectional linking (for obsidian)"
+const DefaultPairPrompt = "All pairs comparison: bidirectional links"
+
+// legacyPairPromptName is the descriptive name the built-in pair process used
+// before the rename. It is migrated to DefaultPairPrompt on start.
+const legacyPairPromptName = "Tags and bidirectional linking (for obsidian)"
 
 // DefaultSinglePrompt is the built-in one-by-one tagging process.
 const DefaultSinglePrompt = "tag_single"
@@ -231,44 +243,41 @@ ${CONTENT}`
 
 // DefaultExportTemplate is the name of the built-in export template that
 // converts every imported file to a Markdown note.
-const DefaultExportTemplate = "All files to Markdown"
+const DefaultExportTemplate = "Pairs comparison"
 
 // DefaultRDFExportTemplate is the name of the built-in export template that
 // renders the generated RDF triples as an Obsidian-friendly Markdown note.
 const DefaultRDFExportTemplate = "RDF triples (Obsidian)"
 
-// legacyExportTemplate is the old name of the built-in export template.
-const legacyExportTemplate = "default"
+// DefaultRDFPairExportTemplate is the name of the built-in export template that
+// combines both linking methods: the semantic pair links and the RDF-derived
+// links, merged into one related-notes section.
+const DefaultRDFPairExportTemplate = "Pairs + RDF triples (Obsidian)"
 
-// migrateExportTemplateNames renames the legacy "default" template to the
-// descriptive built-in name, preserving any user edits.
+// legacyExportTemplate and legacyExportTemplateName are the previous names of
+// the built-in export template. Both are migrated to DefaultExportTemplate.
+const (
+	legacyExportTemplate     = "default"
+	legacyExportTemplateName = "All files to Markdown"
+)
+
+// migrateExportTemplateNames renames the legacy export template names
+// ("default" and "All files to Markdown") to the current built-in name,
+// preserving any user edits and never clobbering a template that already uses
+// the new name.
 func migrateExportTemplateNames(db *sql.DB) {
-	var one int
-	if db.QueryRow(`SELECT 1 FROM export_templates WHERE name=?`, legacyExportTemplate).Scan(&one) != nil {
-		return // nothing to migrate
+	for _, old := range []string{legacyExportTemplate, legacyExportTemplateName} {
+		_ = RenameExportTemplate(db, old, DefaultExportTemplate)
 	}
-	// Do not clobber an existing template that already uses the new name.
-	if db.QueryRow(`SELECT 1 FROM export_templates WHERE name=?`, DefaultExportTemplate).Scan(&one) == nil {
-		return
-	}
-	_, _ = db.Exec(`UPDATE export_templates SET name=? WHERE name=?`, DefaultExportTemplate, legacyExportTemplate)
 }
 
-// migratePromptNames renames the legacy "phase2" pair prompt to the descriptive
-// default name, preserving any user edits and their stored process output.
+// migratePromptNames renames the legacy pair prompt names ("phase2" and the old
+// descriptive name) to the current built-in name, preserving any user edits and
+// their stored process output.
 func migratePromptNames(db *sql.DB) {
-	var one int
-	if db.QueryRow(`SELECT 1 FROM prompts WHERE name=?`, "phase2").Scan(&one) != nil {
-		return // nothing to migrate
+	for _, old := range []string{"phase2", legacyPairPromptName} {
+		_ = RenamePrompt(db, old, DefaultPairPrompt)
 	}
-	// Do not clobber an existing prompt that already uses the new name.
-	if db.QueryRow(`SELECT 1 FROM prompts WHERE name=?`, DefaultPairPrompt).Scan(&one) == nil {
-		return
-	}
-	if _, err := db.Exec(`UPDATE prompts SET name=? WHERE name=?`, DefaultPairPrompt, "phase2"); err != nil {
-		return
-	}
-	_, _ = db.Exec(`UPDATE process_output SET process_name=? WHERE process_name=?`, DefaultPairPrompt, "phase2")
 }
 
 // legacyPlaceholder matches the old {KEY} form used by early prompt versions.
@@ -285,7 +294,8 @@ func migratePromptPlaceholders(db *sql.DB) {
 		"A_NAME": true, "A_CONTENT": true, "B_NAME": true, "B_CONTENT": true,
 		"frontmatter_block": true, "frontmatter": true, "body": true, "related": true,
 		"links": true, "tags": true, "tags_yaml": true, "tags_inline": true,
-		"name": true, "title": true, "path": true, "rdf": true,
+		"name": true, "title": true, "path": true, "rdf": true, "rdf_related": true,
+		"related_combined": true,
 	}
 	if cols, err := noteColumns(db); err == nil {
 		for _, c := range cols {
@@ -433,14 +443,27 @@ func migrateRDFPrompt(db *sql.DB) {
 // byte-for-byte (including notes without front matter or links).
 const DefaultExportTemplateBody = "${frontmatter_block}${body}${related}"
 
-// DefaultRDFExportTemplateBody renders the note's RDF facts as a Turtle code
-// block and includes the related-note links, so Obsidian's graph view can draw
-// edges between notes that share RDF entities.
-const DefaultRDFExportTemplateBody = "${frontmatter_block}## RDF triples\n\n```turtle\n${rdf}\n```\n${related}"
+// DefaultRDFExportTemplateBody keeps the original note text and renders the
+// note's RDF facts as a Turtle code block. It ends with the related-notes
+// section computed from shared RDF entities and predicates (${rdf_related}), so
+// Obsidian's graph view connects notes that talk about the same entity or use
+// the same predicate. Those links are derived from the fact tables, not from
+// the semantic pair process, so the RDF export is self-contained.
+const DefaultRDFExportTemplateBody = "${frontmatter_block}${body}## RDF triples\n\n```turtle\n${rdf}\n```\n${rdf_related}"
 
 // legacyRDFExportTemplateBody is the initial RDF template without related
 // links. It is upgraded automatically, while user edits are preserved.
 const legacyRDFExportTemplateBody = "${frontmatter_block}## RDF triples\n\n```turtle\n${rdf}\n```\n"
+
+// relatedRDFExportTemplateBody rendered only the DB links (${related}) and
+// dropped the note body. It is upgraded to the current template as well.
+const relatedRDFExportTemplateBody = "${frontmatter_block}## RDF triples\n\n```turtle\n${rdf}\n```\n${related}"
+
+// DefaultRDFPairExportTemplateBody is the third built-in template. It keeps the
+// note body, renders the RDF facts as Turtle, and ends with a single related
+// section (${related_combined}) that merges the semantic pair links with the
+// entity/predicate links derived from the RDF facts.
+const DefaultRDFPairExportTemplateBody = "${frontmatter_block}${body}## RDF triples\n\n```turtle\n${rdf}\n```\n${related_combined}"
 
 // seedExportTemplates makes sure the built-in export templates exist.
 func seedExportTemplates(db *sql.DB) {
@@ -448,14 +471,20 @@ func seedExportTemplates(db *sql.DB) {
 		DefaultExportTemplate, DefaultExportTemplateBody)
 	db.Exec(`INSERT OR IGNORE INTO export_templates(name, template) VALUES(?,?)`,
 		DefaultRDFExportTemplate, DefaultRDFExportTemplateBody)
+	db.Exec(`INSERT OR IGNORE INTO export_templates(name, template) VALUES(?,?)`,
+		DefaultRDFPairExportTemplate, DefaultRDFPairExportTemplateBody)
 }
 
-// migrateRDFExportTemplate adds related-note links to the built-in RDF export
-// template created by earlier versions. Templates edited by the user are left
-// untouched because the body must match the old built-in exactly.
+// migrateRDFExportTemplate upgrades the built-in RDF export template created by
+// earlier versions to the current one (note body + fact-derived links). Both the
+// very first version and the ${related} version are upgraded; templates edited
+// by the user are left untouched because the body must match an old built-in
+// exactly.
 func migrateRDFExportTemplate(db *sql.DB) {
-	_, _ = db.Exec(`UPDATE export_templates SET template=? WHERE name=? AND template=?`,
-		DefaultRDFExportTemplateBody, DefaultRDFExportTemplate, legacyRDFExportTemplateBody)
+	for _, old := range []string{legacyRDFExportTemplateBody, relatedRDFExportTemplateBody} {
+		_, _ = db.Exec(`UPDATE export_templates SET template=? WHERE name=? AND template=?`,
+			DefaultRDFExportTemplateBody, DefaultRDFExportTemplate, old)
+	}
 }
 
 // guessPromptType returns a prompt type based on naming conventions.

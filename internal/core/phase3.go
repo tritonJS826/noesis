@@ -154,6 +154,18 @@ func renderExport(db *sql.DB, templateName string, id int64, path, content, link
 	vars = mergeVars(vars, noteDBVars(db, "db", id))
 	// ${rdf} renders the note's facts from the normalized RDF tables.
 	vars["rdf"] = rdfForNote(db, id)
+	// ${rdf_related} lists the other notes that share an entity or a predicate
+	// with this one. It is computed from the fact tables so the RDF export does
+	// not depend on the semantic links stored by the pair process. Only compute
+	// it when the selected template actually uses it.
+	if strings.Contains(tmpl, "${rdf_related}") {
+		vars["rdf_related"] = rdfRelatedBlock(db, id)
+	}
+	// ${related_combined} merges the semantic pair links with the RDF-derived
+	// links into one section (the third built-in export template uses it).
+	if strings.Contains(tmpl, "${related_combined}") {
+		vars["related_combined"] = combinedRelatedBlock(linksMD, rdfRelatedLines(db, id))
+	}
 	return expandPrompt(tmpl, vars)
 }
 
@@ -162,7 +174,8 @@ func renderExport(db *sql.DB, templateName string, id int64, path, content, link
 // every imported file is written as a .md note. Custom templates keep the
 // original relative path.
 func isMarkdownExport(templateName string) bool {
-	return templateName == "" || templateName == DefaultExportTemplate || templateName == DefaultRDFExportTemplate
+	return templateName == "" || templateName == DefaultExportTemplate ||
+		templateName == DefaultRDFExportTemplate || templateName == DefaultRDFPairExportTemplate
 }
 
 // exportPath returns the destination path for one note. The built-in Markdown

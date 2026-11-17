@@ -16,7 +16,7 @@ func TestAppSettingsDefaults(t *testing.T) {
 	if want.MaxChars != 400000 || want.Workers != 2 {
 		t.Fatalf("unexpected new defaults: maxchars=%d workers=%d", want.MaxChars, want.Workers)
 	}
-	if want.AudioEngine != AudioEngineWhisper || want.WhisperModel != DefaultWhisperModel || want.SpeechLanguage != DefaultSpeechLanguage {
+	if want.AudioEngine != AudioEngineWhisper || want.WhisperModel != DefaultWhisperModel {
 		t.Fatalf("unexpected audio defaults: %#v", want)
 	}
 }
@@ -31,10 +31,8 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 	custom.Model = "vision-model"
 	custom.VisionModel = "img-model"
 	custom.TranscribeModel = "whisper-large"
-	custom.AudioEngine = AudioEngineGoogle
+	custom.AudioEngine = AudioEngineOllama
 	custom.WhisperModel = "small"
-	custom.GoogleAPIKey = "test-key"
-	custom.SpeechLanguage = "en-US"
 	custom.MaxChars = 12345
 	custom.Workers = 7
 	if err := custom.Save(db); err != nil {
@@ -50,8 +48,8 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM settings`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
-	if rows != 12 {
-		t.Fatalf("got %d saved settings, want 12", rows)
+	if rows != 10 {
+		t.Fatalf("got %d saved settings, want 10", rows)
 	}
 }
 

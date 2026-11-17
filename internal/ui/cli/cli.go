@@ -42,12 +42,10 @@ func Run(args []string) error {
 	visionModel := fs.String("vision-model", def.VisionModel, "ollama vision model for images (empty uses -model)")
 	embeddingModel := fs.String("embedding-model", def.EmbeddingModel, "ollama embedding model for the RAG index")
 	transcribeModel := fs.String("transcribe-model", def.TranscribeModel, "legacy ollama audio transcription model")
-	audioEngine := fs.String("audio", def.AudioEngine, "audio backend: whisper, google or ollama (legacy)")
+	audioEngine := fs.String("audio", def.AudioEngine, "audio backend: whisper or ollama (legacy)")
 	whisperModel := fs.String("whisper-model", def.WhisperModel, "whisper.cpp model; download it first in the TUI/GUI settings")
 	whisperBackend := fs.String("whisper-backend", def.WhisperBackend, "whisper GPU backend: auto, cpu or vulkan")
 	whisperDevice := fs.Int("whisper-device", def.WhisperDevice, "Vulkan device index (0 = default adapter)")
-	googleKey := fs.String("google-key", def.GoogleAPIKey, "Google Speech-to-Text API key (requires ffmpeg)")
-	speechLanguage := fs.String("speech-language", def.SpeechLanguage, "language code for Google transcription, e.g. ru-RU")
 	binaryStorage := fs.String("binary-storage", def.BinaryStorage, "binary storage: links (default, smaller db) or db (base64)")
 	maxChars := fs.Int("maxchars", def.MaxChars, "max characters per note sent to ollama")
 	workers := fs.Int("workers", def.Workers, "concurrent ollama requests (1-100)")
@@ -70,6 +68,8 @@ func Run(args []string) error {
 	ragAsk := fs.Bool("rag-ask", false, "with -rag-search: also answer the question with the chat model")
 	ragTopK := fs.Int("rag-topk", core.DefaultRAGTopK(), "number of RAG chunks to retrieve")
 	assumeYes := fs.Bool("yes", false, "auto-approve prompts, e.g. downloading a missing ollama model (default asks)")
+	syncDiff := fs.Bool("sync-diff", false, "compare the source folder with the db and print new/deleted/changed files, then exit")
+	clearDeprecated := fs.Bool("clear-deprecated", false, "refresh changed files from disk and clear their derived metadata (RAG chunks, RDF triples, tags, summaries), then exit")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -135,12 +135,6 @@ func Run(args []string) error {
 	if !seen["whisper-device"] {
 		*whisperDevice = saved.WhisperDevice
 	}
-	if !seen["google-key"] {
-		*googleKey = saved.GoogleAPIKey
-	}
-	if !seen["speech-language"] {
-		*speechLanguage = saved.SpeechLanguage
-	}
 	if !seen["binary-storage"] {
 		*binaryStorage = saved.BinaryStorage
 	}
@@ -164,8 +158,6 @@ func Run(args []string) error {
 		WhisperModel:    core.NormalizeWhisperModel(*whisperModel),
 		WhisperBackend:  core.NormalizeWhisperBackend(*whisperBackend),
 		WhisperDevice:   *whisperDevice,
-		GoogleAPIKey:    *googleKey,
-		SpeechLanguage:  core.NormalizeSpeechLanguage(*speechLanguage),
 		BinaryStorage:   core.NormalizeBinaryStorage(*binaryStorage),
 		MaxChars:        *maxChars,
 		Workers:         *workers,
@@ -182,6 +174,49 @@ func Run(args []string) error {
 	switch {
 	case *statsOnly:
 		printFormatStats(db)
+		return nil
+
+	case *syncDiff:
+		items, err := core.SyncDiff(db, *src, syncFormats(db, *format), core.SkipDirPatterns(*skipDirs))
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			fmt.Println("everything is in sync — no differences")
+			return nil
+		}
+		for _, it := range items {
+			switch {
+			case it.Deleted:
+				fmt.Printf("− deleted  %s\n", it.Path)
+			case it.Changed:
+				fmt.Printf("~ changed  %s\n", it.Path)
+			default:
+				fmt.Printf("+ new      %s\n", it.Path)
+			}
+		}
+		return nil
+
+	case *clearDeprecated:
+		items, err := core.SyncDiff(db, *src, syncFormats(db, *format), core.SkipDirPatterns(*skipDirs))
+		if err != nil {
+			return err
+		}
+		var ids []int64
+		for _, it := range items {
+			if it.Changed && it.ID != 0 {
+				ids = append(ids, it.ID)
+			}
+		}
+		if len(ids) == 0 {
+			fmt.Println("no changed files — nothing to clear")
+			return nil
+		}
+		changed, err := core.SyncApplyChanged(db, ids, cfg.BinaryStorage)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("cleared deprecated metadata for %d changed file(s)\n", changed)
 		return nil
 
 	case *removePath != "":
@@ -206,8 +241,6 @@ func Run(args []string) error {
 			WhisperModel:   cfg.WhisperModel,
 			WhisperBackend: cfg.WhisperBackend,
 			WhisperDevice:  cfg.WhisperDevice,
-			GoogleAPIKey:   cfg.GoogleAPIKey,
-			SpeechLanguage: cfg.SpeechLanguage,
 			OllamaHost:     cfg.Host,
 			OllamaModel:    cfg.TranscribeModel,
 		}
@@ -336,6 +369,15 @@ func parseFormats(s string) core.FormatSet {
 		}
 	}
 	return fs
+}
+
+// syncFormats returns the format set used by the sync commands: the explicit
+// -format list when given, otherwise the formats saved by the TUI/GUI.
+func syncFormats(db *sql.DB, formatFlag string) core.FormatSet {
+	if strings.TrimSpace(formatFlag) != "" {
+		return parseFormats(formatFlag)
+	}
+	return core.SavedImportFormats(db)
 }
 
 func isAllPhase(s string) bool {

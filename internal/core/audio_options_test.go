@@ -11,10 +11,10 @@ import (
 func TestAudioEngineOptions(t *testing.T) {
 	ids := AudioEngineIDs()
 	labels := AudioEngineLabels()
-	if len(ids) != len(labels) || len(ids) < 2 {
+	if len(ids) != len(labels) || len(ids) < 1 {
 		t.Fatalf("bad audio engine options: %v / %v", ids, labels)
 	}
-	if ids[0] != AudioEngineWhisper || ids[1] != AudioEngineGoogle {
+	if ids[0] != AudioEngineWhisper {
 		t.Fatalf("unexpected engine order: %v", ids)
 	}
 	for i, id := range ids {
@@ -31,28 +31,8 @@ func TestAudioEngineOptions(t *testing.T) {
 	if got := NormalizeAudioEngine("legacy"); got != AudioEngineOllama {
 		t.Fatalf("legacy engine = %q", got)
 	}
-	if got := AudioEngineLabel(AudioEngineGoogle); got == "" || got == AudioEngineGoogle {
-		t.Fatalf("unexpected google label %q", got)
-	}
-}
-
-func TestSpeechLanguageOptions(t *testing.T) {
-	codes := SpeechLanguageCodes()
-	labels := SpeechLanguageLabels()
-	if len(codes) != len(labels) || len(codes) < 2 {
-		t.Fatalf("bad language options: %v / %v", codes, labels)
-	}
-	if got := NormalizeSpeechLanguage("ru-RU"); got != "ru-RU" {
-		t.Fatalf("ru-RU = %q", got)
-	}
-	if got := NormalizeSpeechLanguage("Russian"); got != "ru-RU" {
-		t.Fatalf("Russian = %q", got)
-	}
-	if got := NormalizeSpeechLanguage("ru"); got != "ru-RU" {
-		t.Fatalf("ru = %q", got)
-	}
-	if got := NormalizeSpeechLanguage(""); got != DefaultSpeechLanguage {
-		t.Fatalf("empty language = %q", got)
+	if got := AudioEngineLabel(AudioEngineOllama); got == "" {
+		t.Fatalf("unexpected ollama label %q", got)
 	}
 }
 
@@ -160,28 +140,11 @@ func TestTranscribeWhisperMissingModel(t *testing.T) {
 	}
 }
 
-func TestGoogleTranscriptionRequiresKey(t *testing.T) {
-	t.Setenv("GOOGLE_API_KEY", "")
-	_, _, err := TranscribeGoogle(t.Context(), "", "ru-RU", "test.wav", []byte("RIFF"))
-	if err == nil {
-		t.Fatal("expected an API key error")
-	}
-	if !strings.Contains(err.Error(), "console.cloud.google.com") {
-		t.Fatalf("API key error should link to Google Cloud Console: %v", err)
-	}
-}
-
 func TestAudioHelpIncludesInstallLinks(t *testing.T) {
 	if !strings.Contains(FFmpegInstallInstructions(), "https://") {
 		t.Fatalf("ffmpeg instructions missing link: %s", FFmpegInstallInstructions())
 	}
 	if !strings.Contains(WhisperRuntimeInstallInstructions(), "whisper.cpp") {
 		t.Fatalf("whisper instructions missing link: %s", WhisperRuntimeInstallInstructions())
-	}
-	if !strings.Contains(GoogleAPIKeyInstructions(), "console.cloud.google.com") {
-		t.Fatalf("Google instructions missing link: %s", GoogleAPIKeyInstructions())
-	}
-	if !strings.Contains(GoogleSpeechEnableInstructions(), "console.cloud.google.com") {
-		t.Fatalf("Google enable instructions missing link: %s", GoogleSpeechEnableInstructions())
 	}
 }

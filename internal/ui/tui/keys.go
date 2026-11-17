@@ -257,6 +257,9 @@ func (m *model) syncKeys(msg tea.KeyMsg) tea.Cmd {
 		if m.syncSource == core.SourceFilesystem {
 			return m.runSyncDiff()
 		}
+	case "c", "C":
+		// Remove deprecated metadata for every changed file.
+		return m.clearChangedMetadata()
 	case "esc", "h", "q":
 		m.syncItems = nil
 		m.syncChecked = nil
@@ -281,7 +284,13 @@ type syncDiffMsg struct {
 type syncApplyMsg struct {
 	removed  int
 	imported int
+	changed  int
 	err      error
+}
+
+type syncClearMsg struct {
+	changed int
+	err     error
 }
 
 func (m *model) applySync() tea.Cmd {
@@ -290,21 +299,28 @@ func (m *model) applySync() tea.Cmd {
 	}
 	var removeIDs []int64
 	var newPaths []string
+	var changedIDs []int64
 	for _, it := range m.syncItems {
 		key := syncItemKey(it)
 		if !m.syncChecked[key] {
 			continue
 		}
-		if it.Deleted {
-			if id := core.SyncNoteIDByPath(m.db, it.Path); id != 0 {
+		switch {
+		case it.Deleted:
+			if it.ID != 0 {
+				removeIDs = append(removeIDs, it.ID)
+			} else if id := core.SyncNoteIDByPath(m.db, it.Path); id != 0 {
 				removeIDs = append(removeIDs, id)
 			}
-		}
-		if it.NewFile {
+		case it.NewFile:
 			newPaths = append(newPaths, it.Abs)
+		case it.Changed:
+			if it.ID != 0 {
+				changedIDs = append(changedIDs, it.ID)
+			}
 		}
 	}
-	if len(removeIDs) == 0 && len(newPaths) == 0 {
+	if len(removeIDs) == 0 && len(newPaths) == 0 && len(changedIDs) == 0 {
 		return nil
 	}
 	m.screen = scrRunning
@@ -319,7 +335,35 @@ func (m *model) applySync() tea.Cmd {
 			BinaryStorage: m.binaryStorage,
 		}
 		removed, imported, err := core.SyncApply(m.db, m.src, removeIDs, newPaths, opts)
-		return syncApplyMsg{removed, imported, err}
+		changed := 0
+		if err == nil && len(changedIDs) > 0 {
+			changed, err = core.SyncApplyChanged(m.db, changedIDs, m.binaryStorage)
+		}
+		return syncApplyMsg{removed, imported, changed, err}
+	}
+}
+
+// clearChangedMetadata is the "remove all deprecated metadata for changed
+// files" action: it refreshes every changed note from disk and drops its
+// derived data (RAG chunks, RDF triples, tags, summaries) so the processes
+// regenerate it.
+func (m *model) clearChangedMetadata() tea.Cmd {
+	var ids []int64
+	for _, it := range m.syncItems {
+		if it.Changed && it.ID != 0 {
+			ids = append(ids, it.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	m.screen = scrRunning
+	m.phaseErr = nil
+	return func() tea.Msg {
+		m.program.ReleaseTerminal()
+		defer m.program.RestoreTerminal()
+		changed, err := core.SyncApplyChanged(m.db, ids, m.binaryStorage)
+		return syncClearMsg{changed: changed, err: err}
 	}
 }
 
@@ -387,9 +431,20 @@ func (m *model) toggleFormat(ext string) {
 
 // ─── work with data submenu ────────────────────────────────────────────────
 
-const dataItems = 4 // 0..4
+const (
+	dataBrowse = iota
+	dataCompare
+	dataExtract
+	dataRAG
+	dataEval
+	dataEditEvalPrompt
+	dataItems = dataEditEvalPrompt // last selectable row index
+)
 
 func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
+	if m.promptViewing != "" {
+		return m.promptKeys(msg)
+	}
 	switch vimNav(msg.String()) {
 	case "up":
 		if m.dataCursor > 0 {
@@ -401,20 +456,22 @@ func (m *model) dataKeys(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "enter":
 		switch m.dataCursor {
-		case 0: // browse database
+		case dataBrowse: // browse database
 			m.openBrowse()
-		case 1: // compare file — file system search
+		case dataCompare: // compare file — file system search
 			m.screen = scrFsSearch
 			m.fsFilter = ""
 			m.fsFiles = nil
 			m.cursor = 0
 			m.filterTyping = false
-		case 2: // re-extract documents, images & transcribe audio
+		case dataExtract: // re-extract documents, images & transcribe audio
 			m.openExtract()
-		case 3: // semantic (RAG) search
+		case dataRAG: // semantic (RAG) search
 			m.openRAGSearch()
-		case 4: // evaluate note uniqueness — pick a note.
-			m.openFilePickerFrom(scrData, 4)
+		case dataEval: // evaluate note uniqueness — pick a note.
+			m.openFilePickerFrom(scrData, dataEval)
+		case dataEditEvalPrompt: // edit the evaluation prompt
+			m.openEvalPrompt()
 		}
 	case "esc", "q":
 		m.screen = scrMenu
@@ -1087,14 +1144,11 @@ const (
 	setWhisper
 	setWhisperGPU
 	setWhisperDevice
-	setGoogle
-	setLang
 	setHost
 	setMaxChars
 	setWorkers
 	setSkipDirs
 	setBinary
-	setEvalPrompt
 	setClearRAG
 	setReset
 )
@@ -1124,9 +1178,6 @@ func (m *model) settingsKeys(msg tea.KeyMsg) tea.Cmd {
 			m.confirmClearRAG = false
 		}
 		return nil
-	}
-	if m.promptViewing != "" {
-		return m.promptKeys(msg)
 	}
 	max := setReset
 	switch vimNav(msg.String()) {
@@ -1242,8 +1293,6 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 			switch m.pickerKind {
 			case "audio":
 				m.audioEngine = core.NormalizeAudioEngine(value)
-			case "language":
-				m.speechLanguage = core.NormalizeSpeechLanguage(value)
 			case "binary":
 				m.binaryStorage = core.NormalizeBinaryStorage(value)
 			case "whisper_gpu":
@@ -1257,10 +1306,8 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor = setAudio
 		case "binary":
 			m.cursor = setBinary
-		case "whisper_gpu":
-			m.cursor = setWhisperGPU
 		default:
-			m.cursor = setLang
+			m.cursor = setWhisperGPU
 		}
 	case "esc":
 		m.screen = scrSettings
@@ -1269,10 +1316,8 @@ func (m *model) optionPickerKeys(msg tea.KeyMsg) tea.Cmd {
 			m.cursor = setAudio
 		case "binary":
 			m.cursor = setBinary
-		case "whisper_gpu":
-			m.cursor = setWhisperGPU
 		default:
-			m.cursor = setLang
+			m.cursor = setWhisperGPU
 		}
 	case "?":
 		if m.pickerKind == "audio" {
@@ -1473,14 +1518,6 @@ func (m *model) startEdit() {
 		m.textInput.SetValue(fmt.Sprintf("%d", m.whisperDevice))
 		m.textInput.Focus()
 		m.editingField = "VULKAN DEVICE — device index (0 = default)"
-	case setGoogle:
-		m.textInput.SetValue(m.googleAPIKey)
-		m.textInput.EchoMode = textinput.EchoPassword
-		m.textInput.Focus()
-		m.editingField = "GOOGLE API KEY — stored in the database"
-	case setLang:
-		m.openOptionPicker("language", core.SpeechLanguageCodes(), core.SpeechLanguageLabels(), m.speechLanguage)
-		return
 	case setHost:
 		m.textInput.SetValue(m.host)
 		m.textInput.Focus()
@@ -1499,9 +1536,6 @@ func (m *model) startEdit() {
 		m.editingField = "SKIP DIRS — comma-separated names/globs, e.g. .private,node_modules (empty = none)"
 	case setBinary:
 		m.openOptionPicker("binary", core.BinaryStorageIDs(), core.BinaryStorageLabels(), m.binaryStorage)
-		return
-	case setEvalPrompt:
-		m.openEvalPrompt()
 		return
 	}
 }
@@ -1609,8 +1643,6 @@ func (m *model) saveField() {
 		m.visionModel = val
 	case setEmbedding:
 		m.embeddingModel = core.NormalizeEmbeddingModel(val)
-	case setGoogle:
-		m.googleAPIKey = val
 	case setHost:
 		m.host = val
 	case setMaxChars:
@@ -1634,7 +1666,11 @@ func (m *model) saveField() {
 	m.persistSettings()
 }
 
+// openEvalPrompt opens the evaluation prompt editor from the "Work with data"
+// submenu, right next to the "Evaluate note uniqueness" action that uses it.
 func (m *model) openEvalPrompt() {
+	m.promptReturn = scrData
+	m.promptReturnCursor = dataEditEvalPrompt
 	m.promptViewing = "eval"
 	m.promptText = core.LoadPrompt(m.db, m.promptViewing)
 	m.cursor = 0
@@ -1651,7 +1687,10 @@ func (m *model) promptKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.promptViewing = ""
 		m.promptText = ""
-		m.cursor = setEvalPrompt
+		if m.promptReturn != 0 || m.promptReturnCursor != 0 {
+			m.screen = m.promptReturn
+			m.cursor = m.promptReturnCursor
+		}
 	}
 	return nil
 }

@@ -245,6 +245,9 @@ func (s *state) syncScreen() fyne.CanvasObject {
 		if it.Deleted {
 			prefix = "− "
 			labelText = "DELETED: " + it.Name
+		} else if it.Changed {
+			prefix = "~ "
+			labelText = "CHANGED: " + it.Name
 		}
 		check := widget.NewCheck(prefix+" "+labelText, func(on bool) {
 			s.syncChecked[key] = on
@@ -259,9 +262,10 @@ func (s *state) syncScreen() fyne.CanvasObject {
 	status := widget.NewLabel(fmt.Sprintf("%d differences — check the ones you want to process.", len(s.syncItems)))
 	bottom := container.NewVBox(
 		status,
-		widget.NewLabel("Checked deleted files will be removed from the database. New files will be imported."),
+		widget.NewLabel("Deleted files are removed. New files are imported. Changed files are refreshed and their derived metadata (RAG chunks, RDF triples, summaries) is cleared."),
 		container.NewHBox(
 			widget.NewButton("Apply", func() { go s.applySync() }),
+			widget.NewButton("Remove deprecated metadata (changed)", func() { go s.clearChangedMetadata() }),
 			widget.NewButton("Select all / none", func() {
 				all := true
 				for _, it := range s.syncItems {
@@ -287,10 +291,14 @@ func (s *state) syncScreen() fyne.CanvasObject {
 }
 
 func syncItemGUIKey(it core.SyncItem) string {
-	if it.Deleted {
+	switch {
+	case it.Deleted:
 		return "del:" + it.Path
+	case it.Changed:
+		return "chg:" + it.Path
+	default:
+		return "new:" + it.Path
 	}
-	return "new:" + it.Path
 }
 
 func (s *state) formatsSummary() string {
@@ -391,6 +399,7 @@ func (s *state) dataScreen() fyne.CanvasObject {
 		"Re-extract documents, images & transcribe audio",
 		"Search RAG (semantic)",
 		"★ Evaluate note uniqueness",
+		"Edit evaluation prompt",
 	}
 	list := widget.NewList(
 		func() int { return len(items) },
@@ -409,6 +418,8 @@ func (s *state) dataScreen() fyne.CanvasObject {
 			s.openRAGSearch()
 		case 4:
 			s.openNotes(noteEval, scrData)
+		case 5:
+			s.openPrompt("eval", scrData)
 		}
 	}
 
@@ -1031,19 +1042,17 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		widget.NewFormItem("WHISPER MODEL", whisperRow),
 		widget.NewFormItem("WHISPER GPU", s.whisperBackend),
 		widget.NewFormItem("GPU DEVICE", s.whisperDevice),
-		widget.NewFormItem("GOOGLE API KEY", s.googleKey),
-		widget.NewFormItem("SPEECH LANGUAGE", s.speechLanguage),
 		widget.NewFormItem("HOST", s.host),
 		widget.NewFormItem("MAXCHARS", s.maxChars),
 		widget.NewFormItem("WORKERS", s.workers),
 		widget.NewFormItem("SKIP DIRS", s.skipDirs),
 	)
 
-	audioHint := wrappedLabel("Local Whisper runs offline after downloading a model and auto-detects the language. GPU acceleration is automatic: noesis uses Vulkan when your graphics driver supports it (Linux/Windows), Apple Metal on macOS, and falls back to the CPU otherwise — no extra setup. Google Speech-to-Text needs an API key (stored in the database) and ffmpeg.")
+	audioHint := wrappedLabel("Local Whisper runs offline after downloading a model and auto-detects the language. GPU acceleration is automatic: noesis uses Vulkan when your graphics driver supports it (Linux/Windows), Apple Metal on macOS, and falls back to the CPU otherwise — no extra setup.")
 	ffmpegHelp := fyne.CanvasObject(wrappedLabel("ffmpeg: installed."))
 	if !core.FFmpegAvailable() {
 		ffmpegHelp = container.NewVBox(
-			wrappedLabel("ffmpeg: not found — it is needed for Google and some audio formats."),
+			wrappedLabel("ffmpeg: not found — it is needed for some audio formats."),
 			docsLink("Install ffmpeg", core.FFmpegDownloadURL),
 			wrappedLabel(core.FFmpegInstallExample()),
 		)
@@ -1056,14 +1065,7 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 			docsLink("whisper.cpp project", core.WhisperCPPBuildURL),
 			docsLink("Homebrew formula (macOS)", core.WhisperCPPHomebrewURL),
 		),
-		widget.NewSeparator(),
-		wrappedLabel("Google Speech-to-Text: enable the API (billing required), create an API key, then install ffmpeg. Choose a specific language; Google handles about one minute per file."),
-		container.NewHBox(
-			docsLink("Enable Speech-to-Text", core.GoogleSpeechEnableURL),
-			docsLink("Create API key", core.GoogleCredentialsURL),
-		),
 		ffmpegHelp,
-		docsLink("Speech-to-Text documentation", core.GoogleSpeechDocsURL),
 	)
 
 	reset := widget.NewButton("Reset database", s.confirmReset)
@@ -1081,9 +1083,6 @@ func (s *state) settingsScreen() fyne.CanvasObject {
 		audioHelp,
 		widget.NewSeparator(),
 		widget.NewLabel(s.ollamaStatus),
-		widget.NewButton("Edit eval prompt…", func() {
-			s.openPrompt("eval", scrSettings)
-		}),
 		clearRAG,
 		reset,
 	))

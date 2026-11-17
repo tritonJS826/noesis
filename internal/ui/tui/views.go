@@ -114,7 +114,6 @@ func (m *model) viewMenu() string {
 		tuiLabel("MODEL", m.modelName),
 		tuiLabel("AUDIO", core.AudioEngineLabel(m.audioEngine)),
 		tuiLabel("WHISPER", m.whisperSummary()),
-		tuiLabel("LANG", core.SpeechLanguageLabel(m.speechLanguage)),
 		tuiLabel("HOST", m.host),
 		fmt.Sprintf("MAXCHARS: %d", m.maxChars),
 		fmt.Sprintf("WORKERS: %d", m.workers),
@@ -143,14 +142,15 @@ func (m *model) viewMenu() string {
 	}
 	formatLines := formatStatsLines(core.LoadFormatStats(m.db), cw)
 
-	// ── ollama ──
+	// ── ollama: connection status only, models are not listed here ──
 	var ollamaLine string
-	if !m.ollamaReady {
+	switch {
+	case !m.ollamaReady:
 		ollamaLine = tuiDim.Render("… checking ollama …")
-	} else if m.ollamaOK && len(m.ollamaModels) > 0 {
-		ollamaLine = tuiGreen.Render("ollama ✓") + "  " + strings.Join(m.ollamaModels, ", ")
-	} else {
-		ollamaLine = tuiRed.Render("ollama ✗ ") + m.ollamaErr + tuiDim.Render("  (start ollama serve)")
+	case m.ollamaOK:
+		ollamaLine = tuiGreen.Render("ollama ✓ connected")
+	default:
+		ollamaLine = tuiRed.Render("ollama ✗ not connected") + tuiDim.Render("  (start ollama serve)")
 	}
 	ollamaLine = lipgloss.NewStyle().Width(cw).Render(ollamaLine)
 
@@ -173,33 +173,42 @@ func (m *model) viewMenu() string {
 		footer = "y — delete all  ·  any other key — cancel"
 	}
 
-	sep := func(title string) string {
-		return lipgloss.NewStyle().Width(cw).Border(
-			lipgloss.Border{Bottom: "─"}, false, false, true, false,
-		).Render(title)
-	}
+	// A plain rule line: no extra blank line above it, unlike a lipgloss
+	// border with empty content (which rendered a blank line + the rule).
+	rule := tuiDim.Width(cw).Render(strings.Repeat("─", cw))
 
 	var parts []string
 	parts = append(parts, lipgloss.JoinVertical(lipgloss.Left, phaseLines...))
-	parts = append(parts, sep(""))
+	parts = append(parts, rule)
 	parts = append(parts, settingPairs...)
-	parts = append(parts, sep("Status"))
+	// Connection status sits with the settings block, not at the bottom.
+	parts = append(parts, ollamaLine)
+	parts = append(parts, rule)
 	for _, sl := range statsLines {
 		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(sl))
 	}
-	parts = append(parts, sep("Formats"))
 	if len(formatLines) == 0 {
 		parts = append(parts, tuiDim.Width(cw).Render("no files imported yet"))
 	}
-	for _, fl := range formatLines {
-		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(fl))
+	// Cap the table so the home menu stays compact; the full list is not
+	// essential here.
+	const maxFormatRows = 8
+	shown := formatLines
+	if len(shown) > maxFormatRows {
+		shown = append(append([]string{}, shown[:maxFormatRows]...),
+			fmt.Sprintf("… +%d more formats", len(formatLines)-maxFormatRows))
 	}
-	parts = append(parts, sep(""))
-	parts = append(parts, ollamaLine)
+	for i, fl := range shown {
+		style := lipgloss.NewStyle().Width(cw)
+		if i == 0 {
+			style = style.Bold(true)
+		}
+		parts = append(parts, style.Render(fl))
+	}
 	for _, msg := range messages {
 		parts = append(parts, lipgloss.NewStyle().Width(cw).Render(msg))
 	}
-	parts = append(parts, sep(""))
+	parts = append(parts, rule)
 	parts = append(parts, tuiDim.Width(cw).Render(footer))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -298,7 +307,7 @@ func (m *model) viewSync() string {
 	// Show diff results if available (folder source only).
 	if len(m.syncItems) > 0 {
 		lines = append(lines, tuiDim.Width(cw).Render(fmt.Sprintf("%d differences found", len(m.syncItems))))
-		lines = append(lines, tuiDim.Width(cw).Render("space toggle selected  ·  a select/unselect all  ·  enter apply"))
+		lines = append(lines, tuiDim.Width(cw).Render("space toggle  ·  a all/none  ·  enter apply  ·  c clear metadata of changed"))
 		lines = append(lines, "")
 		const listHeader, listFooter = 3, 2 // header lines above, blank+hint below
 
@@ -339,6 +348,8 @@ func (m *model) viewSync() string {
 			prefix := "+"
 			if it.Deleted {
 				prefix = tuiRed.Render("−")
+			} else if it.Changed {
+				prefix = tuiYel.Render("~")
 			}
 			name := it.Name
 			rs := []rune(name)
@@ -349,7 +360,7 @@ func (m *model) viewSync() string {
 			lines = append(lines, lipgloss.NewStyle().MaxWidth(cw).Render(line))
 		}
 		lines = append(lines, "")
-		hint := fmt.Sprintf("%s   ↑↓/jk move  ·  space/s toggle  ·  a all  ·  enter apply  ·  h/ESC back",
+		hint := fmt.Sprintf("%s   ↑↓/jk move  ·  space/s toggle  ·  a all  ·  enter apply  ·  c clear changed  ·  h/ESC back",
 			scrollHint(start, end, len(m.syncItems)))
 		lines = append(lines, tuiDim.MaxWidth(cw).Render(hint))
 	} else if m.syncChecked != nil {
@@ -367,10 +378,14 @@ func (m *model) viewSync() string {
 }
 
 func syncItemKey(it core.SyncItem) string {
-	if it.Deleted {
+	switch {
+	case it.Deleted:
 		return "del:" + it.Path
+	case it.Changed:
+		return "chg:" + it.Path
+	default:
+		return "new:" + it.Path
 	}
-	return "new:" + it.Path
 }
 
 func (m *model) viewFormats() string {
@@ -426,6 +441,9 @@ func (m *model) viewFormats() string {
 }
 
 func (m *model) viewData() string {
+	if m.promptViewing != "" {
+		return m.viewPromptSub()
+	}
 	w := m.width
 	cw := w - 4
 
@@ -435,6 +453,7 @@ func (m *model) viewData() string {
 		"Re-extract documents, images & transcribe audio",
 		"Search RAG (semantic)",
 		"★ Evaluate note uniqueness",
+		"Edit evaluation prompt",
 	}
 
 	var lines []string
@@ -984,9 +1003,6 @@ func (m *model) viewSettings() string {
 	if m.editingField != "" {
 		return m.viewTextEdit()
 	}
-	if m.promptViewing != "" {
-		return m.viewPromptSub()
-	}
 	if m.confirmReset {
 		return m.viewResetConfirm()
 	}
@@ -996,11 +1012,7 @@ func (m *model) viewSettings() string {
 	w := m.width
 	cw := w - 4
 
-	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "EMBEDDING MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "GOOGLE KEY", "LANG", "HOST", "MAXCHARS", "WORKERS", "SKIP DIRS", "BINARY STORAGE", "EVAL PROMPT", "Reset embeddings", "Reset database"}
-	googleKey := "(not set)"
-	if strings.TrimSpace(m.googleAPIKey) != "" {
-		googleKey = "(set)"
-	}
+	keys := []string{"SRC", "OUT", "DB", "MODEL", "VISION MODEL", "EMBEDDING MODEL", "AUDIO", "WHISPER", "WHISPER GPU", "VULKAN DEVICE", "HOST", "MAXCHARS", "WORKERS", "SKIP DIRS", "BINARY STORAGE", "Reset embeddings", "Reset database"}
 	vision := m.visionModel
 	if strings.TrimSpace(vision) == "" {
 		vision = "(= MODEL)"
@@ -1011,10 +1023,9 @@ func (m *model) viewSettings() string {
 	}
 	vals := []string{m.src, m.out, m.dbPath, m.modelName, vision, core.NormalizeEmbeddingModel(m.embeddingModel),
 		core.AudioEngineLabel(m.audioEngine), m.whisperSummary(),
-		core.WhisperBackendLabel(m.whisperBackend), fmt.Sprintf("%d", m.whisperDevice), googleKey,
-		core.SpeechLanguageLabel(m.speechLanguage), m.host,
+		core.WhisperBackendLabel(m.whisperBackend), fmt.Sprintf("%d", m.whisperDevice), m.host,
 		fmt.Sprintf("%d", m.maxChars), fmt.Sprintf("%d", m.workers), skipDirs,
-		core.BinaryStorageLabel(m.binaryStorage), "edit…", "clear…", ""}
+		core.BinaryStorageLabel(m.binaryStorage), "clear…", ""}
 
 	var lines []string
 	for i, k := range keys {
@@ -1474,6 +1485,7 @@ func (m *model) exportVarsHint() string {
 		"${frontmatter_block}", "${frontmatter}", "${body}", "${related}",
 		"${links}", "${tags}", "${tags_yaml}", "${tags_inline}",
 		"${name}", "${title}", "${path}", "${rdf}",
+		"${rdf_related}", "${related_combined}",
 	}
 	parts := append([]string{}, named...)
 	for _, c := range core.NotesColumns(m.db) {
@@ -1482,32 +1494,24 @@ func (m *model) exportVarsHint() string {
 	return strings.Join(parts, "  ")
 }
 
-// formatStatsLines packs the per-format import/extraction counters into lines
-// no wider than width, e.g. "3/20 .mp3 extracted  ·  89 .md ready".
+// formatStatsLines renders the per-format import/extraction counters as a
+// compact fixed-width table instead of a "·"-separated list.
 func formatStatsLines(stats []core.FormatStat, width int) []string {
 	if len(stats) == 0 {
 		return nil
 	}
-	entries := make([]string, len(stats))
-	for i, st := range stats {
-		entries[i] = st.Label()
+	const rowFmt = "%-10s %-9s %6s %6s %6s %6s"
+	lines := []string{fmt.Sprintf(rowFmt, "FORMAT", "KIND", "TOTAL", "READY", "EXTR", "FAIL")}
+	for _, st := range stats {
+		lines = append(lines, fmt.Sprintf(rowFmt,
+			st.Name(), st.Kind,
+			fmt.Sprintf("%d", st.Total), fmt.Sprintf("%d", st.Ready),
+			fmt.Sprintf("%d", st.Extracted), fmt.Sprintf("%d", st.Failed)))
 	}
-	var lines []string
-	line := ""
-	for _, e := range entries {
-		const sep = "  ·  "
-		switch {
-		case line == "":
-			line = e
-		case len([]rune(line))+len([]rune(sep))+len([]rune(e)) > width:
-			lines = append(lines, line)
-			line = e
-		default:
-			line += sep + e
+	for i, l := range lines {
+		if len([]rune(l)) > width && width > 0 {
+			lines[i] = string([]rune(l)[:width])
 		}
-	}
-	if line != "" {
-		lines = append(lines, line)
 	}
 	return lines
 }

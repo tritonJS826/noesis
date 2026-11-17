@@ -91,11 +91,16 @@ func TestPhase3RDFExportTemplate(t *testing.T) {
 	if strings.Contains(got, "n:Bob") {
 		t.Fatalf("RDF export included another note's fact:\n%s", got)
 	}
+	if !strings.Contains(got, "Original note") {
+		t.Fatalf("RDF export missing the note body:\n%s", got)
+	}
+	// Notes a and b share the entity Alice and the predicate mentions, so the
+	// export must link them and say why.
 	if !strings.Contains(got, "## Related notes") || !strings.Contains(got, "[[b]]") {
 		t.Fatalf("RDF export missing graph links:\n%s", got)
 	}
-	if strings.Contains(got, "Original note") {
-		t.Fatalf("RDF-only export included the note body:\n%s", got)
+	if !strings.Contains(got, "entity Alice") || !strings.Contains(got, "predicate mentions") {
+		t.Fatalf("RDF export relation does not name entity/predicate:\n%s", got)
 	}
 
 	// The second note has its own fact list (the Alice fact is shared through
@@ -110,6 +115,92 @@ func TestPhase3RDFExportTemplate(t *testing.T) {
 	}
 	if !strings.Contains(got, "[[a]]") {
 		t.Fatalf("second RDF export missing graph links:\n%s", got)
+	}
+}
+
+func TestPhase3RDFPairExportTemplate(t *testing.T) {
+	db := openTestDB(t)
+	a := insertNote(t, db) // dir/a.md
+	newNote := func(path, name string) int64 {
+		res, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+			VALUES(?,?,?,'world','text/markdown','Base text','2024-01-02')`, path, "/x/"+path, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	b := newNote("dir/b.md", "b.md")
+	c := newNote("dir/c.md", "c.md")
+	if _, err := db.Exec(`UPDATE notes SET markdown='Base text' WHERE id=?`, a); err != nil {
+		t.Fatal(err)
+	}
+
+	// RDF: a and b share the entity Alice. Pair: a and c are semantically linked.
+	rdf := "@prefix n: <note:> .\nn:this n:mentions n:Alice ."
+	if err := storeNoteRDF(db, a, rdf); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeNoteRDF(db, b, rdf); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range [][2]int64{{a, c}, {c, a}} {
+		if _, err := db.Exec(`INSERT INTO links(src_id, dst_id, reason) VALUES(?,?,?)`, p[0], p[1], "same theme"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rebuildLinksMD(db, a); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadExportTemplate(db, DefaultRDFPairExportTemplate); got != DefaultRDFPairExportTemplateBody {
+		t.Fatalf("combined template not seeded: %q", got)
+	}
+
+	out := t.TempDir()
+	if err := Phase3(context.Background(), NoopReporter{}, db, out, "", DefaultRDFPairExportTemplate); err != nil {
+		t.Fatalf("phase3: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(out, "dir", "a.md"))
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "Base text") {
+		t.Fatalf("combined export missing the note body:\n%s", got)
+	}
+	if !strings.Contains(got, rdf) {
+		t.Fatalf("combined export missing the triples:\n%s", got)
+	}
+	// Both the pair link (c) and the RDF link (b) must appear.
+	if !strings.Contains(got, "[[c]]") {
+		t.Fatalf("combined export missing the pair link:\n%s", got)
+	}
+	if !strings.Contains(got, "[[b]]") || !strings.Contains(got, "Alice") {
+		t.Fatalf("combined export missing the RDF link:\n%s", got)
+	}
+	if n := strings.Count(got, "## Related notes"); n != 1 {
+		t.Fatalf("expected one merged related section, got %d:\n%s", n, got)
+	}
+}
+
+func TestCombinedRelatedBlockMergesSources(t *testing.T) {
+	pair := "- [[b]] — same theme"
+	rdf := []string{
+		"- [[b]] — RDF shared: entity Alice",
+		"- [[c]] — RDF shared: predicate mentions",
+	}
+	got := combinedRelatedBlock(pair, rdf)
+	if n := strings.Count(got, "## Related notes"); n != 1 {
+		t.Fatalf("expected one section, got %d:\n%s", n, got)
+	}
+	if strings.Count(got, "[[b]]") != 1 {
+		t.Fatalf("duplicate link not merged:\n%s", got)
+	}
+	if !strings.Contains(got, "[[c]]") || !strings.Contains(got, "same theme") {
+		t.Fatalf("combined section lost a link:\n%s", got)
+	}
+	if empty := combinedRelatedBlock("", nil); empty != "" {
+		t.Fatalf("empty input should yield empty section, got %q", empty)
 	}
 }
 
@@ -145,12 +236,15 @@ func TestPhase3DefaultExportUsesRDFLinks(t *testing.T) {
 
 func TestMigrateRDFExportTemplate(t *testing.T) {
 	db := openTestDB(t)
-	if err := SaveExportTemplate(db, DefaultRDFExportTemplate, legacyRDFExportTemplateBody); err != nil {
-		t.Fatal(err)
-	}
-	migrateRDFExportTemplate(db)
-	if got := LoadExportTemplate(db, DefaultRDFExportTemplate); got != DefaultRDFExportTemplateBody {
-		t.Fatalf("RDF template was not upgraded: %q", got)
+	// Both older built-in versions are upgraded to the current template.
+	for _, old := range []string{legacyRDFExportTemplateBody, relatedRDFExportTemplateBody} {
+		if err := SaveExportTemplate(db, DefaultRDFExportTemplate, old); err != nil {
+			t.Fatal(err)
+		}
+		migrateRDFExportTemplate(db)
+		if got := LoadExportTemplate(db, DefaultRDFExportTemplate); got != DefaultRDFExportTemplateBody {
+			t.Fatalf("RDF template %q was not upgraded: %q", old, got)
+		}
 	}
 
 	custom := "custom ${rdf} ${related}"
@@ -164,20 +258,22 @@ func TestMigrateRDFExportTemplate(t *testing.T) {
 }
 
 func TestMigrateExportTemplateNames(t *testing.T) {
-	db := openTestDB(t)
-	if _, err := db.Exec(`DELETE FROM export_templates`); err != nil {
-		t.Fatal(err)
-	}
-	if err := SaveExportTemplate(db, legacyExportTemplate, "custom body"); err != nil {
-		t.Fatal(err)
-	}
+	for _, legacy := range []string{legacyExportTemplate, legacyExportTemplateName} {
+		db := openTestDB(t)
+		if _, err := db.Exec(`DELETE FROM export_templates`); err != nil {
+			t.Fatal(err)
+		}
+		if err := SaveExportTemplate(db, legacy, "custom body"); err != nil {
+			t.Fatal(err)
+		}
 
-	migrateExportTemplateNames(db)
+		migrateExportTemplateNames(db)
 
-	if LoadExportTemplate(db, legacyExportTemplate) != "" {
-		t.Fatal("legacy template still exists")
-	}
-	if got := LoadExportTemplate(db, DefaultExportTemplate); got != "custom body" {
-		t.Fatalf("template body was not preserved: %q", got)
+		if LoadExportTemplate(db, legacy) != "" {
+			t.Fatalf("legacy template %q still exists", legacy)
+		}
+		if got := LoadExportTemplate(db, DefaultExportTemplate); got != "custom body" {
+			t.Fatalf("template body was not preserved: %q", got)
+		}
 	}
 }

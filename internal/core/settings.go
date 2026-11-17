@@ -113,8 +113,6 @@ type AppSettings struct {
 	WhisperBackend  string
 	WhisperDevice   int
 	BinaryStorage   string
-	GoogleAPIKey    string
-	SpeechLanguage  string
 	MaxChars        int
 	Workers         int
 	RAGTopK         int
@@ -144,8 +142,6 @@ func DefaultAppSettings() AppSettings {
 		WhisperBackend:  c.WhisperBackend,
 		WhisperDevice:   c.WhisperDevice,
 		BinaryStorage:   c.BinaryStorage,
-		GoogleAPIKey:    c.GoogleAPIKey,
-		SpeechLanguage:  c.SpeechLanguage,
 		MaxChars:        c.MaxChars,
 		Workers:         c.Workers,
 		RAGTopK:         ragDefaultTopK,
@@ -204,12 +200,6 @@ func LoadAppSettings(db *sql.DB) AppSettings {
 	}
 	if v, ok := get("binary_storage"); ok {
 		s.BinaryStorage = NormalizeBinaryStorage(v)
-	}
-	if v, ok := get("google_api_key"); ok {
-		s.GoogleAPIKey = v
-	}
-	if v, ok := get("speech_language"); ok {
-		s.SpeechLanguage = NormalizeSpeechLanguage(v)
 	}
 	if v, ok := get("import_formats"); ok {
 		s.Formats = v
@@ -272,8 +262,6 @@ func (s AppSettings) Save(db *sql.DB) error {
 		{"whisper_backend", NormalizeWhisperBackend(s.WhisperBackend), NormalizeWhisperBackend(def.WhisperBackend)},
 		{"whisper_device", strconv.Itoa(s.WhisperDevice), strconv.Itoa(def.WhisperDevice)},
 		{"binary_storage", NormalizeBinaryStorage(s.BinaryStorage), def.BinaryStorage},
-		{"google_api_key", s.GoogleAPIKey, def.GoogleAPIKey},
-		{"speech_language", s.SpeechLanguage, def.SpeechLanguage},
 		{"import_formats", s.Formats, def.Formats},
 		{"skip_dirs", s.SkipDirs, def.SkipDirs},
 		{"maxchars", strconv.Itoa(s.MaxChars), strconv.Itoa(def.MaxChars)},

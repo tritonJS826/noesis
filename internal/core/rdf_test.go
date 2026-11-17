@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -139,6 +140,156 @@ func TestRunRDFProcessBuildsGraphLinks(t *testing.T) {
 	}
 	if links != 2 {
 		t.Fatalf("RDF process created %d graph links, want 2", links)
+	}
+}
+
+func TestRunRDFProcessSkipsNotesWithFacts(t *testing.T) {
+	db := openTestDB(t)
+	insertNote(t, db) // dir/a.md
+	res, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+		VALUES('dir/b.md','/x/dir/b.md','b.md','world','text/markdown','world','2024-01-02')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = res.LastInsertId()
+
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/tags" {
+			_, _ = w.Write([]byte(`{"models":[{"name":"m"}]}`))
+			return
+		}
+		atomic.AddInt64(&calls, 1)
+		_, _ = w.Write([]byte(`{"response":"@prefix n: <note:> .\nn:this n:mentions n:Alice ."}`))
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.Host = srv.URL
+	cfg.Model = "m"
+	cfg.PromptName = RDFProcess
+	cfg.Workers = 2
+
+	if err := RunSingleProcess(context.Background(), NoopReporter{}, db, cfg); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if got := atomic.LoadInt64(&calls); got != 2 {
+		t.Fatalf("first run made %d model calls, want 2", got)
+	}
+
+	// A re-run must skip every note that already has triples.
+	if err := RunSingleProcess(context.Background(), NoopReporter{}, db, cfg); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got := atomic.LoadInt64(&calls); got != 2 {
+		t.Fatalf("second run reprocessed notes (%d model calls, want 2)", got)
+	}
+
+	// Only the newly imported note is processed on the next run.
+	res, err = db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+		VALUES('dir/c.md','/x/dir/c.md','c.md','world','text/markdown','world','2024-01-02')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := res.LastInsertId()
+
+	if err := RunSingleProcess(context.Background(), NoopReporter{}, db, cfg); err != nil {
+		t.Fatalf("third run: %v", err)
+	}
+	if got := atomic.LoadInt64(&calls); got != 3 {
+		t.Fatalf("third run made %d model calls, want 3 (only the new note)", got)
+	}
+	if rdf := rdfForNote(db, c); !strings.Contains(rdf, "n:Alice") {
+		t.Fatalf("new note has no RDF output: %q", rdf)
+	}
+}
+
+func TestStoreNoteRDFMarksEmptyResult(t *testing.T) {
+	db := openTestDB(t)
+	id := insertNote(t, db)
+
+	if err := storeNoteRDF(db, id, "@prefix n: <note:> ."); err != nil {
+		t.Fatal(err)
+	}
+	if got := rdfForNote(db, id); got != "" {
+		t.Fatalf("note without triples rendered %q, want empty", got)
+	}
+
+	var facts int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM note_facts WHERE note_id=?`, id).Scan(&facts); err != nil {
+		t.Fatal(err)
+	}
+	if facts != 1 {
+		t.Fatalf("empty note has %d note_facts rows, want 1 marker", facts)
+	}
+
+	// The marker must not connect notes, even with a note that shares the
+	// literal, and it must not appear in the related-notes block.
+	res, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+		VALUES('dir/b.md','/x/dir/b.md','b.md','x','text/markdown','x','2024-01-02')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := res.LastInsertId()
+	if err := storeNoteRDF(db, b, "@prefix n: <note:> .\nn:this n:mentions n:Alice ."); err != nil {
+		t.Fatal(err)
+	}
+	links, err := rebuildRDFLinks(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if links != 0 {
+		t.Fatalf("empty marker created %d links, want 0", links)
+	}
+	if block := rdfRelatedBlock(db, id); block != "" {
+		t.Fatalf("empty note has a related block: %q", block)
+	}
+}
+
+func TestRDFRelatedBlockSharesEntitiesAndPredicates(t *testing.T) {
+	db := openTestDB(t)
+	a := insertNote(t, db) // dir/a.md
+
+	res, err := db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+		VALUES('dir/b.md','/x/dir/b.md','b.md','world','text/markdown','world','2024-01-02')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := res.LastInsertId()
+	res, err = db.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type, markdown, imported_at)
+		VALUES('dir/c.md','/x/dir/c.md','c.md','world','text/markdown','world','2024-01-02')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := res.LastInsertId()
+
+	// b shares the predicate "mentions" with a but no entity.
+	if err := storeNoteRDF(db, a, "@prefix n: <note:> .\nn:this n:mentions n:Alice ."); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeNoteRDF(db, b, "@prefix n: <note:> .\nn:this n:mentions n:Bob ."); err != nil {
+		t.Fatal(err)
+	}
+	// c shares neither an entity nor a predicate and must not be linked.
+	if err := storeNoteRDF(db, c, "@prefix n: <note:> .\nn:this n:feels \"calm\" ."); err != nil {
+		t.Fatal(err)
+	}
+
+	block := rdfRelatedBlock(db, a)
+	if !strings.Contains(block, "[[b]]") {
+		t.Fatalf("shared predicate did not link notes: %q", block)
+	}
+	if !strings.Contains(block, "predicate mentions") {
+		t.Fatalf("reason does not name the predicate: %q", block)
+	}
+	if strings.Contains(block, "[[c]]") {
+		t.Fatalf("unrelated note was linked: %q", block)
+	}
+
+	// The links must be bidirectional.
+	if other := rdfRelatedBlock(db, b); !strings.Contains(other, "[[a]]") {
+		t.Fatalf("relation is not bidirectional: %q", other)
 	}
 }
 

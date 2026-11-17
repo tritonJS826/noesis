@@ -138,7 +138,16 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 		return err
 	}
 
-	rows, err := db.Query(`SELECT id FROM notes ORDER BY id`)
+	// The RDF process resumes from the database: notes that already have
+	// triples in the normalized fact tables are skipped, so an interrupted run
+	// continues where it stopped instead of restarting from the first note.
+	query := `SELECT id FROM notes ORDER BY id`
+	if promptName == RDFProcess {
+		query = `SELECT id FROM notes
+			WHERE id NOT IN (SELECT DISTINCT note_id FROM note_facts)
+			ORDER BY id`
+	}
+	rows, err := db.Query(query)
 	if err != nil {
 		return err
 	}
@@ -156,7 +165,11 @@ func RunSingleProcess(ctx context.Context, r Reporter, db *sql.DB, c Config) err
 	workers := normalizedWorkers(c.Workers)
 	r.SetPhase(fmt.Sprintf("single: %s (%s, ×%d)", promptName, c.Model, workers), 0, len(ids))
 	if len(ids) == 0 {
-		r.Logf("no notes")
+		if promptName == RDFProcess {
+			r.Logf("all notes already have RDF triples")
+		} else {
+			r.Logf("no notes")
+		}
 		return nil
 	}
 

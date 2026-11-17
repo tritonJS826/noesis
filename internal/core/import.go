@@ -316,11 +316,12 @@ func Import(ctx context.Context, r Reporter, db *sql.DB, src string, opt ImportO
 			markdown = content
 		}
 
+		srcHash, srcMtime := sourceFileMeta(f.Abs, data)
 		_, err = tx.Exec(`INSERT INTO notes(file_path, abs_path, file_name, content, mime_type,
-			markdown, extracted_text, extracted_path, blob_path, extract_error, extract_tool, imported_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			markdown, extracted_text, extracted_path, blob_path, extract_error, extract_tool, src_hash, src_mtime, imported_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			rel, f.Abs, name, content, mimeType, markdown, "", "", blobPath,
-			"", "", time.Now().Format(time.RFC3339))
+			"", "", srcHash, srcMtime, time.Now().Format(time.RFC3339))
 		if err != nil {
 			r.Fail("%s: %v", rel, err)
 			r.Advance(true)
